@@ -37,7 +37,7 @@ if(DC_HAVE_QT)
         VERSION 1.0
         QML_FILES qml/Main.qml
     )
-    target_link_libraries(dc-v6-preview PRIVATE dc_v6core Qt6::Quick)
+    target_link_libraries(dc-v6-preview PRIVATE dc_v6core Qt6::Quick Qt6::GuiPrivate)
     dc_apply_options(dc-v6-preview)
     dc_v6_debug_info(dc-v6-preview)
     # Console subsystem on purpose: the report goes to stdout.

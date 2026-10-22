@@ -4,6 +4,7 @@
 #include <QSGRendererInterface>
 #include <QSGSimpleTextureNode>
 #include <QSGTexture>
+#include <rhi/qrhi.h>
 
 #include <algorithm>
 #include <iostream>
@@ -11,49 +12,45 @@
 namespace {
 
 // Owns the display-device objects; created and deleted on the render thread by the scene graph.
+// The displayed texture is created by Qt (QRhiTexture) so Qt alone owns it; we only copy into its native
+// ID3D11Texture2D. An extra device reference, released last, keeps Qt's device alive until our own D3D
+// objects are gone even if Qt tears the QRhi down first.
 class VideoNode : public QSGSimpleTextureNode {
 public:
-    VideoNode(v6::SharedFrameRing& ring, ID3D11Device* dev, QQuickWindow* w)
-        : ring_(&ring), reader_(ring, dev), probe_(dev, ring.width(), ring.height()) {
-        D3D11_TEXTURE2D_DESC d{};
-        d.Width = static_cast<UINT>(ring.width());
-        d.Height = static_cast<UINT>(ring.height());
-        d.MipLevels = 1;
-        d.ArraySize = 1;
-        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        d.SampleDesc.Count = 1;
-        d.Usage = D3D11_USAGE_DEFAULT;
-        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        V6_CHECK(dev->CreateTexture2D(&d, nullptr, &local_));
-        setTexture(QNativeInterface::QSGD3D11Texture::fromNative(local_.Get(), w, QSize(ring.width(), ring.height())));
-        setOwnsTexture(true);
+    VideoNode(v6::SharedFrameRing& ring, ID3D11Device* dev, QRhi* rhi, QQuickWindow* w)
+        : device_(dev), ring_(&ring), reader_(ring, dev), probe_(dev, ring.width(), ring.height()) {
+        const QSize size(ring.width(), ring.height());
+        rhiTex_.reset(rhi->newTexture(QRhiTexture::BGRA8, size, 1, QRhiTexture::UsedAsTransferSource));
+        if (!rhiTex_->create()) throw std::runtime_error("QRhiTexture::create failed");
+        local_ = reinterpret_cast<ID3D11Texture2D*>(rhiTex_->nativeTexture().object);
+        setTexture(w->createTextureFromRhiTexture(rhiTex_.get()));
+        setOwnsTexture(false);
         setFiltering(QSGTexture::Linear);
     }
 
     ~VideoNode() override {
-        // Let Qt release its view of local_ before our own references go.
-        QSGTexture* t = texture();
-        setOwnsTexture(false);
-        delete t;
+        delete texture();  // the QSGTexture wrapper first, then the QRhiTexture (unique_ptr member)
     }
 
     v6::SharedFrameRing* ring() const { return ring_; }
 
     // Copies a newer frame into the displayed texture, if there is one.
     bool fetch(ID3D11DeviceContext* ctx, std::uint64_t* id) {
-        if (!reader_.fetch(ctx, local_.Get(), id)) return false;
+        if (!reader_.fetch(ctx, local_, id)) return false;
         haveFrame_ = true;
         return true;
     }
     bool haveFrame() const { return haveFrame_; }
     v6::FrameProbe& probe() { return probe_; }
-    ID3D11Texture2D* local() const { return local_.Get(); }
+    ID3D11Texture2D* local() const { return local_; }
 
 private:
+    v6::ComPtr<ID3D11Device> device_;  // first member = destroyed last
     v6::SharedFrameRing* ring_;
     v6::SharedFrameReader reader_;
     v6::FrameProbe probe_;
-    v6::ComPtr<ID3D11Texture2D> local_;
+    std::unique_ptr<QRhiTexture> rhiTex_;
+    ID3D11Texture2D* local_ = nullptr;  // owned by rhiTex_
     bool haveFrame_ = false;
 };
 
@@ -166,12 +163,13 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     }
     auto* dev = static_cast<ID3D11Device*>(ri->getResource(w, QSGRendererInterface::DeviceResource));
     auto* ctx = static_cast<ID3D11DeviceContext*>(ri->getResource(w, QSGRendererInterface::DeviceContextResource));
+    auto* rhi = static_cast<QRhi*>(ri->getResource(w, QSGRendererInterface::RhiResource));
 
     if (!node || node->ring() != ring_) {
         delete node;
         node = nullptr;
         try {
-            node = new VideoNode(*ring_, dev, w);
+            node = new VideoNode(*ring_, dev, rhi, w);
         } catch (const std::exception& e) {
             std::cerr << "display side setup failed: " << e.what() << "\n";
             return nullptr;
