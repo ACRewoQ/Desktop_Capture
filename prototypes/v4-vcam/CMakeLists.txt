@@ -16,11 +16,13 @@ if(NOT WIN32)
 endif()
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")  # self-contained DLLs
-add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+add_compile_definitions(UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 
 function(v4_strict target)
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+    # Not global: BaseClasses needs the min macro and softcam needs mmsystem from windows.h.
+    target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endfunction()
 
 # --- Media Foundation virtual camera (Windows 11) ---------------------------------------------
@@ -69,6 +71,7 @@ v4_strict(vcam-probe)
 target_link_libraries(vcam-probe PRIVATE mfplat mf mfreadwrite mfuuid strmiids ole32 oleaut32)
 
 # Everything next to each other: vcam-feed loads vcam_ds.dll from its own folder.
+# The $<1:...> genex keeps multi-config generators (Visual Studio) from adding a Release subfolder.
 set_target_properties(vcam_mf vcam_ds vcam-mf-ctl vcam-feed vcam-probe vcam-pattern-test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>"
+    LIBRARY_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")

@@ -7,6 +7,7 @@
 // ds: loads vcam_ds.dll from its own folder and uses the softcam sender API
 // Every frame carries the stamp from common/pattern.hpp so vcam-probe can measure it.
 #include <windows.h>
+#include <timeapi.h>
 
 #include <cstdio>
 #include <cstring>
