@@ -32,6 +32,7 @@ $cases = @(
     @('wgc-h264-1080p', '--source wgc --encoder h264_nvenc --size 1920x1080 --pattern window'),
     @('wgc-hevc-1080p', '--source wgc --encoder hevc_nvenc --size 1920x1080 --pattern window'),
     @('wgc-av1-1080p', '--source wgc --encoder av1_nvenc --size 1920x1080 --pattern window'),
+    @('wgc-h264-1080p-lowlat', '--source wgc --encoder h264_nvenc --size 1920x1080 --pattern window --opt preset=p1 --opt tune=ull'),
     @('wgc-h264-1080p-static', '--source wgc --encoder h264_nvenc --size 1920x1080'),
     @('wgc-h264-1080p-full', '--source wgc --encoder h264_nvenc --size 1920x1080 --pattern full'),
     @('wgc-h264-1080p-mkv', "--source wgc --encoder h264_nvenc --size 1920x1080 --pattern window --output `"$OutDir\wgc-h264-1080p.mkv`""),
