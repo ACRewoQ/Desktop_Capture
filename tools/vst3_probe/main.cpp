@@ -48,7 +48,7 @@ namespace {
 
 constexpr double kSampleRate = 48000.0;
 constexpr int kBlockSizes[] = {128, 256};
-constexpr int kMaxParamsInJson = 4096;
+constexpr int kMaxParamsInJson = 256; // keeps scan reports small enough for PowerShell 5.1
 
 using Clock = std::chrono::steady_clock;
 
@@ -315,11 +315,25 @@ var describeParameter(AudioPluginInstance& p, int index) {
     return var(o.release());
 }
 
-// The parameter remote sliders would drive: first automatable, non-meta parameter that is not bypass.
+// Placeholders that carry no plugin state: Kontakt's "#000" host-automation slots, empty texts.
+bool isPlaceholder(AudioProcessorParameter* prm) {
+    const auto name = prm->getName(64).trim();
+    return name.isEmpty() || name.startsWithChar('#') || prm->getCurrentValueAsText().trim().isEmpty();
+}
+
+// The parameter a remote slider would drive: automatable, not meta, not bypass, not a placeholder,
+// preferably one whose text changes across its range (a real control rather than an unassigned macro).
 AudioProcessorParameter* pickTestParameter(AudioPluginInstance& p) {
     auto* bypass = p.getBypassParameter();
-    for (auto* prm : p.getParameters())
-        if (prm->isAutomatable() && !prm->isMetaParameter() && prm != bypass) return prm;
+    AudioProcessorParameter* fallback = nullptr;
+    int checked = 0;
+    for (auto* prm : p.getParameters()) {
+        if (!prm->isAutomatable() || prm->isMetaParameter() || prm == bypass || isPlaceholder(prm)) continue;
+        if (fallback == nullptr) fallback = prm;
+        if (prm->getText(0.2f, 64) != prm->getText(0.8f, 64)) return prm;
+        if (++checked > 64) break;
+    }
+    if (fallback != nullptr) return fallback;
     return p.getParameters().isEmpty() ? nullptr : p.getParameters()[0];
 }
 
@@ -411,6 +425,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
     Array<var> plist;
     for (int i = 0; i < params.size() && i < kMaxParamsInJson; ++i) plist.add(describeParameter(*plugin, i));
     r->setProperty("params", plist);
+    r->setProperty("params_truncated", params.size() > kMaxParamsInJson);
 
     // A VST3 host edit reaches the plugin's processor only with the next process call, and some
     // plugins apply restored state asynchronously; mixd's audio thread never stops, so emulate that.
@@ -463,6 +478,10 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
         MemoryBlock state;
         plugin->getStateInformation(state);
         o->setProperty("state_bytes", static_cast<int>(state.getSize()));
+        // Plugins may quantise internally (switches that report themselves as continuous), so compare
+        // the plugin's own text for the value as it was saved.
+        const auto savedValue = prm->getValue();
+        const auto savedText = prm->getCurrentValueAsText();
         {
             HostEdit he(watcher);
             prm->setValueNotifyingHost(wanted < 0.5f ? 0.9f : 0.1f);
@@ -472,18 +491,32 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
         t0 = Clock::now();
         plugin->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
         o->setProperty("state_restore_ms", msSince(t0));
-        pump();
-        pump();
+        // Some plugins apply a restored state later (on the audio thread or a timer): wait up to 1 s.
+        bool valueOk = false;
+        const auto restored = Clock::now();
+        do {
+            pump();
+            valueOk = std::abs(prm->getValue() - savedValue) <= tol || prm->getCurrentValueAsText() == savedText;
+        } while (!valueOk && msSince(restored) < 1000.0);
+        o->setProperty("state_settle_ms", msSince(restored));
+        // Independent of parameters: saving again must give the same state back.
+        MemoryBlock again;
+        plugin->getStateInformation(again);
+        const bool bytesSame = again == state;
         const auto after = snapshot();
         int mismatches = 0;
         for (size_t i = 0; i < before.size() && i < after.size(); ++i)
             if (std::abs(before[i] - after[i]) > 0.02f) ++mismatches;
-        const bool stateOk = std::abs(prm->getValue() - got) <= tol;
+        o->setProperty("saved_text", savedText);
         o->setProperty("value_before_restore", changed);
         o->setProperty("value_after_restore", prm->getValue());
-        o->setProperty("state_restore_ok", stateOk);
+        o->setProperty("text_after_restore", prm->getCurrentValueAsText());
+        o->setProperty("state_bytes_identical", bytesSame);
+        o->setProperty("state_restore_ok", valueOk || bytesSame);
         o->setProperty("state_param_mismatches", mismatches);
-        if (!stateOk) problem("setStateInformation did not restore the edited parameter");
+        if (!valueOk && !bytesSame) problem("setStateInformation did not restore the edited parameter");
+        else if (!valueOk)
+            warning("state restored but the host's parameter values are stale (mixd must re-read them)");
         else if (mismatches > 0) warning(String(mismatches) + " parameter(s) differ after a state round trip");
         {
             HostEdit he(watcher);
