@@ -55,7 +55,10 @@ foreach ($c in $cases) {
     $csv = Join-Path $OutDir "$name.csv"
     $log = Join-Path $OutDir "$name.log"
     $cmd = "& `"$exe`" run $argLine --seconds $Seconds --csv `"$csv`""
-    Invoke-Expression "$cmd 2>&1" | Tee-Object -FilePath $log | Write-Host
+    # FFmpeg logs to stderr; Windows PowerShell turns those lines into error records, which 'Stop' would make fatal.
+    $ErrorActionPreference = 'Continue'
+    Invoke-Expression "$cmd 2>&1" | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Write-Host
+    $ErrorActionPreference = 'Stop'
     $result = Get-Content $log | Where-Object { $_ -like 'RESULT *' } | Select-Object -Last 1
     $kv = @{ case = $name }
     if ($result) {
