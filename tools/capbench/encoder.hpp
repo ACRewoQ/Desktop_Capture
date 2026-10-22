@@ -1,6 +1,7 @@
 // Hardware video encoder through FFmpeg, fed with D3D11 NV12 textures that never leave the GPU.
 //
-// The frames come from an FFmpeg D3D11 frame pool (one array texture) that lives on our own D3D11 device, so the
+// The frames come from an FFmpeg D3D11 frame pool (one array texture, or one texture per surface where the driver
+// refuses NV12 render-target arrays) that lives on our own D3D11 device, so the
 // converter writes straight into the encoder's input surfaces. NVENC, AMF and Media Foundation take those directly;
 // QSV gets them mapped into QSV surfaces (same memory, no copy).
 #pragma once
@@ -81,6 +82,8 @@ private:
     AVBufferRef* d3dFrames_ = nullptr;
     AVBufferRef* qsvDevice_ = nullptr;
     AVBufferRef* qsvFrames_ = nullptr;
+    bool arrayPool_ = true;
+    std::vector<AVFrame*> ownPool_;  // surfaces handed out by acquire() when the pool is not one array texture
     AVCodecContext* ctx_ = nullptr;
     AVFormatContext* fmt_ = nullptr;
     AVStream* stream_ = nullptr;

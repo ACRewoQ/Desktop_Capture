@@ -49,6 +49,21 @@ std::int64_t qpcNow() {
     return t.QuadPart;
 }
 
+// Whether the device can make an NV12 array texture the video processor can render into. Some drivers refuse
+// NV12 arrays with any bind flag but DECODER (seen on GeForce RTX 5090, driver 616.56: E_INVALIDARG).
+bool nv12RenderTargetArrays(ID3D11Device* device, int width, int height, int count) {
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = static_cast<UINT>(width);
+    desc.Height = static_cast<UINT>(height);
+    desc.MipLevels = 1;
+    desc.ArraySize = static_cast<UINT>(count);
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, nullptr));  // null texture = validate only
+}
+
 }  // namespace
 
 Encoder::Encoder(const Device& dev, const EncoderConfig& cfg) : dev_(dev), cfg_(cfg) {
@@ -71,9 +86,19 @@ Encoder::Encoder(const Device& dev, const EncoderConfig& cfg) : dev_(dev), cfg_(
     frames->sw_format = AV_PIX_FMT_NV12;
     frames->width = cfg_.width;
     frames->height = cfg_.height;
-    frames->initial_pool_size = cfg_.poolSize;  // fixed pool = one array texture
+    // Fixed pool = one array texture. Where the driver refuses that, FFmpeg makes one texture per surface instead;
+    // that pool has no limit, so we allocate poolSize frames up front and hand them out ourselves.
+    arrayPool_ = nv12RenderTargetArrays(dev_.device.Get(), cfg_.width, cfg_.height, cfg_.poolSize);
+    frames->initial_pool_size = arrayPool_ ? cfg_.poolSize : 0;
     static_cast<AVD3D11VAFramesContext*>(frames->hwctx)->BindFlags = D3D11_BIND_RENDER_TARGET;
     check(av_hwframe_ctx_init(d3dFrames_), "av_hwframe_ctx_init(d3d11 nv12)");
+    if (!arrayPool_) {
+        for (int i = 0; i < cfg_.poolSize; ++i) {
+            AVFrame* surface = av_frame_alloc();
+            ownPool_.push_back(surface);
+            check(av_hwframe_get_buffer(d3dFrames_, surface, 0), "allocate nv12 surface");
+        }
+    }
 
     pkt_ = av_packet_alloc();
     if (cfg_.codec != "none") {
@@ -95,6 +120,7 @@ Encoder::~Encoder() {
         avformat_free_context(fmt_);
     }
     av_packet_free(&pkt_);
+    for (AVFrame*& f : ownPool_) av_frame_free(&f);
     av_buffer_unref(&qsvFrames_);
     av_buffer_unref(&qsvDevice_);
     av_buffer_unref(&d3dFrames_);
@@ -179,10 +205,22 @@ void Encoder::openCodec() {
 
 Encoder::Surface Encoder::acquire() {
     Surface s;
-    AVFrame* f = av_frame_alloc();
-    if (av_hwframe_get_buffer(d3dFrames_, f, 0) < 0) {
-        av_frame_free(&f);
-        return s;
+    AVFrame* f = nullptr;
+    if (arrayPool_) {
+        f = av_frame_alloc();
+        if (av_hwframe_get_buffer(d3dFrames_, f, 0) < 0) {
+            av_frame_free(&f);
+            return s;
+        }
+    } else {
+        // A surface is free when only our pool still references it.
+        for (AVFrame* p : ownPool_) {
+            if (av_buffer_get_ref_count(p->buf[0]) == 1) {
+                f = av_frame_clone(p);
+                break;
+            }
+        }
+        if (!f) return s;
     }
     s.frame = f;
     s.texture = reinterpret_cast<ID3D11Texture2D*>(f->data[0]);
@@ -254,7 +292,9 @@ void Encoder::finish() {
     if (fmt_ && stream_) check(av_write_trailer(fmt_), "write trailer");
 }
 
-std::string Encoder::description() const { return cfg_.codec + " (" + inputMode_ + ")"; }
+std::string Encoder::description() const {
+    return cfg_.codec + " (" + inputMode_ + (arrayPool_ ? "" : ", one texture per surface") + ")";
+}
 
 std::vector<std::string> availableHwEncoders() {
     std::vector<std::string> names;
