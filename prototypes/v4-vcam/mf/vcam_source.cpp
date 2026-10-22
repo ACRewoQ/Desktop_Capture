@@ -98,7 +98,7 @@ public:
                 LOG("bridge: section %ls %s", name, GetLastError() == ERROR_ALREADY_EXISTS ? "opened" : "created");
                 break;
             }
-            LOG("bridge: CreateFileMapping(%ls) failed, error %lu", name, GetLastError());
+            LOG("bridge: CreateFileMapping(%ls) failed, error %lu (normal outside the Frame Server)", name, GetLastError());
         }
         if (sd) LocalFree(sd);
         if (!map_) return;

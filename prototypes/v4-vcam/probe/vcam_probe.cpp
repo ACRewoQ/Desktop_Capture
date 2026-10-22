@@ -50,6 +50,15 @@ std::wstring lower(std::wstring s) {
     return s;
 }
 
+// Device names are localized (Windows appends e.g. "(Windows 仮想カメラ)" to MF virtual cameras),
+// so they are printed as UTF-8; printf("%ls") would stop at the first non-ASCII character.
+std::string utf8(const std::wstring& w) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), int(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string s(size_t(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), int(w.size()), s.data(), n, nullptr, nullptr);
+    return s;
+}
+
 // Exact (case-insensitive) name match wins over a substring match.
 template <class List>
 auto find_device(const List& list, const std::wstring& want) -> decltype(&list.front()) {
@@ -129,7 +138,7 @@ int run_mf(const std::wstring& want, double seconds, UINT32 want_w, UINT32 want_
     const auto devices = mf_devices();
     if (auto d = find_device(devices, want)) {
         dev = d->second;
-        std::printf("mf: opening \"%ls\"\n", d->first.c_str());
+        std::printf("mf: opening \"%s\"\n", utf8(d->first).c_str());
     }
     if (!dev) {
         std::printf("RESULT mf NOT_FOUND\n");
@@ -301,7 +310,7 @@ int run_ds(const std::wstring& want, double seconds) {
     const auto devices = ds_devices();
     if (auto d = find_device(devices, want)) {
         mon = d->second;
-        std::printf("ds: opening \"%ls\"\n", d->first.c_str());
+        std::printf("ds: opening \"%s\"\n", utf8(d->first).c_str());
     }
     if (!mon) {
         std::printf("RESULT ds NOT_FOUND\n");
@@ -387,14 +396,15 @@ int wmain(int argc, wchar_t** argv) {
         else if (k == L"--width") w = UINT32(_wtoi(argv[i + 1]));
         else if (k == L"--height") h = UINT32(_wtoi(argv[i + 1]));
     }
+    SetConsoleOutputCP(CP_UTF8);
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION);
     int rc = 2;
     if (cmd == L"list") {
         std::printf("Media Foundation video capture devices:\n");
-        for (auto& d : mf_devices()) std::printf("  mf: %ls\n", d.first.c_str());
+        for (auto& d : mf_devices()) std::printf("  mf: %s\n", utf8(d.first).c_str());
         std::printf("DirectShow video input devices:\n");
-        for (auto& d : ds_devices()) std::printf("  ds: %ls\n", d.first.c_str());
+        for (auto& d : ds_devices()) std::printf("  ds: %s\n", utf8(d.first).c_str());
         rc = 0;
     } else if (cmd == L"mf") {
         rc = run_mf(name, seconds, w, h);

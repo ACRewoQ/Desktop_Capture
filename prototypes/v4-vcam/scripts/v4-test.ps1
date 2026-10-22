@@ -6,6 +6,7 @@
 #>
 param([double]$Seconds = 10)
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8  # vcam-probe prints device names as UTF-8
 $bin = Join-Path $env:ProgramData 'DesktopCapture\vcam\bin'
 $ctl = Join-Path $bin 'vcam-mf-ctl.exe'
 $feed = Join-Path $bin 'vcam-feed.exe'
@@ -27,9 +28,11 @@ $cam = Start-Process -FilePath $ctl -ArgumentList 'run', '--seconds', ($Seconds 
 Start-Sleep -Seconds 3
 $list = & $probe list
 $list | ForEach-Object { Write-Host "  $_" }
-Check ($list -match '^\s+mf: Desktop Capture Camera$') 'MF camera is listed by Media Foundation'
+# Windows appends a localized suffix to MF virtual cameras: "(Windows Virtual Camera)", localized on Japanese Windows.
+$mfName = '^\s+mf: Desktop Capture Camera( \(Windows .+\))?$'
+Check ($list -match $mfName) 'MF camera is listed by Media Foundation'
 Check ($list -match '^\s+ds: Desktop Capture Camera \(DirectShow\)$') 'DirectShow camera is listed by DirectShow'
-$mfInDs = [bool]($list -match '^\s+ds: Desktop Capture Camera$')
+$mfInDs = [bool]($list -match '^\s+ds: Desktop Capture Camera( \(Windows .+\))?$')
 Write-Host "  info: MF camera visible to DirectShow apps: $mfInDs"
 
 try {
@@ -52,7 +55,7 @@ try {
 
     if ($mfInDs) {
         Step 'MF camera via DirectShow (Windows 11 bridge)'
-        $out = & $probe ds --name 'Desktop Capture Camera' --seconds $Seconds
+        $out = & $probe ds --name 'Desktop Capture Camera (Windows' --seconds $Seconds
         $out | ForEach-Object { Write-Host "  $_" }
         $r = Result $out
         Check ((Field $r 'fps') -ge 27 -and (Field $r 'unique') -gt 0) 'DirectShow app receives the MF camera'
