@@ -3,7 +3,8 @@
   Installs prebuilt Qt 6 (MSVC x64) without admin rights, using the standalone aqtinstall (aqt.exe).
 
 .DESCRIPTION
-  Downloads aqt.exe into <Root>\aqt, resolves the Qt version (newest 6.x by default), installs
+  Downloads aqt.exe into <Root>\aqt, resolves the Qt version (newest 6.10.x by default; aqt 3.3 cannot read the
+  per-arch repository layout Qt uses from 6.11 on), installs
   qtbase + qtdeclarative (aqt's base set) plus qtshadertools into <Root>\<version>\<msvc dir>,
   and sets the user environment variable DC_QT_DIR to that folder. CMake picks it up through
   cmake/DcDependencies.cmake. Shared by all Qt based targets (UI, P1 probes V5/V6).
@@ -26,7 +27,7 @@ if (-not (Test-Path $aqt)) {
 }
 
 if ($Version -eq 'latest') {
-    $Version = (& $aqt list-qt windows desktop --spec 6 --latest-version).Trim()
+    $Version = (& $aqt list-qt windows desktop --spec 6.10 --latest-version).Trim()
     if ($LASTEXITCODE -or -not $Version) { throw 'could not resolve the latest Qt 6 version' }
 }
 Write-Host "Qt version: $Version"
