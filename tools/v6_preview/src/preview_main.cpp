@@ -6,7 +6,6 @@
 //                                           the remote device); reports receive -> present locally, the
 //                                           sender reports the full round trip
 //   --fullscreen                            borderless full screen
-//   --snapshot FILE.png                     grab the window halfway through --seconds (clock vs. frame time)
 
 #include "common.hpp"
 #include "options.hpp"
@@ -18,7 +17,6 @@
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
-#include <QImage>
 #include <QTimer>
 
 #include <psapi.h>
@@ -113,7 +111,7 @@ struct Session {
 int main(int argc, char** argv) {
     CliOptions opt;
     if (!parseCli(argc, argv, opt) || opt.help) {
-        std::cout << "usage: dc-v6-preview [--listen PORT] [--fullscreen] [--snapshot FILE.png] [options]\n"
+        std::cout << "usage: dc-v6-preview [--listen PORT] [--fullscreen] [options]\n"
                   << kCommonUsage;
         return opt.help ? 0 : 2;
     }
@@ -190,14 +188,6 @@ int main(int argc, char** argv) {
     });
     live.start(500);
 
-    if (!opt.snapshot.empty()) {
-        const int at = static_cast<int>((opt.seconds > 0 ? opt.seconds / 2 : 5) * 1000);
-        QTimer::singleShot(at, window, [window, &opt] {
-            const QImage img = window->grabWindow();
-            std::cout << "snapshot " << opt.snapshot << (img.save(QString::fromStdString(opt.snapshot)) ? "" : " FAILED")
-                      << std::endl;
-        });
-    }
     if (opt.seconds > 0)
         QTimer::singleShot(static_cast<int>(opt.seconds * 1000), &app, [] { QCoreApplication::quit(); });
     // Show only now: the threaded render loop initializes the scene graph as soon as the window is exposed,

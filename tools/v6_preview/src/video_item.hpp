@@ -2,6 +2,10 @@
 //
 // Render thread, per frame: SharedFrameReader copies the newest BGRA frame into a texture owned by Qt's
 // D3D11 device, which a QSGSimpleTextureNode draws. frameSwapped then stamps Presented for that frame.
+//
+// Lifetimes: every D3D object of Qt's device lives in the scene graph node (VideoNode), which Qt deletes on
+// the render thread. State touched from frameSwapped lives in a shared PresentState, so neither path depends
+// on the item still existing while the window tears down on two threads.
 #pragma once
 
 #include "d3d_video.hpp"
@@ -14,9 +18,9 @@
 
 #include <atomic>
 #include <functional>
-#include <string>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 class VideoItem : public QQuickItem {
@@ -39,11 +43,20 @@ public:
 
     using AckFn = std::function<void(const v6::AckTimes&)>;
     void attach(v6::SharedFrameRing* ring, v6::Stats* stats, AckFn ack);
-    void detach();  // must run before the ring is destroyed
+    void detach();  // must run before the ring or the stats are destroyed
 
-    // Render-path counters for diagnosing a preview that shows nothing.
+    // Render-path counters and the display-side pixel check, for the report.
     std::string counters() const;
     std::string probeText() const;
+
+    struct PresentState {
+        mutable std::mutex mu;
+        v6::Stats* stats = nullptr;
+        AckFn ack;
+        std::vector<std::uint64_t> pending;  // copied this frame, waiting for frameSwapped
+        std::atomic<std::uint64_t> nPaint{0}, nFetchTry{0}, nFetchOk{0}, nSwap{0};
+        std::string probeText;
+    };
 
 signals:
     void statsChanged();
@@ -53,25 +66,10 @@ protected:
     QSGNode* updatePaintNode(QSGNode* old, UpdatePaintNodeData*) override;
 
 private:
-    void onFrameSwapped();  // render thread
     void connectWindow(QQuickWindow* w);
 
     QString stats_, info_;
-
-    std::mutex mu_;  // guards ring_, stats_ptr_, ack_ against detach() from the GUI thread
+    std::mutex ringMu_;
     v6::SharedFrameRing* ring_ = nullptr;
-    v6::Stats* statsPtr_ = nullptr;
-    AckFn ack_;
-
-    // Render thread only.
-    v6::SharedFrameRing* readerRing_ = nullptr;
-    std::unique_ptr<v6::SharedFrameReader> reader_;
-    v6::ComPtr<ID3D11Texture2D> local_;
-    std::unique_ptr<v6::FrameProbe> probe_;
-    mutable std::mutex probeMu_;
-    std::string probeText_;
-    std::vector<std::uint64_t> pendingPresent_;
-    bool haveFrame_ = false;
-
-    std::atomic<std::uint64_t> nPaint_{0}, nFetchTry_{0}, nFetchOk_{0}, nSwap_{0};
+    std::shared_ptr<PresentState> state_;
 };

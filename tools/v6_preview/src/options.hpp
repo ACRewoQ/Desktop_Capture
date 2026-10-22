@@ -19,7 +19,6 @@ struct CliOptions {
     std::string csv;
     std::string label;
     bool fullscreen = false;
-    std::string snapshot;    // preview: PNG of the window taken halfway through --seconds
     bool help = false;
 };
 
@@ -83,9 +82,6 @@ inline bool parseCli(int argc, char** argv, CliOptions& o) {
         } else if (a == "--label") {
             if (!(v = next())) return false;
             o.label = v;
-        } else if (a == "--snapshot") {
-            if (!(v = next())) return false;
-            o.snapshot = v;
         } else if (a == "--fullscreen") {
             o.fullscreen = true;
         } else {

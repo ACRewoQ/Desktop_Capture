@@ -7,8 +7,8 @@
   Runs dc-v6-bench and dc-v6-preview with hardware (D3D11/DXVA) and software decoding at 1080p60 and 720p30,
   plus the TCP receiver mode over loopback, and writes every report to build\v6-results\<timestamp>\.
   While the hardware runs are going it samples the GPU "Video Decode" engine utilisation to prove that
-  DXVA is really in use, and it takes a screenshot of the preview window (on-screen clock vs. the time
-  burned into the frame) as an independent latency cross-check.
+  DXVA is really in use. Both tools also read frames back and check the frame-id barcode ("pixel check"),
+  so the report proves the right pictures arrive, not only the timestamps.
 
 .EXAMPLE
   .\scripts\v6-measure.ps1
@@ -42,25 +42,13 @@ function Sample-VideoDecode([int]$seconds) {
     } catch { return 'n/a' }
 }
 
-function Take-Screenshot([string]$path) {
-    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bmp.Dispose()
-}
-
 $summary = @()
 
-function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu, [switch]$Shot) {
+function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu) {
     Write-Host "`n=== $name ===" -ForegroundColor Cyan
     $log = Join-Path $out "$name.txt"
     $csv = Join-Path $out "$name.csv"
     $all = $caseArgs + @('--seconds', $Seconds, '--csv', $csv, '--label', $name)
-    # GDI screenshots miss flip-model windows, so the preview grabs its own window.
-    if ($Shot -and $exe -eq $preview) { $all += @('--snapshot', (Join-Path $out "$name.png")) }
     $p = Start-Process -FilePath $exe -ArgumentList $all -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" -PassThru -NoNewWindow
     $null = $p.Handle  # cache the handle so ExitCode is available after exit
@@ -69,18 +57,17 @@ function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu
         Start-Sleep -Seconds 4
         $decodeLoad = Sample-VideoDecode ([math]::Max(3, $Seconds - 8))
     }
-    if ($Shot -and $exe -eq $bench) {
-        Start-Sleep -Seconds 2
-        Take-Screenshot (Join-Path $out "$name.png")
-    }
     $p.WaitForExit()
     Get-Content $log | Write-Host
     $err = Get-Content "$log.err" -ErrorAction SilentlyContinue
     if ($err) { $err | Write-Host -ForegroundColor Yellow }
     $total = (Get-Content $log | Where-Object { $_ -match '^TOTAL' }) -join ''
     $cpu = (Get-Content $log | Where-Object { $_ -match '^process CPU' }) -join ''
+    $pix = (Get-Content $log | Where-Object { $_ -match 'pixel check' }) -join ' | '
+    $crash = (Get-Content "$log.err" -ErrorAction SilentlyContinue | Where-Object { $_ -match '^CRASH' }) -join ''
     $script:summary += [pscustomobject]@{
         case = $name; exit = $p.ExitCode; total = $total; cpu = $cpu; videoDecodeEngine = $decodeLoad
+        pixels = $pix; crash = $crash
     }
 }
 
@@ -90,7 +77,7 @@ $sd = @('--size', '1280x720', '--fps', '30', '--kbps', '3000')
 Run-Case 'bench-1080p60-hw' $bench ($hd + @('--decoder', 'hw')) -Gpu
 Run-Case 'bench-1080p60-sw' $bench ($hd + @('--decoder', 'sw'))
 if ($havePreview) {
-    Run-Case 'preview-1080p60-hw' $preview ($hd + @('--decoder', 'hw')) -Gpu -Shot
+    Run-Case 'preview-1080p60-hw' $preview ($hd + @('--decoder', 'hw')) -Gpu
     Run-Case 'preview-1080p60-sw' $preview ($hd + @('--decoder', 'sw'))
     Run-Case 'preview-720p30-hw' $preview ($sd + @('--decoder', 'hw')) -Gpu
     Run-Case 'preview-720p30-sw' $preview ($sd + @('--decoder', 'sw'))
