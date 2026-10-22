@@ -284,8 +284,12 @@ struct Shared {
     std::atomic<bool> failed{false};
     std::atomic<bool> warm{false};
     std::mutex mutex;
+    // Loopback positions count device frames at the device's mix rate (44.1 kHz on some devices), not
+    // the 48 kHz stream frames, so these run at the mix rates; see run().
     TimeDll dllA{kRate, 0.1}; // A loopback: device frame -> time
     TimeDll dllB{kRate, 0.1}; // B loopback
+    double mixRateA = kRate, mixRateB = kRate;
+    ClockBridge::Stats atWarm; // bridge counters when the warm-up ended
     std::uint64_t packetsA = 0, packetsB = 0;
     std::uint64_t discontA = 0, discontB = 0;
     ToneAnalyzer::Summary toneA, toneB;
@@ -371,6 +375,15 @@ int run(const Options& opt) {
     ClockBridge bridge(bc);
 
     Shared sh;
+    sh.mixRateA = devA.mixRate > 0 ? devA.mixRate : kRate;
+    sh.mixRateB = devB.mixRate > 0 ? devB.mixRate : kRate;
+    sh.dllA = TimeDll(sh.mixRateA, 0.1);
+    sh.dllB = TimeDll(sh.mixRateB, 0.1);
+    // clock difference in ppm, independent of the nominal mix rates
+    auto measuredPpm = [&] {
+        if (!sh.dllA.ready() || !sh.dllB.ready()) return 0.0;
+        return (sh.dllA.rate() / sh.mixRateA) / (sh.dllB.rate() / sh.mixRateB) * 1e6 - 1e6;
+    };
     const double amp = std::pow(10.0, opt.levelDb / 20);
     ToneAnalyzer::Config ac;
     ac.toneHz = opt.toneHz;
@@ -476,10 +489,12 @@ int run(const Options& opt) {
                     if (!sh.warm) return;
                     sh.intervalMinSinadB = std::min(sh.intervalMinSinadB, b.sinadDb);
                     if (b.glitch || !sh.dllA.ready() || !sh.dllB.ready()) return;
-                    // the tone phase names the A frame being played (up to whole tone periods)
+                    // the tone phase names the A frame being played (up to whole tone periods); both
+                    // it and the analyzer's frame count are 48 kHz stream frames, the DLLs device frames
                     const double srcFrame = (b.unwrappedPhase + kPi / 2) / omega0;
-                    const double played = sh.dllB.timeAt(double(basePos + b.startFrame));
-                    const double produced = sh.dllA.timeAt(srcFrame);
+                    const double played =
+                        sh.dllB.timeAt(double(basePos) + double(b.startFrame) * sh.mixRateB / kRate);
+                    const double produced = sh.dllA.timeAt(srcFrame * sh.mixRateA / kRate);
                     sh.latencyMs = (played - produced) * 1000;
                     sh.latMin = std::min(sh.latMin, sh.latencyMs);
                     sh.latMax = std::max(sh.latMax, sh.latencyMs);
@@ -501,6 +516,7 @@ int run(const Options& opt) {
         if (!sh.warm && el >= opt.warmupSec) {
             std::lock_guard lock(sh.mutex);
             sh.warm = true;
+            sh.atWarm = bridge.stats();
             sh.latMin = 1e9;
             sh.latMax = -1e9;
         }
@@ -508,17 +524,16 @@ int run(const Options& opt) {
             nextLog += 10;
             const auto st = bridge.stats();
             std::lock_guard lock(sh.mutex);
-            const double measuredPpm =
-                sh.dllA.ready() && sh.dllB.ready() ? (sh.dllA.rate() / sh.dllB.rate() - 1) * 1e6 : 0;
+            const double clocksPpm = measuredPpm();
             const double bridgePpm = (st.ratio - 1) * 1e6;
             const double sinad = sh.intervalMinSinadB < 1e8 ? sh.intervalMinSinadB : 0;
             std::printf("%6.0f s %s clocks %+8.2f ppm  bridge %+8.2f ppm  fill %+6.1f  fifo %5.0f  latency %7.3f ms  "
                         "u/o/r %llu/%llu/%llu  glitch A %llu B %llu  SINAD %.0f dB\n",
-                        el, sh.warm ? " " : "w", measuredPpm, bridgePpm, st.fillError, st.fifoFrames, sh.latencyMs,
+                        el, sh.warm ? " " : "w", clocksPpm, bridgePpm, st.fillError, st.fifoFrames, sh.latencyMs,
                         (unsigned long long)st.underruns, (unsigned long long)st.overruns,
                         (unsigned long long)st.resyncs, (unsigned long long)sh.toneA.glitchBlocks,
                         (unsigned long long)sh.toneB.glitchBlocks, sinad);
-            std::fprintf(csv, "%.1f,%.3f,%.3f,%.2f,%.0f,%.4f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.1f\n", el, measuredPpm,
+            std::fprintf(csv, "%.1f,%.3f,%.3f,%.2f,%.0f,%.4f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.1f\n", el, clocksPpm,
                          bridgePpm, st.fillError, st.fifoFrames, sh.latencyMs, (unsigned long long)st.underruns,
                          (unsigned long long)st.overruns, (unsigned long long)st.resyncs,
                          (unsigned long long)sh.discontA, (unsigned long long)sh.discontB,
@@ -540,19 +555,24 @@ int run(const Options& opt) {
     tLoopB.join();
     std::fclose(csv);
 
-    const auto st = bridge.stats();
+    auto st = bridge.stats();
     std::lock_guard lock(sh.mutex);
+    // bridge events during the warm-up (device start-up) are reported but not judged
+    const auto warmUnder = sh.atWarm.underruns, warmOver = sh.atWarm.overruns, warmResync = sh.atWarm.resyncs;
+    st.underruns -= warmUnder;
+    st.overruns -= warmOver;
+    st.resyncs -= warmResync;
     const double drift = sh.latMax >= sh.latMin ? sh.latMax - sh.latMin : -1;
     const bool pass = !sh.failed && exitCode == 0 && st.underruns == 0 && st.overruns == 0 && st.resyncs == 0 &&
                       sh.toneB.blocks > 0 && sh.toneB.glitchBlocks == 0 && sh.discontB == 0 && drift >= 0 &&
                       drift < 1.0;
     std::printf("\n=== summary (after warm-up) ===\n");
     std::printf("A: %s\nB: %s\n", devA.name.c_str(), devB.name.c_str());
-    std::printf("clock difference measured %+.2f ppm, bridge ratio %+.2f ppm\n",
-                sh.dllA.ready() && sh.dllB.ready() ? (sh.dllA.rate() / sh.dllB.rate() - 1) * 1e6 : 0,
+    std::printf("clock difference measured %+.2f ppm, bridge ratio %+.2f ppm\n", measuredPpm(),
                 (st.ratio - 1) * 1e6);
-    std::printf("bridge: underruns %llu, overruns %llu, resyncs %llu\n", (unsigned long long)st.underruns,
-                (unsigned long long)st.overruns, (unsigned long long)st.resyncs);
+    std::printf("bridge: underruns %llu, overruns %llu, resyncs %llu (warm-up: %llu/%llu/%llu, not judged)\n",
+                (unsigned long long)st.underruns, (unsigned long long)st.overruns, (unsigned long long)st.resyncs,
+                (unsigned long long)warmUnder, (unsigned long long)warmOver, (unsigned long long)warmResync);
     std::printf("B output: %llu blocks, %llu glitch blocks, min SINAD %.1f dB, mean %.1f dB, discontinuities %llu\n",
                 (unsigned long long)sh.toneB.blocks, (unsigned long long)sh.toneB.glitchBlocks, sh.toneB.minSinadDb,
                 sh.toneB.meanSinadDb, (unsigned long long)sh.discontB);
