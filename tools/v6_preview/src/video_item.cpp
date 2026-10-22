@@ -30,6 +30,13 @@ public:
         setFiltering(QSGTexture::Linear);
     }
 
+    ~VideoNode() override {
+        // Let Qt release its view of local_ before our own references go.
+        QSGTexture* t = texture();
+        setOwnsTexture(false);
+        delete t;
+    }
+
     v6::SharedFrameRing* ring() const { return ring_; }
 
     // Copies a newer frame into the displayed texture, if there is one.

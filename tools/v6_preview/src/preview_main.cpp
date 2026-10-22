@@ -101,8 +101,9 @@ struct Session {
         if (rx && !rx->error().empty()) std::cout << "RESULT: ERROR " << rx->error() << "\n";
         if (!opt.csv.empty()) stats->writeCsv(opt.csv);
         std::fflush(stdout);
-        rx.reset();
-        tx.reset();
+        // rx (decode device, creator of the shared textures) is destroyed with the Session, which outlives
+        // the QML engine: Qt's device releases its opened shared textures first. Releasing them after the
+        // creating device was gone crashed in the D3D11 runtime at exit.
     }
 };
 
@@ -131,6 +132,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Declared before the engine so it is destroyed after the window and its render thread.
+    Session session;
+    session.opt = opt;
+
     QQmlApplicationEngine engine;
     engine.loadFromModule("DcV6", "Main");
     if (engine.rootObjects().isEmpty()) return 1;
@@ -141,8 +146,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    Session session;
-    session.opt = opt;
     session.item = item;
     int exitCode = 0;
 
