@@ -31,21 +31,6 @@ using namespace v6;
 
 namespace {
 
-// Prints where a crash happened (module + offset) so it can be found without a debugger.
-LONG WINAPI reportCrash(EXCEPTION_POINTERS* ep) {
-    void* addr = ep->ExceptionRecord->ExceptionAddress;
-    HMODULE mod = nullptr;
-    char name[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           static_cast<LPCSTR>(addr), &mod))
-        GetModuleFileNameA(mod, name, MAX_PATH);
-    std::fprintf(stderr, "CRASH: exception 0x%08lX at %s+0x%llX (thread %lu)\n",
-                 static_cast<unsigned long>(ep->ExceptionRecord->ExceptionCode), name,
-                 static_cast<unsigned long long>(static_cast<char*>(addr) - reinterpret_cast<char*>(mod)),
-                 static_cast<unsigned long>(GetCurrentThreadId()));
-    std::fflush(stderr);
-    return EXCEPTION_CONTINUE_SEARCH;
-}
 
 struct Session {
     CliOptions opt;
@@ -112,6 +97,8 @@ struct Session {
                         pmc.PeakWorkingSetSize / 1048576.0);
         if (item) std::printf("%s, decoded %llu\n", item->counters().c_str(),
                               static_cast<unsigned long long>(rx ? rx->decodedFrames() : 0));
+        if (rx) std::printf("%s\n", rx->probeSummary().c_str());
+        if (item) std::printf("%s\n", item->probeText().c_str());
         std::printf("note: the monitor shows the frame about one refresh after frameSwapped (not included).\n");
         if (rx && !rx->error().empty()) std::cout << "RESULT: ERROR " << rx->error() << "\n";
         if (!opt.csv.empty()) stats->writeCsv(opt.csv);
@@ -131,7 +118,7 @@ int main(int argc, char** argv) {
         return opt.help ? 0 : 2;
     }
 
-    SetUnhandledExceptionFilter(reportCrash);
+    installCrashReporter();
     // Qt 6.10 paces requestUpdate() with a DXGI vblank thread. On the development PC (RTX 5090 plus a
     // "Meta Virtual Monitor" display driver, "Unable to open monitor interface") that thread never delivers a
     // vblank, so the window renders one frame and stops. Fall back to timer pacing unless told otherwise.

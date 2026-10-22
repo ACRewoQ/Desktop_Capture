@@ -108,6 +108,7 @@ ReceiverPipeline::ReceiverPipeline(const PipelineOptions& o, Stats& stats, const
             decoderName_ = decoder_->name() + (decoder_->hardware() ? " [D3D11/DXVA]" : " [software]");
             converter_ = std::make_unique<FrameConverter>(device_.Get(), o_.width, o_.height);
             ring_ = std::make_unique<SharedFrameRing>(device_.Get(), o_.width, o_.height);
+            probe_ = std::make_unique<FrameProbe>(device_.Get(), o_.width, o_.height);
         } catch (...) {
             ready.set_exception(std::current_exception());
             return;
@@ -140,6 +141,13 @@ std::string ReceiverPipeline::error() const {
     return error_;
 }
 
+std::string ReceiverPipeline::probeSummary() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!probe_) return "decode-side pixel check: n/a";
+    return "decode-side pixel check: " + std::to_string(probe_->ok()) + " ok, " + std::to_string(probe_->bad()) +
+           " bad; last: " + probe_->lastDetail();
+}
+
 void ReceiverPipeline::push(EncodedUnit&& unit) {
     stats_.mark(unit.id, Received);
     {
@@ -166,6 +174,12 @@ void ReceiverPipeline::run() {
                 decoded_.fetch_add(1, std::memory_order_relaxed);
                 ID3D11Texture2D* target = ring_->beginWrite();
                 converter_->convert(sample, info, target);
+                if (id % 60 == 30) {
+                    ComPtr<ID3D11DeviceContext> ctx;
+                    device_->GetImmediateContext(&ctx);
+                    std::lock_guard<std::mutex> lock(mu_);
+                    probe_->check(ctx.Get(), target, id, nullptr);
+                }
                 ring_->endWrite(id);
                 stats_.mark(id, Converted);
                 if (onPublished_) onPublished_(id);

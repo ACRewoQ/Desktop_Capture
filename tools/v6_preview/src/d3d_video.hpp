@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <utility>
 
 namespace v6 {
@@ -101,6 +102,24 @@ private:
     std::array<ComPtr<ID3D11Texture2D>, SharedFrameRing::kSlots> tex_;
     std::array<ComPtr<IDXGIKeyedMutex>, SharedFrameRing::kSlots> mutex_;
     std::uint64_t lastSeq_ = 0;
+};
+
+// Reads a BGRA texture back to the CPU and decodes the frame-id barcode the test pattern burns in, to prove
+// the pixels (not just the timestamps) make it through. Stalls the GPU, so callers use it once in a while.
+class FrameProbe {
+public:
+    FrameProbe(ID3D11Device* device, int width, int height);
+    // Returns true if the barcode decodes to expectedId. detail gets the decoded id and a sample pixel.
+    bool check(ID3D11DeviceContext* ctx, ID3D11Texture2D* src, std::uint64_t expectedId, std::string* detail);
+    std::uint64_t ok() const { return ok_; }
+    std::uint64_t bad() const { return bad_; }
+    const std::string& lastDetail() const { return last_; }
+
+private:
+    int w_, h_;
+    ComPtr<ID3D11Texture2D> staging_;
+    std::uint64_t ok_ = 0, bad_ = 0;
+    std::string last_;
 };
 
 }  // namespace v6

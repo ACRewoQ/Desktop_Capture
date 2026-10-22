@@ -3,6 +3,8 @@
 #include <dxgi1_2.h>
 #include <mfobjects.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 
@@ -281,6 +283,53 @@ bool SharedFrameReader::fetch(ID3D11DeviceContext* ctx, ID3D11Texture2D* dst, st
     mutex_[s]->ReleaseSync(0);
     lastSeq_ = seq;
     return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+
+FrameProbe::FrameProbe(ID3D11Device* device, int width, int height) : w_(width), h_(height) {
+    D3D11_TEXTURE2D_DESC d{};
+    d.Width = static_cast<UINT>(width);
+    d.Height = static_cast<UINT>(height);
+    d.MipLevels = 1;
+    d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_STAGING;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    V6_CHECK(device->CreateTexture2D(&d, nullptr, &staging_));
+}
+
+bool FrameProbe::check(ID3D11DeviceContext* ctx, ID3D11Texture2D* src, std::uint64_t expectedId,
+                       std::string* detail) {
+    ctx->CopyResource(staging_.Get(), src);
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(ctx->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        ++bad_;
+        last_ = "map failed";
+        if (detail) *detail = last_;
+        return false;
+    }
+    // Same geometry as TestPattern::render: bit k is a cell x 4*cell bar at x = cell*(k+1), y = cell.
+    const int cell = std::max(8, w_ / 120);
+    const auto* base = static_cast<const std::uint8_t*>(m.pData);
+    auto px = [&](int x, int y) { return base + static_cast<size_t>(y) * m.RowPitch + static_cast<size_t>(x) * 4; };
+    std::uint64_t id = 0;
+    for (int bit = 0; bit < 24; ++bit) {
+        const std::uint8_t* p = px(cell + bit * cell + cell / 2, cell * 3);
+        id = (id << 1) | (p[1] > 128 ? 1u : 0u);  // green channel ~ luma
+    }
+    const std::uint8_t* c = px(w_ / 2, h_ / 2);
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "barcode %llu (expected %llu), centre BGRA %u,%u,%u,%u",
+                  static_cast<unsigned long long>(id), static_cast<unsigned long long>(expectedId & 0xFFFFFF), c[0],
+                  c[1], c[2], c[3]);
+    ctx->Unmap(staging_.Get(), 0);
+    last_ = buf;
+    if (detail) *detail = last_;
+    const bool good = id == (expectedId & 0xFFFFFF);
+    (good ? ok_ : bad_)++;
+    return good;
 }
 
 }  // namespace v6

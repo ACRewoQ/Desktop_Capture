@@ -54,6 +54,7 @@ int runLocal(const CliOptions& o) {
 
     std::cout << stats.report(o.label.empty() ? "dc-v6-bench local (gen -> shared texture)" : o.label);
     printCpu(cpu0, wall0);
+    std::cout << rx.probeSummary() << "\n";
     if (!o.csv.empty()) stats.writeCsv(o.csv);
     if (!rx.error().empty()) {
         std::cout << "RESULT: ERROR " << rx.error() << "\n";
@@ -117,6 +118,7 @@ int main(int argc, char** argv) {
         usage();
         return 0;
     }
+    installCrashReporter();
     try {
         MfRuntime mf;
         return o.sendTo.empty() ? runLocal(o) : runSender(o);

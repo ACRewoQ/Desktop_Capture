@@ -60,6 +60,8 @@ public:
     const std::string& decoderName() const { return decoderName_; }
     const std::string& adapterName() const { return adapterName_; }
     std::uint64_t decodedFrames() const { return decoded_.load(); }
+    // Pixel check of the converted frame (every 60th frame, on the decode device).
+    std::string probeSummary() const;
     std::string error() const;
 
 private:
@@ -71,6 +73,7 @@ private:
     std::unique_ptr<H264Decoder> decoder_;
     std::unique_ptr<FrameConverter> converter_;
     std::unique_ptr<SharedFrameRing> ring_;
+    std::unique_ptr<FrameProbe> probe_;
     std::string decoderName_, adapterName_;
 
     std::thread thread_;

@@ -12,12 +12,22 @@ add_library(dc_v6core STATIC
     src/test_pattern.cpp
 )
 target_include_directories(dc_v6core PUBLIC src)
-target_link_libraries(dc_v6core PUBLIC dc_asio mfplat mfuuid strmiids d3d11 dxgi winmm ole32 oleaut32)
+target_link_libraries(dc_v6core PUBLIC dc_asio mfplat mfuuid strmiids d3d11 dxgi winmm ole32 oleaut32 dbghelp)
 dc_apply_options(dc_v6core)
+
+# PDBs in Release too, so the crash reporter can print function names and lines.
+function(dc_v6_debug_info target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:/Zi>)
+        target_link_options(${target} PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
+    endif()
+endfunction()
+dc_v6_debug_info(dc_v6core)
 
 add_executable(dc-v6-bench src/bench_main.cpp)
 target_link_libraries(dc-v6-bench PRIVATE dc_v6core)
 dc_apply_options(dc-v6-bench)
+dc_v6_debug_info(dc-v6-bench)
 
 if(DC_HAVE_QT)
     qt_standard_project_setup(REQUIRES 6.8)
@@ -29,6 +39,7 @@ if(DC_HAVE_QT)
     )
     target_link_libraries(dc-v6-preview PRIVATE dc_v6core Qt6::Quick)
     dc_apply_options(dc-v6-preview)
+    dc_v6_debug_info(dc-v6-preview)
     # Console subsystem on purpose: the report goes to stdout.
     set_target_properties(dc-v6-preview PROPERTIES WIN32_EXECUTABLE OFF)
     # Copy the Qt runtime next to the exe so it starts without PATH changes.

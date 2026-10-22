@@ -1,5 +1,8 @@
 #include "common.hpp"
 
+#include <dbghelp.h>
+
+#include <cstring>
 #include <vector>
 
 namespace v6 {
@@ -50,5 +53,69 @@ std::int64_t processCpuUs() {
     };
     return toUs(kernel) + toUs(user);
 }
+
+namespace {
+
+LONG WINAPI reportCrash(EXCEPTION_POINTERS* ep) {
+    static volatile LONG once = 0;
+    if (InterlockedExchange(&once, 1)) return EXCEPTION_CONTINUE_SEARCH;
+    HANDLE proc = GetCurrentProcess(), thread = GetCurrentThread();
+    std::fprintf(stderr, "CRASH: exception 0x%08lX at %p (thread %lu)\n",
+                 static_cast<unsigned long>(ep->ExceptionRecord->ExceptionCode), ep->ExceptionRecord->ExceptionAddress,
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    SymInitialize(proc, nullptr, TRUE);
+    CONTEXT ctx = *ep->ContextRecord;
+    STACKFRAME64 f{};
+    f.AddrPC.Offset = ctx.Rip;
+    f.AddrPC.Mode = AddrModeFlat;
+    f.AddrFrame.Offset = ctx.Rbp;
+    f.AddrFrame.Mode = AddrModeFlat;
+    f.AddrStack.Offset = ctx.Rsp;
+    f.AddrStack.Mode = AddrModeFlat;
+    // A call through a bad pointer leaves Rip unusable; the caller's return address is at [Rsp].
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && ctx.Rip &&
+        ctx.Rip == reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress)) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(reinterpret_cast<void*>(ctx.Rip), &mbi, sizeof mbi) || !(mbi.Protect & 0xF0)) {
+            const DWORD64 ret = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+            std::fprintf(stderr, "  (pc not executable; return address %p)\n", reinterpret_cast<void*>(ret));
+            ctx.Rip = ret;
+            ctx.Rsp += 8;
+            f.AddrPC.Offset = ctx.Rip;
+            f.AddrStack.Offset = ctx.Rsp;
+        }
+    }
+    for (int i = 0; i < 40; ++i) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, thread, &f, &ctx, nullptr, SymFunctionTableAccess64,
+                         SymGetModuleBase64, nullptr) ||
+            !f.AddrPC.Offset)
+            break;
+        const DWORD64 pc = f.AddrPC.Offset;
+        char modName[MAX_PATH] = "?";
+        const DWORD64 modBase = SymGetModuleBase64(proc, pc);
+        if (modBase) GetModuleFileNameA(reinterpret_cast<HMODULE>(modBase), modName, MAX_PATH);
+        const char* shortMod = std::strrchr(modName, '\\') ? std::strrchr(modName, '\\') + 1 : modName;
+        alignas(SYMBOL_INFO) char symBuf[sizeof(SYMBOL_INFO) + 256];
+        auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof line;
+        DWORD lineDisp = 0;
+        const bool haveSym = SymFromAddr(proc, pc, &disp, sym);
+        const bool haveLine = SymGetLineFromAddr64(proc, pc, &lineDisp, &line);
+        std::fprintf(stderr, "  #%02d %s+0x%llx %s%s%s:%lu\n", i, shortMod,
+                     static_cast<unsigned long long>(modBase ? pc - modBase : pc), haveSym ? sym->Name : "",
+                     haveLine ? " " : "", haveLine ? line.FileName : "", haveLine ? line.LineNumber : 0ul);
+    }
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+}  // namespace
+
+void installCrashReporter() { SetUnhandledExceptionFilter(reportCrash); }
 
 }  // namespace v6

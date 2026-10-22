@@ -43,6 +43,7 @@ public:
 
     // Render-path counters for diagnosing a preview that shows nothing.
     std::string counters() const;
+    std::string probeText() const;
 
 signals:
     void statsChanged();
@@ -66,6 +67,9 @@ private:
     v6::SharedFrameRing* readerRing_ = nullptr;
     std::unique_ptr<v6::SharedFrameReader> reader_;
     v6::ComPtr<ID3D11Texture2D> local_;
+    std::unique_ptr<v6::FrameProbe> probe_;
+    mutable std::mutex probeMu_;
+    std::string probeText_;
     std::vector<std::uint64_t> pendingPresent_;
     bool haveFrame_ = false;
 

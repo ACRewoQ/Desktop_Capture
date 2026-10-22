@@ -23,6 +23,7 @@ void VideoItem::connectWindow(QQuickWindow* w) {
         w, &QQuickWindow::sceneGraphInvalidated, this,
         [this] {
             reader_.reset();
+            probe_.reset();
             local_.Reset();
             readerRing_ = nullptr;
         },
@@ -92,6 +93,7 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
             d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             local_.Reset();
             V6_CHECK(dev->CreateTexture2D(&d, nullptr, &local_));
+            probe_ = std::make_unique<v6::FrameProbe>(dev, ring_->width(), ring_->height());
         } catch (const std::exception& e) {
             std::cerr << "display side setup failed: " << e.what() << "\n";
             reader_.reset();
@@ -110,6 +112,12 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         haveFrame_ = true;
         if (statsPtr_) statsPtr_->mark(id, v6::Copied);
         pendingPresent_.push_back(id);
+        if (probe_ && nFetchOk_.load(std::memory_order_relaxed) % 60 == 30) {
+            probe_->check(ctx, local_.Get(), id, nullptr);
+            std::lock_guard<std::mutex> plock(probeMu_);
+            probeText_ = "display-side pixel check: " + std::to_string(probe_->ok()) + " ok, " +
+                         std::to_string(probe_->bad()) + " bad; last: " + probe_->lastDetail();
+        }
     }
     if (!haveFrame_) return node;
 
@@ -128,6 +136,11 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     node->setRect(QRectF(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size));
     node->markDirty(QSGNode::DirtyMaterial);
     return node;
+}
+
+std::string VideoItem::probeText() const {
+    std::lock_guard<std::mutex> lock(probeMu_);
+    return probeText_.empty() ? "display-side pixel check: none yet" : probeText_;
 }
 
 std::string VideoItem::counters() const {

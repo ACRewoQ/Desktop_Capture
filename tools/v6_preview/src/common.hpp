@@ -44,4 +44,7 @@ std::string toUtf8(const wchar_t* s);
 // Process CPU time (user + kernel) in microseconds, for CPU load figures.
 std::int64_t processCpuUs();
 
+// Prints the faulting thread's call stack (with symbols when PDBs are present) on an unhandled exception.
+void installCrashReporter();
+
 }  // namespace v6
