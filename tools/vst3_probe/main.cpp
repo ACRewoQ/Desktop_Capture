@@ -531,7 +531,12 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
     const bool hasEditor = plugin->hasEditor();
     r->setProperty("has_editor", hasEditor);
     bool editorOk = !hasEditor || args.editorSeconds <= 0;
-    if (hasEditor && args.editorSeconds > 0) {
+    const bool haveDisplay = Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr;
+    if (hasEditor && args.editorSeconds > 0 && !haveDisplay) {
+        problem("no display available, editor not opened");
+        editorOk = false;
+    }
+    if (hasEditor && args.editorSeconds > 0 && haveDisplay) {
         auto e = std::make_unique<DynamicObject>();
         const int pluginChangesBefore = watcher.pluginChanges_.load();
         const double memBeforeEditor = workingSetMiB();
