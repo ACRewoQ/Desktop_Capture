@@ -36,6 +36,7 @@ if(DC_BUILD_TOOLS)
     add_subdirectory(tools/shm_tone)
     if(WIN32)
         add_subdirectory(tools/capbench)
+        add_subdirectory(tools/v6_preview)
     endif()
 endif()
 
