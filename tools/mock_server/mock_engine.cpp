@@ -1,0 +1,309 @@
+#include "mock_engine.hpp"
+
+#include "dc/protocol/constants.hpp"
+#include "dc/protocol/defaults.hpp"
+#include "dc/version.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+#include <optional>
+
+namespace dc::mock {
+
+using namespace dc::proto;
+using control::CallContext;
+
+namespace {
+
+Result error(ErrorCode code, std::string message) {
+    Result r;
+    r.code = code;
+    r.message = std::move(message);
+    return r;
+}
+
+std::optional<std::int64_t> intArg(const Args& args, const char* key) {
+    if (auto it = args.find(key); it != args.end())
+        if (auto* v = std::get_if<std::int64_t>(&it->second)) return *v;
+    return std::nullopt;
+}
+
+std::string trackBase(int n) { return "/track/" + std::to_string(n); }
+
+} // namespace
+
+MockEngine::MockEngine(asio::io_context& io, control::ControlServer& server, Options options)
+    : io_(io), server_(server), options_(options), meterTimer_(io), recordTimer_(io) {}
+
+void MockEngine::start() {
+    seed();
+    registerMethods();
+    if (options_.meters) scheduleMeters();
+}
+
+void MockEngine::stop() {
+    asio::post(io_, [this] {
+        stopped_ = true;
+        meterTimer_.cancel();
+        recordTimer_.cancel();
+    });
+}
+
+void MockEngine::seed() {
+    std::vector<Change> c = globalDefaults();
+    auto put = [&](std::string path, Value v) {
+        for (auto& x : c)
+            if (x.path == path) {
+                x.value = std::move(v);
+                return;
+            }
+        c.push_back({std::move(path), std::move(v)});
+    };
+
+    put("/system/version", std::string("mock-") + kVersionString);
+    put("/system/protocol", std::int64_t{kProtocolVersion});
+
+    struct Dev { const char* dir; const char* id; const char* name; std::int64_t ch; const char* api; };
+    const Dev devices[] = {
+        {"input", "in-mic", "Mock USB Microphone", 1, "wasapi"},
+        {"input", "in-line", "Mock Line In", 2, "wasapi"},
+        {"output", "out-spk", "Mock Speakers", 2, "wasapi"},
+        {"output", "out-hp", "Mock Headphones", 2, "wasapi"},
+        {"output", "vmic-cable", "CABLE Input (VB-Audio Virtual Cable)", 2, "vmic"},
+    };
+    int inputs = 0, outputs = 0;
+    for (const auto& d : devices) {
+        const bool in = std::string(d.dir) == "input";
+        const int n = in ? ++inputs : ++outputs;
+        const std::string base = std::string("/devices/") + d.dir + "/" + std::to_string(n);
+        put(base + "/id", std::string(d.id));
+        put(base + "/name", std::string(d.name));
+        put(base + "/channels", d.ch);
+        put(base + "/connected", true);
+        put(base + "/api", std::string(d.api));
+    }
+    put("/devices/process/1/exe", std::string("game.exe"));
+    put("/devices/process/1/pid", std::int64_t{4242});
+    put("/devices/process/1/title", std::string("Mock Game"));
+    put("/devices/process/2/exe", std::string("browser.exe"));
+    put("/devices/process/2/pid", std::int64_t{5151});
+    put("/devices/process/2/title", std::string("Mock Browser"));
+
+    for (const auto& m : masterDefaults()) c.push_back(m);
+    put("/master/out/1/target", std::string("device/out-spk"));
+    put("/master/meter_id", std::int64_t{0});
+
+    struct Seed { const char* name; std::int64_t ch; const char* kind; const char* source; };
+    const Seed tracks[kInitialTracks] = {
+        {"Mic", 1, "device", "in-mic"},
+        {"Game", 2, "process", "game.exe"},
+        {"Browser", 2, "process", "browser.exe"},
+        {"Line", 2, "device", "in-line"},
+    };
+    for (int n = 1; n <= kInitialTracks; ++n) {
+        for (const auto& t : trackDefaults(n)) c.push_back(t);
+        const auto& s = tracks[n - 1];
+        put(trackBase(n) + "/position", std::int64_t{n});
+        put(trackBase(n) + "/name", std::string(s.name));
+        put(trackBase(n) + "/channels", s.ch);
+        put(trackBase(n) + "/input/kind", std::string(s.kind));
+        put(trackBase(n) + "/input/source", std::string(s.source));
+        put(trackBase(n) + "/input/state", std::string("ok"));
+    }
+    put("/mixer/track_count", std::int64_t{kInitialTracks});
+    put("/capture/audio/1/source", std::string("master"));
+    put("/capture/audio/2/source", std::string("track/1"));
+    put("/capture/audio/3/source", std::string("track/2"));
+
+    server_.publishNow(c);
+}
+
+void MockEngine::registerMethods() {
+    server_.registerMethod("/mixer/track/add", [this](CallContext& ctx) { return addTrack(ctx); });
+    server_.registerMethod("/mixer/track/remove", [this](CallContext& ctx) { return removeTrack(ctx); });
+    server_.registerMethod("/mixer/track/move", [this](CallContext& ctx) { return moveTrack(ctx); });
+    server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
+    server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
+}
+
+std::vector<int> MockEngine::tracksInOrder() const {
+    std::vector<std::pair<std::int64_t, int>> v;
+    const auto& tree = server_.store().tree();
+    for (int n = 1; n <= kMaxTracks; ++n)
+        if (auto pos = tree.getAs<std::int64_t>(trackBase(n) + "/position")) v.push_back({*pos, n});
+    std::sort(v.begin(), v.end());
+    std::vector<int> out;
+    for (auto& [p, n] : v) out.push_back(n);
+    return out;
+}
+
+Result MockEngine::addTrack(CallContext& ctx) {
+    const auto& args = ctx.call.args;
+    const auto& tree = server_.store().tree();
+    int id = 0;
+    for (int n = 1; n <= kMaxTracks; ++n)
+        if (!tree.contains(trackBase(n) + "/position")) {
+            id = n;
+            break;
+        }
+    if (id == 0) return error(ErrorCode::LimitReached, "64 tracks already exist");
+
+    const std::int64_t channels = intArg(args, "channels").value_or(2);
+    if (channels != 1 && channels != 2) return error(ErrorCode::OutOfRange, "channels must be 1 or 2");
+
+    auto order = tracksInOrder();
+    const auto count = static_cast<std::int64_t>(order.size());
+    const std::int64_t position = intArg(args, "position").value_or(count + 1);
+    if (position < 1 || position > count + 1) return error(ErrorCode::OutOfRange, "position out of range");
+    order.insert(order.begin() + (position - 1), id);
+
+    std::vector<Change> c = trackDefaults(id);
+    for (auto& x : c) {
+        if (x.path == trackBase(id) + "/channels") x.value = channels;
+        if (x.path == trackBase(id) + "/name")
+            if (auto it = args.find("name"); it != args.end() && std::holds_alternative<std::string>(it->second))
+                x.value = it->second;
+    }
+    for (std::size_t i = 0; i < order.size(); ++i)
+        c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
+    c.push_back({"/mixer/track_count", count + 1});
+    server_.publishNow(c, {}, ctx.call.id, ctx.client.name);
+
+    Result r;
+    r.value = std::int64_t{id};
+    return r;
+}
+
+Result MockEngine::removeTrack(CallContext& ctx) {
+    const auto id = intArg(ctx.call.args, "track");
+    const auto& tree = server_.store().tree();
+    if (!id || !tree.contains(trackBase(static_cast<int>(*id)) + "/position"))
+        return error(ErrorCode::NotFound, "no such track");
+    const std::string ref = "track/" + std::to_string(*id);
+
+    std::vector<Change> c;
+    // Clear every target that referenced the removed track.
+    for (const auto& [path, v] : tree.values()) {
+        const auto* s = std::get_if<std::string>(&v);
+        if (!s || *s != ref) continue;
+        if (path.size() > 7 && (path.compare(path.size() - 7, 7, "/target") == 0 ||
+                                path.compare(path.size() - 7, 7, "/source") == 0))
+            c.push_back({path, std::string()});
+    }
+    auto order = tracksInOrder();
+    order.erase(std::remove(order.begin(), order.end(), static_cast<int>(*id)), order.end());
+    for (std::size_t i = 0; i < order.size(); ++i)
+        c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
+    c.push_back({"/mixer/track_count", static_cast<std::int64_t>(order.size())});
+    server_.publishNow(c, {trackBase(static_cast<int>(*id))}, ctx.call.id, ctx.client.name);
+    return {};
+}
+
+Result MockEngine::moveTrack(CallContext& ctx) {
+    const auto id = intArg(ctx.call.args, "track");
+    const auto position = intArg(ctx.call.args, "position");
+    auto order = tracksInOrder();
+    if (!id || std::find(order.begin(), order.end(), static_cast<int>(*id)) == order.end())
+        return error(ErrorCode::NotFound, "no such track");
+    if (!position || *position < 1 || *position > static_cast<std::int64_t>(order.size()))
+        return error(ErrorCode::OutOfRange, "position out of range");
+    order.erase(std::remove(order.begin(), order.end(), static_cast<int>(*id)), order.end());
+    order.insert(order.begin() + (*position - 1), static_cast<int>(*id));
+    std::vector<Change> c;
+    for (std::size_t i = 0; i < order.size(); ++i)
+        c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
+    server_.publishNow(c, {}, ctx.call.id, ctx.client.name);
+    return {};
+}
+
+Result MockEngine::startRecording(CallContext& ctx) {
+    const auto& tree = server_.store().tree();
+    if (tree.getAs<std::string>("/capture/state") != "idle")
+        return error(ErrorCode::Conflict, "already recording");
+    if (tree.getAs<std::int64_t>("/capture/mix").value_or(0) == 0)
+        return error(ErrorCode::Conflict, "no video mix assigned to the capture output");
+
+    char name[64];
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    std::strftime(name, sizeof name, "%Y-%m-%d_%H-%M-%S", &tm);
+    const auto ext = tree.getAs<std::string>("/capture/container").value_or("mkv");
+    const std::string file = std::string("mock://recordings/") + name + "." + ext;
+
+    recordStart_ = std::chrono::steady_clock::now();
+    server_.publishNow({{"/capture/state", std::string("recording")},
+                        {"/capture/elapsed_ms", std::int64_t{0}},
+                        {"/capture/file", file},
+                        {"/capture/error", std::string()}},
+                       {}, ctx.call.id, ctx.client.name);
+    server_.broadcastEventNow({"capture.started", {{"file", file}}});
+    scheduleRecordingClock();
+    return {};
+}
+
+Result MockEngine::stopRecording(CallContext& ctx) {
+    const auto& tree = server_.store().tree();
+    if (tree.getAs<std::string>("/capture/state") != "recording") return error(ErrorCode::Conflict, "not recording");
+    recordTimer_.cancel();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                               recordStart_).count();
+    const auto file = tree.getAs<std::string>("/capture/file").value_or("");
+    server_.publishNow({{"/capture/state", std::string("idle")}, {"/capture/elapsed_ms", std::int64_t{elapsed}}}, {},
+                       ctx.call.id, ctx.client.name);
+    server_.broadcastEventNow({"capture.stopped", {{"file", file}, {"duration_ms", std::int64_t{elapsed}}}});
+    return {};
+}
+
+void MockEngine::scheduleRecordingClock() {
+    recordTimer_.expires_after(std::chrono::milliseconds(250));
+    recordTimer_.async_wait([this](asio::error_code ec) {
+        if (ec || stopped_) return;
+        if (server_.store().tree().getAs<std::string>("/capture/state") != "recording") return;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - recordStart_).count();
+        server_.publishNow({{"/capture/elapsed_ms", std::int64_t{elapsed}}});
+        scheduleRecordingClock();
+    });
+}
+
+void MockEngine::scheduleMeters() {
+    meterTimer_.expires_after(options_.meterInterval);
+    meterTimer_.async_wait([this](asio::error_code ec) {
+        if (ec || stopped_) return;
+        phase_ += 0.05;
+        const auto& tree = server_.store().tree();
+        MeterPacket p;
+        p.seq = meterSeq_++;
+        p.timeUs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+
+        auto entry = [&](const std::string& base, int index) {
+            MeterEntry e;
+            e.meterId = static_cast<std::uint16_t>(tree.getAs<std::int64_t>(base + "/meter_id").value_or(0));
+            e.channels = static_cast<std::uint8_t>(tree.getAs<std::int64_t>(base + "/channels").value_or(2));
+            const bool muted = tree.getAs<bool>(base + "/mute").value_or(false);
+            const double vol = tree.getAs<double>(base + "/volume_db").value_or(0.0);
+            for (int ch = 0; ch < e.channels; ++ch) {
+                const double wobble = 0.5 + 0.5 * std::sin(phase_ * (1.0 + index * 0.3) + ch);
+                const double db = muted ? -144.0 : std::max(-144.0, -40.0 + 34.0 * wobble + vol);
+                const float amp = static_cast<float>(std::pow(10.0, db / 20.0));
+                e.peakCdb[ch] = linearToCdb(amp);
+                e.rmsCdb[ch] = linearToCdb(amp * 0.5f);
+            }
+            p.entries.push_back(e);
+        };
+        entry("/master", 0);
+        for (int n : tracksInOrder()) entry(trackBase(n), n);
+        server_.sendMeters(std::move(p));
+        scheduleMeters();
+    });
+}
+
+} // namespace dc::mock

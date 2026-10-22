@@ -1,0 +1,128 @@
+<!-- このファイルは生成物です。編集せず、libs/protocol/src/schema_v1.cpp を直してから
+     dc-cli schema --markdown > docs/spec/protocol-params.md で作り直してください。 -->
+
+# パラメーター一覧（プロトコル v1）
+
+`#` は 1 から始まる番号、`*` は任意の名前を表します。書込が ro のものはエンジンだけが変更します。
+
+| パス | 型 | 書込 | 範囲・選択肢 | 既定値 | 説明 |
+|---|---|---|---|---|---|
+| `/system/version` | string | ro |  | `""` | エンジンのバージョン |
+| `/system/protocol` | int | ro | 1 〜 1000 | `1` | プロトコルのメジャーバージョン |
+| `/system/sample_rate` | int | ro | 48000 | `48000` | サンプルレート（48kHz 固定） |
+| `/system/block_size` | int | rw | 64 / 128 / 256 / 512 / 1024 | `256` | 音声バッファのサンプル数 |
+| `/system/clock_device` | string | rw |  | `""` | クロック基準デバイスの ID（"" = 自動） |
+| `/system/cpu_load` | float | ro | 0 〜 1 | `0` | 音声スレッドの負荷率 |
+| `/system/xruns` | int | ro | 0 〜 9.22337e+18 | `0` | 起動後の音切れ回数 |
+| `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/input/#/name` | string | ro |  | `""` | デバイス名 |
+| `/devices/input/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
+| `/devices/input/#/connected` | bool | ro |  | `false` | 接続中 |
+| `/devices/input/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
+| `/devices/output/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/output/#/name` | string | ro |  | `""` | デバイス名 |
+| `/devices/output/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
+| `/devices/output/#/connected` | bool | ro |  | `false` | 接続中 |
+| `/devices/output/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
+| `/devices/process/#/exe` | string | ro |  | `""` | 音声を出しているアプリの実行ファイル名 |
+| `/devices/process/#/pid` | int | ro | 0 〜 9.22337e+18 | `0` | プロセス ID |
+| `/devices/process/#/title` | string | ro |  | `""` | ウィンドウタイトル |
+| `/mixer/track_count` | int | ro | 0 〜 64 | `4` | 存在するトラック数 |
+| `/mixer/solo_active` | bool | ro |  | `false` | どれかのトラックがソロ中 |
+| `/cue/target` | string | rw |  | `""` | キューの出力デバイス（device/<id>、"" = なし） |
+| `/cue/volume_db` | float | rw | -144 〜 12 | `0` | キュー音量 dB |
+| `/track/#/position` | int | ro | 1 〜 64 | `1` | 画面上の並び順（1 始まり、連番） |
+| `/track/#/channels` | int | rw | 1 / 2 | `2` | 1 = モノ、2 = ステレオ |
+| `/track/#/input/kind` | string | rw | none / device / process / lan / sampler | `"none"` | 入力の種類 |
+| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN ストリーム ID） |
+| `/track/#/input/channel` | int | rw | 1 〜 64 | `1` | デバイスの何チャンネル目から使うか |
+| `/track/#/input/state` | string | ro | none / ok / disconnected | `"none"` | 入力の接続状態 |
+| `/track/#/name` | string | rw |  | `""` | 表示名 |
+| `/track/#/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
+| `/track/#/pan` | float | rw | -1 〜 1 | `0` | パン（-1 = 左、0 = 中央、1 = 右）。ステレオはバランス |
+| `/track/#/lowcut/enabled` | bool | rw |  | `false` | ローカット（ハイパス）の有効 |
+| `/track/#/lowcut/freq_hz` | float | rw | 20 〜 2000 | `80` | ローカット周波数 Hz |
+| `/track/#/highcut/enabled` | bool | rw |  | `false` | ハイカット（ローパス）の有効 |
+| `/track/#/highcut/freq_hz` | float | rw | 1000 〜 20000 | `18000` | ハイカット周波数 Hz |
+| `/track/#/mute` | bool | rw |  | `false` | ミュート |
+| `/track/#/solo` | bool | rw |  | `false` | ソロ |
+| `/track/#/cue` | bool | rw |  | `false` | キュー（ヘッドホン確認）へ送る |
+| `/track/#/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
+| `/track/#/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
+| `/track/#/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
+| `/track/#/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / master / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
+| `/track/#/send/#/target` | string | rw |  | `""` | センド先 1〜8。"" / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
+| `/track/#/send/#/level_db` | float | rw | -144 〜 12 | `0` | センド量 dB |
+| `/track/#/send/#/pre_fader` | bool | rw |  | `false` | フェーダー前から送る |
+| `/track/#/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
+| `/track/#/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
+| `/track/#/fx/#/bypass` | bool | rw |  | `false` | バイパス |
+| `/track/#/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義 |
+| `/master/name` | string | rw |  | `"Master"` | 表示名 |
+| `/master/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
+| `/master/pan` | float | rw | -1 〜 1 | `0` | パン（-1 = 左、0 = 中央、1 = 右）。ステレオはバランス |
+| `/master/lowcut/enabled` | bool | rw |  | `false` | ローカット（ハイパス）の有効 |
+| `/master/lowcut/freq_hz` | float | rw | 20 〜 2000 | `80` | ローカット周波数 Hz |
+| `/master/highcut/enabled` | bool | rw |  | `false` | ハイカット（ローパス）の有効 |
+| `/master/highcut/freq_hz` | float | rw | 1000 〜 20000 | `18000` | ハイカット周波数 Hz |
+| `/master/mute` | bool | rw |  | `false` | ミュート |
+| `/master/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
+| `/master/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
+| `/master/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
+| `/master/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / device/<id> / vmic/<id> / lan/<stream> |
+| `/master/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
+| `/master/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
+| `/master/fx/#/bypass` | bool | rw |  | `false` | バイパス |
+| `/master/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義 |
+| `/capture/state` | string | ro | idle / starting / recording / stopping / error | `"idle"` | 録画状態 |
+| `/capture/elapsed_ms` | int | ro | 0 〜 9.22337e+18 | `0` | 録画経過時間 ms |
+| `/capture/file` | string | ro |  | `""` | 録画中・直前のファイルパス |
+| `/capture/error` | string | ro |  | `""` | 直前のエラー内容 |
+| `/capture/mix` | int | rw | 0 〜 4 | `1` | 録画する映像ミックス（0 = なし） |
+| `/capture/container` | string | rw | mkv / mp4 | `"mkv"` | コンテナ |
+| `/capture/directory` | string | rw |  | `""` | 保存先フォルダー（"" = ビデオフォルダー） |
+| `/capture/filename` | string | rw |  | `"%Y-%m-%d_%H-%M-%S"` | ファイル名パターン（strftime 形式） |
+| `/capture/video/encoder` | string | rw | auto / nvenc / amf / qsv / x264 | `"auto"` | エンコーダー |
+| `/capture/video/codec` | string | rw | h264 / hevc / av1 | `"h264"` | コーデック |
+| `/capture/video/width` | int | rw | 160 〜 3840 | `1920` | 録画解像度（幅） |
+| `/capture/video/height` | int | rw | 90 〜 2160 | `1080` | 録画解像度（高さ） |
+| `/capture/video/fps` | int | rw | 10 〜 120 | `60` | フレームレート |
+| `/capture/video/rate_control` | string | rw | cbr / vbr / cqp | `"vbr"` | レート制御 |
+| `/capture/video/bitrate_kbps` | int | rw | 500 〜 150000 | `20000` | ビットレート kbps（cbr / vbr） |
+| `/capture/video/quality` | int | rw | 0 〜 51 | `23` | 品質値（cqp、小さいほど高画質） |
+| `/capture/audio/#/source` | string | rw |  | `""` | 音声ストリーム 1〜8 の中身（"" / master / track/<n>） |
+| `/capture/audio/#/codec` | string | rw | aac / opus / pcm | `"aac"` | 音声コーデック |
+| `/capture/audio/#/bitrate_kbps` | int | rw | 64 〜 512 | `192` | 音声ビットレート kbps（aac / opus） |
+| `/video/mix/#/name` | string | rw |  | `""` | 映像ミックス名 |
+| `/video/mix/#/width` | int | rw | 160 〜 3840 | `1920` | 合成解像度（幅） |
+| `/video/mix/#/height` | int | rw | 90 〜 2160 | `1080` | 合成解像度（高さ） |
+| `/video/mix/#/fps` | int | rw | 10 〜 120 | `60` | 合成フレームレート |
+| `/video/mix/#/active` | bool | ro |  | `false` | 出力先があり合成中 |
+| `/video/vcam/mix` | int | rw | 0 〜 4 | `0` | 仮想カメラに出す映像ミックス（0 = なし） |
+| `/video/vcam/resolution` | string | rw | 1080p / 720p | `"1080p"` | 仮想カメラの解像度 |
+| `/video/monitor/mix` | int | rw | 0 〜 4 | `0` | 全画面表示に出す映像ミックス（0 = なし） |
+| `/video/monitor/display` | string | rw |  | `""` | 全画面表示先のモニター ID |
+| `/video/preview/mix` | int | rw | 0 〜 4 | `1` | リモコンのプレビューに出す映像ミックス |
+| `/video/preview/width` | int | rw | 160 〜 1920 | `960` | プレビュー解像度（幅） |
+| `/video/preview/height` | int | rw | 90 〜 1080 | `540` | プレビュー解像度（高さ） |
+| `/video/preview/fps` | int | rw | 5 〜 60 | `30` | プレビューのフレームレート |
+| `/video/preview/bitrate_kbps` | int | rw | 500 〜 8000 | `3000` | プレビューのビットレート kbps |
+| `/remote/clients` | int | ro | 0 〜 4 | `0` | 接続中のリモコン数 |
+| `/remote/pairing/active` | bool | ro |  | `false` | ペアリング受付中 |
+
+| メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |
+|---|---|---|---|---|
+| `/session/resync` | なし | nil | P0 | スナップショットを送り直す（rev の飛びを検出したとき） |
+| `/mixer/track/add` | channels:int?, name:string?, position:int? | int（新しいトラック番号） | P0 | トラックを追加。番号は空いている最小の番号 |
+| `/mixer/track/remove` | track:int | nil | P0 | トラックを削除。番号は詰めない |
+| `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |
+| `/capture/record/start` | なし | nil | P0 | 録画開始 |
+| `/capture/record/stop` | なし | nil | P0 | 録画停止 |
+| `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
+| `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
+| `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
+| `/master/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
+| `/master/fx/remove` | index:int | nil | P3 | エフェクト削除 |
+| `/devices/refresh` | なし | nil | P2 | デバイス・プロセス一覧の更新 |
+| `/remote/pairing/start` | なし | string（6桁コード） | P4 | ペアリング受付開始 |
+| `/remote/pairing/stop` | なし | nil | P4 | ペアリング受付終了 |

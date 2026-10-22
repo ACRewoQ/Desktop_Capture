@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "desktop-capture",
+  "version-string": "0.1.0",
+  "description": "Software mixer with desktop capture and remote controller",
+  "supports": "windows & x64",
+  "dependencies": [
+    "asio",
+    "msgpack",
+    "catch2"
+  ]
+}
