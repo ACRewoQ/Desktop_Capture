@@ -3,7 +3,7 @@
 #include "wasapi_util.hpp"
 
 #include <audioclient.h>
-#include <audioclientactivationparams.h>
+#include "process_loopback_compat.hpp"
 #include <avrt.h>
 #include <mmdeviceapi.h>
 
