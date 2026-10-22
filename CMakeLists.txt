@@ -25,6 +25,7 @@ target_include_directories(dc_version INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/gen
 add_subdirectory(libs/protocol)
 add_subdirectory(libs/control)
 add_subdirectory(libs/shmaudio)
+add_subdirectory(libs/clocksync)
 
 add_subdirectory(apps/mixd)
 add_subdirectory(apps/capd)
@@ -34,6 +35,10 @@ if(DC_BUILD_TOOLS)
     add_subdirectory(tools/mock_server)
     add_subdirectory(tools/dc_cli)
     add_subdirectory(tools/shm_tone)
+    add_subdirectory(tools/drift_sim)
+    if(WIN32)
+        add_subdirectory(tools/drift_test)
+    endif()
 endif()
 
 if(DC_BUILD_TESTS)
