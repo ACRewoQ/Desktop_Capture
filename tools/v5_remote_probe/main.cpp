@@ -52,6 +52,11 @@ int main(int argc, char** argv) {
     const bool touchTest = hasArg(argc, argv, "--touch-test");
     const bool injectionReady = touchTest && TouchSelfTest::prepare();
 
+#ifdef _WIN32
+    // Qt 6.10's DXGI VBlank thread never wakes on some setups (seen with a virtual monitor on
+    // Reo's PC: "Unable to open monitor interface"), which freezes D3D11 after the first frame.
+    if (qEnvironmentVariableIsEmpty("QT_D3D_NO_VBLANK_THREAD")) qputenv("QT_D3D_NO_VBLANK_THREAD", "1");
+#endif
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("dc-v5-probe"));
     QGuiApplication::setApplicationVersion(QString::fromLatin1(dc::kVersionString));
