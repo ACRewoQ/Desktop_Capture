@@ -33,6 +33,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX // JUCE's headers do not include <windows.h>, so its min/max macros would land here
+#endif
 #include <windows.h>
 #include <psapi.h>
 #include <crtdbg.h>
