@@ -492,15 +492,19 @@ int cmdSelftest(const Args& a) {
               "device loopback holds all three tones");
 
     int extraOk = 0, extraOpened = 0;
+    std::string extraError;
     for (size_t i = 5; i < probes.size(); ++i) {
-        if (FAILED(probes[i]->openHr)) continue;
+        if (FAILED(probes[i]->openHr)) {
+            if (extraError.empty()) extraError = " first failure at " + probes[i]->where + ": " + hrText(probes[i]->openHr);
+            continue;
+        }
         ++extraOpened;
         if (isolated(i, 1000, 700, 1500)) ++extraOk;
     }
     if (extra > 0)
         check(extraOk == extra, std::to_string(extraOk) + " of " + std::to_string(extra) +
                                     " extra simultaneous captures of A got A's tone (" + std::to_string(extraOpened) +
-                                    " opened)");
+                                    " opened)" + extraError);
 
     bool noErrors = true;
     for (auto& p : probes)
@@ -508,8 +512,10 @@ int cmdSelftest(const Args& a) {
     check(noErrors, "no capture failed while running, including after the tone processes exited");
 
     std::cout << "\nmeasurements:\n";
-    std::printf("  activation: %.1f ms average, %.1f ms max over %zu captures\n",
-                activationTotal / double(std::max<size_t>(1, probes.size())), activationMax, probes.size());
+    size_t opened = 0;
+    for (auto& p : probes) opened += SUCCEEDED(p->openHr) ? 1 : 0;
+    std::printf("  activation: %.1f ms average, %.1f ms max over %zu opened captures\n",
+                activationTotal / double(std::max<size_t>(1, opened)), activationMax, opened);
     std::printf("  CPU of this process with %zu captures running: %.2f%% of one core\n", probes.size(), cpuPct);
     if (processOk && toneStartA) {
         const Recording& r = probes[0]->rec;
