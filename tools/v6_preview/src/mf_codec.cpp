@@ -93,13 +93,17 @@ std::uint64_t idFromTime(std::int64_t time, std::int64_t duration) {
 }  // namespace
 
 MfRuntime::MfRuntime() {
-    V6_CHECK(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    // Qt's GUI thread is already a single-threaded apartment; that is fine because every Media Foundation
+    // object is created and used on the pipeline's own MTA worker threads.
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (hr != RPC_E_CHANGED_MODE) V6_CHECK(hr);
+    comInit_ = SUCCEEDED(hr);
     V6_CHECK(MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET));
 }
 
 MfRuntime::~MfRuntime() {
     MFShutdown();
-    CoUninitialize();
+    if (comInit_) CoUninitialize();
 }
 
 const char* toString(CodecKind k) {

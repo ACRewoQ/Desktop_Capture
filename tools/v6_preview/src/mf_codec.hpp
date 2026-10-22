@@ -33,6 +33,9 @@ public:
     ~MfRuntime();
     MfRuntime(const MfRuntime&) = delete;
     MfRuntime& operator=(const MfRuntime&) = delete;
+
+private:
+    bool comInit_ = false;
 };
 
 struct EncodedUnit {
