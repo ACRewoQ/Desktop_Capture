@@ -21,6 +21,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# -Only a,b also arrives as one string under -File
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root "build/windows/tools/capbench/$Config/dc-capbench.exe"
 if (-not (Test-Path $exe)) { throw "not built: $exe (cmake --build --preset windows-$($Config.ToLower()))" }
