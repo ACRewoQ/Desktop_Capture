@@ -4,9 +4,10 @@
 
 ## 1. 初回だけ行う準備
 
-1. **Visual Studio 2022**（Community で可）をインストールし、ワークロード「C++ によるデスクトップ開発」を選びます。MSVC、Windows SDK、CMake が入ります。
-2. **Git for Windows** をインストールします。
-3. **vcpkg** を任意の場所に置き、環境変数 `VCPKG_ROOT` を設定します。PowerShell で：
+1. **Visual Studio 2022 または 2026**（Community で可）をインストールし、ワークロード「C++ によるデスクトップ開発」を選びます。MSVC と Windows SDK が入ります。プリセットは見つかった中で最も新しい Visual Studio を使います。
+2. **CMake 4.2 以上**をインストールします（VS 2026 を使うには 4.2 以上が必要です）。`winget install Kitware.CMake` で入ります。Visual Studio の「C++ CMake tools for Windows」でも構いません。
+3. **Git for Windows** をインストールします。
+4. **vcpkg** を任意の場所に置き、環境変数 `VCPKG_ROOT` を設定します。PowerShell で：
 
    ```powershell
    git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg
@@ -17,7 +18,7 @@
    設定後は PowerShell を開き直してください。
    ※「Developer PowerShell for VS」は `VCPKG_ROOT` を Visual Studio 内蔵の vcpkg に書き換えることがあるので、**通常の PowerShell** を使ってください（Visual Studio ジェネレーターは通常の PowerShell から使えます）。
 
-4. リポジトリを取得します。
+5. リポジトリを取得します。
 
    ```powershell
    git clone https://github.com/ACRewoQ/Desktop_Capture C:\dev\Desktop_Capture

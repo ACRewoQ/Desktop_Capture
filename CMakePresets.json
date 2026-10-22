@@ -8,9 +8,11 @@
   "configurePresets": [
     {
       "name": "windows",
-      "displayName": "Windows x64 (Visual Studio 2022 + vcpkg)",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
+      "displayName": "Windows x64 (newest Visual Studio + vcpkg)",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
       "binaryDir": "${sourceDir}/build/windows",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "condition": {
