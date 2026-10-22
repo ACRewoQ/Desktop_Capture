@@ -5,6 +5,7 @@
 //   dc-loopback-probe capture (--pid N | --name x.exe) [--exclude] [--seconds S] [--wav out.wav]
 //   dc-loopback-probe capture --device [--seconds S] [--wav out.wav]
 //   dc-loopback-probe selftest [--extra N]         automated check with test tones in child processes
+//   dc-loopback-probe multi --pids a,b,c [--exclude]  open several captures in one process, report each
 //
 // Internal (used by selftest): tone, tree.
 
@@ -332,6 +333,39 @@ int cmdCapture(const Args& a) {
     return 0;
 }
 
+// Opens several process loopback captures inside this one process and reports each result.
+// e.g. "multi --pids 100,100,100" (same target) or "multi --pids 100,200,300" (different targets).
+int cmdMulti(const Args& a) {
+    std::vector<DWORD> pids;
+    const std::string list = a.str("--pids");
+    for (size_t pos = 0; pos < list.size();) {
+        const size_t comma = std::min(list.find(',', pos), list.size());
+        pids.push_back(DWORD(std::atol(list.substr(pos, comma - pos).c_str())));
+        pos = comma + 1;
+    }
+    const LoopbackMode mode = a.has("--exclude") ? LoopbackMode::ExcludeProcessTree : LoopbackMode::IncludeProcessTree;
+    std::vector<std::unique_ptr<LoopbackCapture>> caps;
+    int opened = 0;
+    for (size_t i = 0; i < pids.size(); ++i) {
+        auto cap = std::make_unique<LoopbackCapture>();
+        std::string where;
+        HRESULT hr = cap->open(mode, pids[i], &where);
+        if (SUCCEEDED(hr)) {
+            hr = cap->start({});
+            if (FAILED(hr)) where = "Start";
+        }
+        std::printf("  #%zu pid %lu (%s) %s: %s%s\n", i + 1, static_cast<unsigned long>(pids[i]),
+                    processName(pids[i]).c_str(), modeName(mode), SUCCEEDED(hr) ? "ok" : (where + ": ").c_str(),
+                    SUCCEEDED(hr) ? "" : hrText(hr).c_str());
+        if (SUCCEEDED(hr)) ++opened;
+        caps.push_back(std::move(cap));
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    for (auto& c : caps) c->stop();
+    std::cout << opened << " of " << pids.size() << " opened\n";
+    return opened == int(pids.size()) ? 0 : 1;
+}
+
 // Child process: waits for the parent's start event, then plays a tone.
 int cmdTone(const Args& a) {
     if (a.has("--start-event")) {
@@ -563,6 +597,7 @@ int main(int argc, char** argv) {
     else if (cmd == "list") rc = cmdList();
     else if (cmd == "capture") rc = cmdCapture(a);
     else if (cmd == "selftest") rc = cmdSelftest(a);
+    else if (cmd == "multi") rc = cmdMulti(a);
     else if (cmd == "tone") rc = cmdTone(a);
     else if (cmd == "tree") rc = cmdTree(argc, argv);
     else usage();
