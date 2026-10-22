@@ -106,9 +106,25 @@ struct Recording {
         return it->qpc + std::uint64_t(index - it->index) * 10'000'000ull / kRate;
     }
 
-    size_t firstAbove(float threshold) const {
-        for (size_t i = 0; i < mono.size(); ++i)
-            if (std::fabs(mono[i]) > threshold) return i;
+    // Sine amplitude at `freq` over mono[start, start + n) (Goertzel).
+    double goertzel(double freq, size_t start, size_t n) const {
+        const double coeff = 2.0 * std::cos(2.0 * kPi * freq / kRate);
+        double s1 = 0, s2 = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const double s0 = mono[start + i] + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        const double power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        return 2.0 * std::sqrt(std::max(power, 0.0)) / double(n);
+    }
+
+    // First sample of the first 10 ms block (1 ms hop) where the tone at `freq` exceeds `threshold`.
+    // Tone specific, so other applications playing at the same time do not trigger it.
+    size_t toneOnset(double freq, double threshold) const {
+        constexpr size_t kBlock = kRate / 100, kHop = kRate / 1000;
+        for (size_t start = 0; start + kBlock <= mono.size(); start += kHop)
+            if (goertzel(freq, start, kBlock) > threshold) return start;
         return SIZE_MAX;
     }
 
@@ -125,21 +141,14 @@ struct Recording {
         return n;
     }
 
-    // Largest sine amplitude at `freq` over 100 ms blocks (Goertzel; the test tones fall on exact bins).
+    // Largest sine amplitude at `freq` over 2 s windows (0.5 Hz resolution; the test tones last 2.5 s and fall
+    // on exact bins). The long window makes the check immune to other applications that happen to play
+    // broadband sound (voice, music) at the same time, which a short window would count as the tone.
     double toneAmplitude(double freq) const {
-        constexpr size_t kBlock = kRate / 10;
+        constexpr size_t kWindow = kRate * 2, kHop = kRate / 10;
         double best = 0;
-        const double coeff = 2.0 * std::cos(2.0 * kPi * freq / kRate);
-        for (size_t start = 0; start + kBlock <= mono.size(); start += kBlock / 2) {
-            double s1 = 0, s2 = 0;
-            for (size_t i = 0; i < kBlock; ++i) {
-                const double s0 = mono[start + i] + coeff * s1 - s2;
-                s2 = s1;
-                s1 = s0;
-            }
-            const double power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-            best = std::max(best, 2.0 * std::sqrt(std::max(power, 0.0)) / kBlock);
-        }
+        for (size_t start = 0; start + kWindow <= mono.size(); start += kHop)
+            best = std::max(best, goertzel(freq, start, kWindow));
         return best;
     }
 };
@@ -504,14 +513,14 @@ int cmdSelftest(const Args& a) {
     std::printf("  CPU of this process with %zu captures running: %.2f%% of one core\n", probes.size(), cpuPct);
     if (processOk && toneStartA) {
         const Recording& r = probes[0]->rec;
-        const size_t onset = r.firstAbove(0.01f);
+        const size_t onset = r.toneOnset(1000, 0.03);
         if (onset != SIZE_MAX) {
             const double latencyMs = (double(r.qpcOf(onset)) - double(toneStartA)) / 10000.0;
             std::printf("  A: tone submitted -> seen in capture (QPC of first sample): %.1f ms\n", latencyMs);
         }
         std::printf("  A: peak before the tone started: %.1f dBFS\n", db(r.peakBefore(toneStartA)));
         if (SUCCEEDED(probes[4]->openHr)) {
-            const size_t d = probes[4]->rec.firstAbove(0.01f);
+            const size_t d = probes[4]->rec.toneOnset(1000, 0.03);
             if (d != SIZE_MAX)
                 std::printf("  device: tone submitted -> seen in capture: %.1f ms\n",
                             (double(probes[4]->rec.qpcOf(d)) - double(toneStartA)) / 10000.0);
