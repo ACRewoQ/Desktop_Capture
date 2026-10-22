@@ -19,6 +19,8 @@ namespace dc::vcam {
 
 inline constexpr wchar_t kBridgeGlobalName[] = L"Global\\DesktopCapture.VCam.v1";
 inline constexpr wchar_t kBridgeLocalName[] = L"Local\\DesktopCapture.VCam.v1";
+// Auto-reset event "<section name>.Frame", set by the producer after each published frame.
+inline constexpr wchar_t kBridgeEventSuffix[] = L".Frame";
 inline constexpr uint32_t kBridgeMagic = 0x4D414356;  // 'VCAM'
 inline constexpr uint32_t kBridgeVersion = 1;
 inline constexpr uint32_t kBridgeMaxWidth = 1920;

@@ -80,6 +80,7 @@ public:
     ~BridgeReader() {
         if (header_) UnmapViewOfFile(header_);
         if (map_) CloseHandle(map_);
+        if (frame_event_) CloseHandle(frame_event_);
     }
 
     void open() {
@@ -96,6 +97,9 @@ public:
             map_ = CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE, DWORD(size >> 32), DWORD(size), name);
             if (map_) {
                 LOG("bridge: section %ls %s", name, GetLastError() == ERROR_ALREADY_EXISTS ? "opened" : "created");
+                // Producer signals every published frame, so delivery follows its clock.
+                frame_event_ = CreateEventW(&sa, FALSE, FALSE, (std::wstring(name) + dc::vcam::kBridgeEventSuffix).c_str());
+                if (!frame_event_) LOG("bridge: CreateEvent failed, error %lu", GetLastError());
                 break;
             }
             LOG("bridge: CreateFileMapping(%ls) failed, error %lu (normal outside the Frame Server)", name, GetLastError());
@@ -137,6 +141,11 @@ public:
         return s.seq.load(std::memory_order_acquire) == seq;
     }
 
+    // Waits for the producer's next frame. False on timeout (or when there is no event).
+    bool wait_frame(DWORD timeout_ms) {
+        return frame_event_ && WaitForSingleObject(frame_event_, timeout_ms) == WAIT_OBJECT_0;
+    }
+
     void note_delivered() {
         if (!header_) return;
         header_->consumer_frames.fetch_add(1);
@@ -145,6 +154,7 @@ public:
 
 private:
     HANDLE map_ = nullptr;
+    HANDLE frame_event_ = nullptr;
     dc::vcam::BridgeHeader* header_ = nullptr;
 };
 
@@ -349,7 +359,10 @@ private:
         lock.lock();
     }
 
-    // Delivers one sample per frame period while requests are pending, like a real camera.
+    // Delivers one sample per frame while requests are pending, like a real camera. With a producer
+    // attached a sample goes out as soon as the producer publishes a frame (so two 30 fps clocks
+    // do not beat into duplicated / skipped frames); without one, or if the producer is late by
+    // more than two periods, a free-running 30 fps clock takes over.
     void worker() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         const int64_t period = qpc_freq() / kFps;
@@ -362,9 +375,14 @@ private:
                 cv_.wait(lock, [&] { return !running_ || pending_ > 0; });
                 if (!running_) break;
             }
-            const int64_t wait = next - qpc_now();
-            if (wait > 0) Sleep(DWORD(wait * 1000 / qpc_freq()));
-            next = std::max(next + period, qpc_now() - period);
+            if (bridge_->producer_alive()) {
+                bridge_->wait_frame(DWORD(2000 / kFps));
+                next = qpc_now() + period;
+            } else {
+                const int64_t wait = next - qpc_now();
+                if (wait > 0) Sleep(DWORD(wait * 1000 / qpc_freq()));
+                next = std::max(next + period, qpc_now() - period);
+            }
             std::unique_lock lock(mutex_);
             if (!running_) break;
             if (pending_ == 0) continue;

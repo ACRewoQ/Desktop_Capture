@@ -53,7 +53,8 @@ public:
             return;
         }
         header_->producer_pid.store(GetCurrentProcessId());
-        std::printf("mf: attached to %ls\n", name_.c_str());
+        event_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, (name_ + dc::vcam::kBridgeEventSuffix).c_str());
+        std::printf("mf: attached to %ls%s\n", name_.c_str(), event_ ? "" : " (no frame event)");
     }
 
     void write(const uint8_t* bgra, int w, int h, const dc::vcam::Stamp& s) {
@@ -70,6 +71,7 @@ public:
         header_->latest.store(slot, std::memory_order_release);
         header_->producer_heartbeat_qpc.store(qpc_now());
         header_->producer_pid.store(GetCurrentProcessId());
+        if (event_) SetEvent(event_);
     }
 
     uint64_t consumer_frames() const { return header_ ? header_->consumer_frames.load() : 0; }
@@ -80,12 +82,15 @@ public:
             UnmapViewOfFile(header_);
         }
         if (map_) CloseHandle(map_);
+        if (event_) CloseHandle(event_);
         header_ = nullptr;
         map_ = nullptr;
+        event_ = nullptr;
     }
 
 private:
     HANDLE map_ = nullptr;
+    HANDLE event_ = nullptr;
     dc::vcam::BridgeHeader* header_ = nullptr;
     std::wstring name_;
 };
