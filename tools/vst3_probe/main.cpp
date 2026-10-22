@@ -84,11 +84,17 @@ void disableCrashDialogs() {
 #endif
 }
 
+// The child records what it is doing, so a crash report can say where the plugin died.
+File gStageFile;
+void stage(const String& what) {
+    if (gStageFile != File()) gStageFile.replaceWithText(what);
+}
+
 struct Args {
     String command;
     String target;
     StringArray dirs;
-    File json, md;
+    File json, md, stageFile;
     double editorSeconds = 2.0;
     double timeoutSeconds = 60.0;
     int maxTypes = 4;
@@ -105,6 +111,7 @@ bool parseArgs(const StringArray& a, Args& out) {
         if (s == "--dir") out.dirs.add(next());
         else if (s == "--json") out.json = File::getCurrentWorkingDirectory().getChildFile(next());
         else if (s == "--md") out.md = File::getCurrentWorkingDirectory().getChildFile(next());
+        else if (s == "--stage") out.stageFile = File::getCurrentWorkingDirectory().getChildFile(next());
         else if (s == "--editor-seconds") out.editorSeconds = next().getDoubleValue();
         else if (s == "--timeout") out.timeoutSeconds = next().getDoubleValue();
         else if (s == "--max-types") out.maxTypes = next().getIntValue();
@@ -324,8 +331,10 @@ struct TypeResult {
 
 TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc, const Args& args) {
     auto r = std::make_unique<DynamicObject>();
-    Array<var> problems;
+    Array<var> problems, warnings; // problems fail the plugin, warnings are findings for the design
     auto problem = [&](const String& s) { problems.add(s); };
+    auto warning = [&](const String& s) { warnings.add(s); };
+    const String who = desc.name + ": ";
 
     r->setProperty("name", desc.name);
     r->setProperty("vendor", desc.manufacturerName);
@@ -336,6 +345,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
 
     const double memBefore = workingSetMiB();
     String error;
+    stage(who + "create instance");
     auto t0 = Clock::now();
     auto plugin = fm.createPluginInstance(desc, kSampleRate, kBlockSizes[1], error);
     r->setProperty("create_ms", msSince(t0));
@@ -352,19 +362,31 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
     for (auto* prm : plugin->getParameters()) prm->addListener(&watcher);
 
     // Buses: mixd tracks are mono or stereo, so check both.
+    stage(who + "bus layouts");
     r->setProperty("inputs", describeBuses(*plugin, true));
     r->setProperty("outputs", describeBuses(*plugin, false));
+    const auto defaultLayout = plugin->getBusesLayout();
+    const auto defaultOut = defaultLayout.outputBuses.isEmpty() ? AudioChannelSet() : defaultLayout.getMainOutputChannelSet();
     const bool mono = trySetMainLayout(*plugin, AudioChannelSet::mono());
     const bool stereo = trySetMainLayout(*plugin, AudioChannelSet::stereo());
     r->setProperty("supports_mono", mono);
     r->setProperty("supports_stereo", stereo);
-    if (!stereo) problem("stereo main bus not supported");
+    if (!stereo) {
+        // Fine if the plugin already runs stereo out of the box (e.g. multi-output plugins that refuse
+        // to change their layout); mixd would then feed its main bus and leave the others alone.
+        plugin->setBusesLayout(defaultLayout);
+        if (defaultOut.size() == 2 || defaultOut.size() == 1)
+            warning("main bus layout cannot be changed (default output " + defaultOut.getDescription() + ")");
+        else
+            problem("no mono or stereo main bus (default output " + defaultOut.getDescription() + ")");
+    }
     r->setProperty("accepts_midi", plugin->acceptsMidi());
     r->setProperty("produces_midi", plugin->producesMidi());
 
     // Processing at the block sizes G2 targets (128-256), each after a fresh prepareToPlay.
     auto blocks = std::make_unique<DynamicObject>();
     for (int bs : kBlockSizes) {
+        stage(who + "process " + String(bs));
         plugin->setRateAndBufferSizeDetails(kSampleRate, bs);
         plugin->prepareToPlay(kSampleRate, bs);
         AudioRunner runner(*plugin, bs);
@@ -382,6 +404,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
     plugin->prepareToPlay(kSampleRate, kBlockSizes[1]);
 
     // Parameter list: what remotes show as sliders (decision #8).
+    stage(who + "parameter list");
     const auto& params = plugin->getParameters();
     r->setProperty("num_params", params.size());
     r->setProperty("has_bypass_param", plugin->getBypassParameter() != nullptr);
@@ -389,7 +412,21 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
     for (int i = 0; i < params.size() && i < kMaxParamsInJson; ++i) plist.add(describeParameter(*plugin, i));
     r->setProperty("params", plist);
 
+    // A VST3 host edit reaches the plugin's processor only with the next process call, and some
+    // plugins apply restored state asynchronously; mixd's audio thread never stops, so emulate that.
+    auto pump = [&] {
+        AudioRunner runner(*plugin, kBlockSizes[1]);
+        for (int i = 0; i < 8; ++i) runner.runBlock();
+        MessageManager::getInstance()->runDispatchLoopUntil(30);
+    };
+    auto snapshot = [&] {
+        std::vector<float> v;
+        for (auto* p : plugin->getParameters()) v.push_back(p->getValue());
+        return v;
+    };
+
     // Host-side edit, read-back, text round trip.
+    stage(who + "parameter edit");
     if (auto* prm = pickTestParameter(*plugin)) {
         auto o = std::make_unique<DynamicObject>();
         const float original = prm->getValue();
@@ -417,9 +454,12 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
         o->setProperty("set_ok", setOk);
         o->setProperty("text_roundtrip_ok", textOk);
         if (!setOk) problem("parameter read-back differs from the value set");
-        if (!textOk) problem("getValueForText(getText(v)) != v (remote numeric input would need care)");
+        if (!textOk) warning("plugin cannot parse its own parameter text (remote numeric entry must not rely on it)");
 
-        // State: save, change, restore, compare.
+        // State: save, change, restore, compare every parameter.
+        stage(who + "state save/restore");
+        pump();
+        const auto before = snapshot();
         MemoryBlock state;
         plugin->getStateInformation(state);
         o->setProperty("state_bytes", static_cast<int>(state.getSize()));
@@ -427,12 +467,24 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
             HostEdit he(watcher);
             prm->setValueNotifyingHost(wanted < 0.5f ? 0.9f : 0.1f);
         }
+        pump();
+        const float changed = prm->getValue();
+        t0 = Clock::now();
         plugin->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
-        // Some plugins apply state asynchronously on the message thread.
-        MessageManager::getInstance()->runDispatchLoopUntil(50);
+        o->setProperty("state_restore_ms", msSince(t0));
+        pump();
+        pump();
+        const auto after = snapshot();
+        int mismatches = 0;
+        for (size_t i = 0; i < before.size() && i < after.size(); ++i)
+            if (std::abs(before[i] - after[i]) > 0.02f) ++mismatches;
         const bool stateOk = std::abs(prm->getValue() - got) <= tol;
+        o->setProperty("value_before_restore", changed);
+        o->setProperty("value_after_restore", prm->getValue());
         o->setProperty("state_restore_ok", stateOk);
-        if (!stateOk) problem("setStateInformation did not restore the parameter");
+        o->setProperty("state_param_mismatches", mismatches);
+        if (!stateOk) problem("setStateInformation did not restore the edited parameter");
+        else if (mismatches > 0) warning(String(mismatches) + " parameter(s) differ after a state round trip");
         {
             HostEdit he(watcher);
             prm->setValueNotifyingHost(original);
@@ -452,6 +504,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
         const double memBeforeEditor = workingSetMiB();
         RealtimeAudioThread audio(*plugin, kBlockSizes[1]);
 
+        stage(who + "editor create");
         t0 = Clock::now();
         auto* editor = plugin->createEditorAndMakeActive();
         e->setProperty("create_ms", msSince(t0));
@@ -464,6 +517,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
                 window.centreWithSize(window.getWidth(), window.getHeight());
                 window.setVisible(true);
                 window.toFront(true);
+                stage(who + "editor shown");
                 const auto shown = Clock::now();
                 while (!window.closed && msSince(shown) < args.editorSeconds * 1000.0)
                     MessageManager::getInstance()->runDispatchLoopUntil(20);
@@ -479,6 +533,7 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
                 if (!editorOk) problem("editor has zero size");
                 window.clearContentComponent();
             }
+            stage(who + "editor close");
             t0 = Clock::now();
             plugin->editorBeingDeleted(editor);
             delete editor;
@@ -506,18 +561,15 @@ TypeResult probeType(AudioPluginFormatManager& fm, const PluginDescription& desc
 
     for (auto* prm : plugin->getParameters()) prm->removeListener(&watcher);
     plugin->removeListener(&watcher);
+    stage(who + "destroy");
     plugin->releaseResources();
     t0 = Clock::now();
     plugin.reset();
     r->setProperty("destroy_ms", msSince(t0));
 
-    const bool ok = problems.isEmpty() || (editorOk && !problems.isEmpty() && [&] {
-        // Only the text round trip is a soft warning; everything else fails the plugin.
-        for (auto& p : problems)
-            if (!p.toString().startsWith("getValueForText")) return false;
-        return true;
-    }());
+    const bool ok = problems.isEmpty() && editorOk;
     r->setProperty("problems", problems);
+    r->setProperty("warnings", warnings);
     r->setProperty("ok", ok);
 
     String summary;
@@ -554,6 +606,7 @@ var probeBundle(const String& path, const Args& args, bool& allOk) {
     auto* fmt = fm.getFormat(0);
 
     OwnedArray<PluginDescription> types;
+    stage("read plugin types (factory)");
     auto t0 = Clock::now();
     fmt->findAllTypesForFile(types, path);
     bundle->setProperty("scan_ms", msSince(t0));
@@ -576,6 +629,8 @@ var probeBundle(const String& path, const Args& args, bool& allOk) {
                                                          : String(j["has_editor"] ? "not opened" : "none"))
                       << "\n";
             for (auto& p : *j["problems"].getArray()) std::cout << "         - " << p.toString() << "\n";
+            if (auto* w = j["warnings"].getArray())
+                for (auto& p : *w) std::cout << "         ~ " << p.toString() << "\n";
         }
     }
     bundle->setProperty("types", results);
@@ -593,6 +648,7 @@ int cmdList(const Args& args) {
 int cmdProbe(const Args& args) {
     if (args.target.isEmpty()) return 2;
     if (args.quiet) disableCrashDialogs();
+    gStageFile = args.stageFile;
     bool ok = false;
     if (!args.quiet) std::cout << args.target << "\n";
     auto report = probeBundle(File::getCurrentWorkingDirectory().getChildFile(args.target).getFullPathName(), args, ok);
@@ -629,9 +685,12 @@ int cmdScan(const Args& args) {
         const auto& path = bundles[b];
         std::cout << "[" << (b + 1) << "/" << bundles.size() << "] " << path << "\n" << std::flush;
         const auto jsonFile = tmp.getChildFile("probe-" + String(b) + ".json");
+        const auto stageFile = tmp.getChildFile("probe-" + String(b) + ".stage");
         jsonFile.deleteFile();
+        stageFile.deleteFile();
 
         StringArray cmd{self, "probe", path, "--quiet", "--json", jsonFile.getFullPathName(),
+                        "--stage", stageFile.getFullPathName(),
                         "--editor-seconds", String(args.editorSeconds), "--max-types", String(args.maxTypes)};
         ChildProcess child;
         const auto t0 = Clock::now();
@@ -652,8 +711,11 @@ int cmdScan(const Args& args) {
                 o->setProperty("ok", false);
                 o->setProperty("crashed", finished);
                 o->setProperty("hung", !finished);
-                o->setProperty("error", finished ? "child died: " + exitDescription(code)
-                                                 : "timed out after " + String(args.timeoutSeconds) + " s (killed)");
+                const auto where = stageFile.existsAsFile() ? stageFile.loadFileAsString() : String("starting");
+                o->setProperty("stage", where);
+                o->setProperty("error", (finished ? "child died: " + exitDescription(code)
+                                                  : "timed out after " + String(args.timeoutSeconds) + " s (killed)")
+                                            + " during [" + where + "]");
                 report = var(o.release());
             }
             report.getDynamicObject()->setProperty("child_ms", msSince(t0));
@@ -671,6 +733,8 @@ int cmdScan(const Args& args) {
                                                << t["editor"]["height"].toString();
                 if (auto* pr = t["problems"].getArray())
                     for (auto& p : *pr) std::cout << "\n           ! " << p.toString();
+                if (auto* w = t["warnings"].getArray())
+                    for (auto& p : *w) std::cout << "\n           ~ " << p.toString();
             }
         std::cout << "\n" << std::flush;
         all.add(report);
@@ -706,6 +770,8 @@ int cmdScan(const Args& args) {
                 StringArray notes;
                 if (auto* pr = t["problems"].getArray())
                     for (auto& p : *pr) notes.add(p.toString());
+                if (auto* w = t["warnings"].getArray())
+                    for (auto& p : *w) notes.add("(warn) " + p.toString());
                 md << "| " << cell(t["name"]) << " | " << cell(t["vendor"]) << " | " << cell(t["category"]) << " | " << (t["ok"] ? "OK" : "FAIL") << " | "
                    << fmtMs(t["create_ms"]) << " | " << t["num_params"].toString() << " | "
                    << (t["has_editor"] ? t["editor"]["width"].toString() + "x" + t["editor"]["height"].toString()
