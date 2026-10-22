@@ -135,6 +135,10 @@ if (-not $SkipTouch) {
     }
 }
 
+if ($results | Where-Object { $_.fps -eq 0 -and $_.ui -ne 'minimal' }) {
+    Write-Host 'WARNING: some runs rendered 0 fps. The screen was probably locked or the window hidden,' -ForegroundColor Yellow
+    Write-Host '         so their memory numbers miss the GPU work. Run again while the screen is on.' -ForegroundColor Yellow
+}
 $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 $results | Export-Csv -NoTypeInformation -Encoding UTF8 (Join-Path $OutDir 'summary.csv')
 [ordered]@{ machine = $machine; results = $results } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $OutDir 'summary.json')

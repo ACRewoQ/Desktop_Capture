@@ -2,6 +2,9 @@
 # Built only when Qt 6 is found (see cmake/DcDependencies.cmake).
 
 find_package(Qt6 REQUIRED COMPONENTS Quick Network)
+if(QT_KNOWN_POLICY_QTP0004)
+    qt_policy(SET QTP0004 NEW)
+endif()
 
 qt_add_executable(dc-v5-probe
     main.cpp
