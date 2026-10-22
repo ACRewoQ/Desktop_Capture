@@ -65,6 +65,7 @@ void VideoItem::detach() {
 
 QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     auto* node = static_cast<QSGSimpleTextureNode*>(old);
+    nPaint_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mu_);
     if (!ring_) return node;
 
@@ -103,7 +104,9 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     }
 
     std::uint64_t id = 0;
+    nFetchTry_.fetch_add(1, std::memory_order_relaxed);
     if (reader_->fetch(ctx, local_.Get(), &id)) {
+        nFetchOk_.fetch_add(1, std::memory_order_relaxed);
         haveFrame_ = true;
         if (statsPtr_) statsPtr_->mark(id, v6::Copied);
         pendingPresent_.push_back(id);
@@ -127,7 +130,14 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     return node;
 }
 
+std::string VideoItem::counters() const {
+    return "render path: updatePaintNode " + std::to_string(nPaint_.load()) + ", fetch " +
+           std::to_string(nFetchOk_.load()) + "/" + std::to_string(nFetchTry_.load()) + ", frameSwapped " +
+           std::to_string(nSwap_.load());
+}
+
 void VideoItem::onFrameSwapped() {
+    nSwap_.fetch_add(1, std::memory_order_relaxed);
     if (pendingPresent_.empty()) return;
     const std::int64_t now = v6::nowUs();
     std::lock_guard<std::mutex> lock(mu_);

@@ -12,7 +12,9 @@
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
+#include <atomic>
 #include <functional>
+#include <string>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -39,6 +41,9 @@ public:
     void attach(v6::SharedFrameRing* ring, v6::Stats* stats, AckFn ack);
     void detach();  // must run before the ring is destroyed
 
+    // Render-path counters for diagnosing a preview that shows nothing.
+    std::string counters() const;
+
 signals:
     void statsChanged();
     void infoChanged();
@@ -63,4 +68,6 @@ private:
     v6::ComPtr<ID3D11Texture2D> local_;
     std::vector<std::uint64_t> pendingPresent_;
     bool haveFrame_ = false;
+
+    std::atomic<std::uint64_t> nPaint_{0}, nFetchTry_{0}, nFetchOk_{0}, nSwap_{0};
 };

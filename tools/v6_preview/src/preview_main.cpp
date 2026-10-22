@@ -92,6 +92,8 @@ struct Session {
         if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
             std::printf("memory: working set %.0f MB, peak %.0f MB\n", pmc.WorkingSetSize / 1048576.0,
                         pmc.PeakWorkingSetSize / 1048576.0);
+        if (item) std::printf("%s, decoded %llu\n", item->counters().c_str(),
+                              static_cast<unsigned long long>(rx ? rx->decodedFrames() : 0));
         std::printf("note: the monitor shows the frame about one refresh after frameSwapped (not included).\n");
         if (rx && !rx->error().empty()) std::cout << "RESULT: ERROR " << rx->error() << "\n";
         if (!opt.csv.empty()) stats->writeCsv(opt.csv);
@@ -168,7 +170,8 @@ int main(int argc, char** argv) {
     QObject::connect(&live, &QTimer::timeout, [&] {
         if (!session.stats) return;
         item->setStatsText(QString::fromStdString(session.stats->liveLine()));
-        if (++ticks % 4 == 0) std::cout << "  " << session.stats->liveLine() << std::endl;
+        if (++ticks % 4 == 0)
+            std::cout << "  " << session.stats->liveLine() << " | " << item->counters() << std::endl;
         if (session.rx && !session.rx->error().empty()) {
             exitCode = 1;
             QCoreApplication::quit();
@@ -180,8 +183,13 @@ int main(int argc, char** argv) {
         QTimer::singleShot(static_cast<int>(opt.seconds * 1000), &app, [] { QCoreApplication::quit(); });
     // Show only now: the threaded render loop initializes the scene graph as soon as the window is exposed,
     // and sceneGraphInitialized must not fire before the connection above exists.
+    // Stay on top: a fully covered window is "occluded" and Qt stops rendering it, which would stall the
+    // measurement when the tool is started from a script behind other windows.
+    window->setFlag(Qt::WindowStaysOnTopHint, true);
     if (opt.fullscreen) window->showFullScreen();
     else window->show();
+    window->raise();
+    window->requestActivate();
 
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [&] { session.finish(); });
     const int rc = app.exec();
