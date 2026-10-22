@@ -6,6 +6,7 @@
 //                                           the remote device); reports receive -> present locally, the
 //                                           sender reports the full round trip
 //   --fullscreen                            borderless full screen
+//   --snapshot FILE.png                     grab the window halfway through --seconds (clock vs. frame time)
 
 #include "common.hpp"
 #include "options.hpp"
@@ -17,6 +18,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QImage>
 #include <QTimer>
 
 #include <psapi.h>
@@ -28,6 +30,22 @@
 using namespace v6;
 
 namespace {
+
+// Prints where a crash happened (module + offset) so it can be found without a debugger.
+LONG WINAPI reportCrash(EXCEPTION_POINTERS* ep) {
+    void* addr = ep->ExceptionRecord->ExceptionAddress;
+    HMODULE mod = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(addr), &mod))
+        GetModuleFileNameA(mod, name, MAX_PATH);
+    std::fprintf(stderr, "CRASH: exception 0x%08lX at %s+0x%llX (thread %lu)\n",
+                 static_cast<unsigned long>(ep->ExceptionRecord->ExceptionCode), name,
+                 static_cast<unsigned long long>(static_cast<char*>(addr) - reinterpret_cast<char*>(mod)),
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 
 struct Session {
     CliOptions opt;
@@ -108,10 +126,16 @@ struct Session {
 int main(int argc, char** argv) {
     CliOptions opt;
     if (!parseCli(argc, argv, opt) || opt.help) {
-        std::cout << "usage: dc-v6-preview [--listen PORT] [--fullscreen] [options]\n" << kCommonUsage;
+        std::cout << "usage: dc-v6-preview [--listen PORT] [--fullscreen] [--snapshot FILE.png] [options]\n"
+                  << kCommonUsage;
         return opt.help ? 0 : 2;
     }
 
+    SetUnhandledExceptionFilter(reportCrash);
+    // Qt 6.10 paces requestUpdate() with a DXGI vblank thread. On the development PC (RTX 5090 plus a
+    // "Meta Virtual Monitor" display driver, "Unable to open monitor interface") that thread never delivers a
+    // vblank, so the window renders one frame and stops. Fall back to timer pacing unless told otherwise.
+    if (!qEnvironmentVariableIsSet("QT_D3D_NO_VBLANK_THREAD")) qputenv("QT_D3D_NO_VBLANK_THREAD", "1");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
     QGuiApplication app(argc, argv);
     std::unique_ptr<MfRuntime> mf;
@@ -179,6 +203,14 @@ int main(int argc, char** argv) {
     });
     live.start(500);
 
+    if (!opt.snapshot.empty()) {
+        const int at = static_cast<int>((opt.seconds > 0 ? opt.seconds / 2 : 5) * 1000);
+        QTimer::singleShot(at, window, [window, &opt] {
+            const QImage img = window->grabWindow();
+            std::cout << "snapshot " << opt.snapshot << (img.save(QString::fromStdString(opt.snapshot)) ? "" : " FAILED")
+                      << std::endl;
+        });
+    }
     if (opt.seconds > 0)
         QTimer::singleShot(static_cast<int>(opt.seconds * 1000), &app, [] { QCoreApplication::quit(); });
     // Show only now: the threaded render loop initializes the scene graph as soon as the window is exposed,

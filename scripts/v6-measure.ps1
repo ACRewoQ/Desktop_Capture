@@ -59,6 +59,8 @@ function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu
     $log = Join-Path $out "$name.txt"
     $csv = Join-Path $out "$name.csv"
     $all = $caseArgs + @('--seconds', $Seconds, '--csv', $csv, '--label', $name)
+    # GDI screenshots miss flip-model windows, so the preview grabs its own window.
+    if ($Shot -and $exe -eq $preview) { $all += @('--snapshot', (Join-Path $out "$name.png")) }
     $p = Start-Process -FilePath $exe -ArgumentList $all -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" -PassThru -NoNewWindow
     $null = $p.Handle  # cache the handle so ExitCode is available after exit
@@ -67,7 +69,7 @@ function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu
         Start-Sleep -Seconds 4
         $decodeLoad = Sample-VideoDecode ([math]::Max(3, $Seconds - 8))
     }
-    if ($Shot) {
+    if ($Shot -and $exe -eq $bench) {
         Start-Sleep -Seconds 2
         Take-Screenshot (Join-Path $out "$name.png")
     }
