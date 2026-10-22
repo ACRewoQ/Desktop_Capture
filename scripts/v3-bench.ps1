@@ -73,7 +73,7 @@ foreach ($c in $cases) {
 $cols = 'case', 'capture_fps', 'encode_fps', 'dropped', 'cpu_avg_pct', 'cpu_max_pct', 'cpu_core_avg_pct',
         'sys_cpu_avg_pct', 'gpu_3d_pct', 'gpu_videoproc_pct', 'gpu_encode_pct', 'mbps', 'latency_avg_ms',
         'latency_max_ms', 'working_set_mb', 'error'
-$md = @('| ' + ($cols -join ' | ') + ' |', '|' + (($cols | ForEach-Object { '---' }) -join '|') + '|')
+$md = @(('| ' + ($cols -join ' | ') + ' |'), ('|' + (($cols | ForEach-Object { '---' }) -join '|') + '|'))
 foreach ($r in $rows) { $md += '| ' + (($cols | ForEach-Object { $r.$_ }) -join ' | ') + ' |' }
 $md | Set-Content -Encoding utf8 (Join-Path $OutDir 'summary.md')
 $rows | Export-Csv -NoTypeInformation -Encoding utf8 (Join-Path $OutDir 'summary.csv')
