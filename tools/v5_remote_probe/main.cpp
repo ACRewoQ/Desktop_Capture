@@ -1,6 +1,6 @@
 // dc-v5-probe: P1/V5 verification of the remote controller's weight. A minimal Qt Quick mixer
 // (fader strips with meters) that reports its own memory, CPU and frame rate, and checks that
-// several faders can be dragged at the same time with touch. See docs/v5-remote-lite.md.
+// several faders can be dragged at the same time with touch. See docs/verification/v5-remote-lite.md.
 //
 //   dc-v5-probe [--ui custom|controls|minimal] [--tracks N] [--connect HOST[:PORT]]
 //               [--backend default|d3d11|software|opengl] [--fullscreen]

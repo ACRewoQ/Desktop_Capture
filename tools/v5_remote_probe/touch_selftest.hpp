@@ -19,7 +19,7 @@ class StripModel;
 //   1. up to 10 fingers drag 10 faders by different amounts at the same time
 //   2. double tap on a fader resets it to 0 dB
 //   3. a horizontal swipe that starts on a fader scrolls the strip list and moves no fader
-// Off Windows QTest touch events stand in, to check the QML logic. A real touch screen check on the target device is still done by hand (docs/v5-remote-lite.md).
+// Off Windows QTest touch events stand in, to check the QML logic. A real touch screen check on the target device is still done by hand (docs/verification/v5-remote-lite.md).
 class TouchSelfTest : public QObject {
     Q_OBJECT
 
