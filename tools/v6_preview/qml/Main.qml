@@ -9,7 +9,7 @@ Window {
     id: win
     width: 1280
     height: 800
-    visible: true
+    visible: false  // shown from C++ after the scene graph signals are connected
     color: "black"
     title: "dc-v6-preview"
 

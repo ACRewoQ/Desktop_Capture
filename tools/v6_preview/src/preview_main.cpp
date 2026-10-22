@@ -178,7 +178,10 @@ int main(int argc, char** argv) {
 
     if (opt.seconds > 0)
         QTimer::singleShot(static_cast<int>(opt.seconds * 1000), &app, [] { QCoreApplication::quit(); });
+    // Show only now: the threaded render loop initializes the scene graph as soon as the window is exposed,
+    // and sceneGraphInitialized must not fire before the connection above exists.
     if (opt.fullscreen) window->showFullScreen();
+    else window->show();
 
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [&] { session.finish(); });
     const int rc = app.exec();

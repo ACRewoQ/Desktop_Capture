@@ -61,10 +61,11 @@ function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu
     $all = $caseArgs + @('--seconds', $Seconds, '--csv', $csv, '--label', $name)
     $p = Start-Process -FilePath $exe -ArgumentList $all -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" -PassThru -NoNewWindow
-    $gpu = ''
+    $null = $p.Handle  # cache the handle so ExitCode is available after exit
+    $decodeLoad = ''
     if ($Gpu) {
         Start-Sleep -Seconds 4
-        $gpu = Sample-VideoDecode ([math]::Max(3, $Seconds - 8))
+        $decodeLoad = Sample-VideoDecode ([math]::Max(3, $Seconds - 8))
     }
     if ($Shot) {
         Start-Sleep -Seconds 2
@@ -77,7 +78,7 @@ function Run-Case([string]$name, [string]$exe, [string[]]$caseArgs, [switch]$Gpu
     $total = (Get-Content $log | Where-Object { $_ -match '^TOTAL' }) -join ''
     $cpu = (Get-Content $log | Where-Object { $_ -match '^process CPU' }) -join ''
     $script:summary += [pscustomobject]@{
-        case = $name; exit = $p.ExitCode; total = $total; cpu = $cpu; videoDecodeEngine = $gpu
+        case = $name; exit = $p.ExitCode; total = $total; cpu = $cpu; videoDecodeEngine = $decodeLoad
     }
 }
 

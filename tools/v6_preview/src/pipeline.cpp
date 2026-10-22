@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <future>
+#include <system_error>
 #include <iostream>
 
 #include "test_pattern.hpp"
@@ -232,8 +233,16 @@ struct TcpSender::Impl {
 
 TcpSender::TcpSender(const std::string& host, int port, std::function<void(const AckTimes&)> onAck)
     : impl_(std::make_unique<Impl>()) {
+    // The receiver opens its port once its window is up; keep trying for a while.
     asio::ip::tcp::resolver res(impl_->io);
-    asio::connect(impl_->sock, res.resolve(host, std::to_string(port)));
+    for (int attempt = 0;; ++attempt) {
+        asio::error_code ec;
+        asio::connect(impl_->sock, res.resolve(host, std::to_string(port)), ec);
+        if (!ec) break;
+        if (attempt >= 50) throw std::system_error(ec, "connect to " + host + ":" + std::to_string(port));
+        impl_->sock.close();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
     impl_->sock.set_option(asio::ip::tcp::no_delay(true));
     impl_->reader = std::thread([this, onAck = std::move(onAck)] {
         std::uint8_t type = 0;

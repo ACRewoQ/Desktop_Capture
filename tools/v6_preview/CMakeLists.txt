@@ -20,7 +20,7 @@ target_link_libraries(dc-v6-bench PRIVATE dc_v6core)
 dc_apply_options(dc-v6-bench)
 
 if(DC_HAVE_QT)
-    qt_standard_project_setup(REQUIRES 6.5)
+    qt_standard_project_setup(REQUIRES 6.8)
     qt_add_executable(dc-v6-preview src/preview_main.cpp src/video_item.cpp src/video_item.hpp)
     qt_add_qml_module(dc-v6-preview
         URI DcV6
