@@ -51,9 +51,9 @@ if ($SimOnly) {
 }
 
 Write-Host "`n=== Real devices ($Minutes min) ===" -ForegroundColor Cyan
-$args = @('--minutes', $Minutes, '--csv', (Join-Path $out "real_$stamp.csv"))
-if ($A -ge 0) { $args += @('--a', $A) }
-if ($B -ge 0) { $args += @('--b', $B) }
+$testArgs = @('--minutes', $Minutes, '--csv', (Join-Path $out "real_$stamp.csv"))
+if ($A -ge 0) { $testArgs += @('--a', $A) }
+if ($B -ge 0) { $testArgs += @('--b', $B) }
 & $test @args | Tee-Object -FilePath (Join-Path $out "real_$stamp.txt")
 $realOk = $LASTEXITCODE -eq 0
 
