@@ -11,6 +11,9 @@ $bin = Join-Path $env:ProgramData 'DesktopCapture\vcam\bin'
 $ctl = Join-Path $bin 'vcam-mf-ctl.exe'
 $feed = Join-Path $bin 'vcam-feed.exe'
 $probe = Join-Path $bin 'vcam-probe.exe'
+# The probe is a plain camera client: prefer a fresh build so it can change without re-registering.
+$built = Join-Path (Split-Path -Parent $PSScriptRoot) 'build\bin\vcam-probe.exe'
+if (Test-Path $built) { $probe = $built }
 $failures = @()
 function Step($n) { Write-Host "`n=== $n ===" -ForegroundColor Cyan }
 function Check($ok, $what) {
