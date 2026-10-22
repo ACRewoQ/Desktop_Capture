@@ -296,6 +296,13 @@ struct Shared {
     double latencyMs = 0, latMin = 1e9, latMax = -1e9;
     double intervalMinSinadB = 1e9;
     bool haveLatency = false;
+    // last clean block of A's loopback: where a tone frame sits in A's device frames
+    bool haveA = false;
+    double lastAPos = 0, lastASrc = 0;
+    std::vector<double> aGlitchTimes; // QPC seconds of A glitch blocks (other sounds on A)
+    std::uint64_t glitchBOwn = 0;     // B glitch blocks with no A glitch around them: the bridge's
+    std::vector<std::pair<double, bool>> bEvents; // B glitch blocks: seconds after warm-up, caused by A
+    double warmTime = 0, warmPosA = 0, warmPosB = 0;
 };
 
 void proAudioThread() {
@@ -359,7 +366,7 @@ int run(const Options& opt) {
         return 1;
     }
     std::fprintf(csv, "elapsed_s,measured_ppm,bridge_ppm,fill_error_frames,fifo_frames,latency_ms,underruns,overruns,"
-                      "resyncs,discont_a,discont_b,glitch_blocks_a,glitch_blocks_b,min_sinad_b_db\n");
+                      "resyncs,discont_a,discont_b,glitch_blocks_a,glitch_blocks_b,glitch_blocks_b_own,min_sinad_b_db\n");
 
     Stream renderA, loopA, renderB, loopB;
     if (!renderA.open(en.p, devA.id, false) || !loopA.open(en.p, devA.id, true) || !renderB.open(en.p, devB.id, false) ||
@@ -380,8 +387,16 @@ int run(const Options& opt) {
     sh.dllA = TimeDll(sh.mixRateA, 0.1);
     sh.dllB = TimeDll(sh.mixRateB, 0.1);
     // clock difference in ppm, independent of the nominal mix rates
+    // Clock difference in ppm, independent of the nominal mix rates: frames each device advanced since
+    // the warm-up ended (long baseline, so timestamp noise averages out), or the DLL rates before that.
     auto measuredPpm = [&] {
         if (!sh.dllA.ready() || !sh.dllB.ready()) return 0.0;
+        const double t = qpcSeconds();
+        if (sh.warm && t - sh.warmTime > 5) {
+            const double a = (sh.dllA.positionAt(t) - sh.warmPosA) / sh.mixRateA;
+            const double b = (sh.dllB.positionAt(t) - sh.warmPosB) / sh.mixRateB;
+            return (a / b - 1) * 1e6;
+        }
         return (sh.dllA.rate() / sh.mixRateA) / (sh.dllB.rate() / sh.mixRateB) * 1e6 - 1e6;
     };
     const double amp = std::pow(10.0, opt.levelDb / 20);
@@ -414,6 +429,8 @@ int run(const Options& opt) {
         proAudioThread();
         ToneAnalyzer ana(ac);
         bool first = true, warm = false;
+        std::uint64_t basePos = 0; // device position of analyzer frame 0
+        bool haveBase = false;
         std::vector<float> zeros;
         if (!loopA.start()) return fail(sh, "loopback A");
         while (!sh.stop) {
@@ -426,15 +443,33 @@ int run(const Options& opt) {
                 }
                 if (p.discontinuity && !first) bridge.producerDiscontinuity();
                 bridge.push(data, p.frames, p.time);
-                ana.feed(data, p.frames, kChannels);
                 std::lock_guard lock(sh.mutex);
-                if (p.discontinuity && !first) ++sh.discontA;
+                if (!haveBase) {
+                    basePos = p.devicePosition;
+                    haveBase = true;
+                }
+                if (p.discontinuity && !first) {
+                    ++sh.discontA;
+                    ana.resetTracking();
+                    sh.haveA = false;
+                }
                 sh.dllA.update(p.devicePosition, p.time);
                 ++sh.packetsA;
                 if (!warm && sh.warm) {
                     warm = true;
                     ana.resetSummary();
                 }
+                ana.feed(data, p.frames, kChannels, [&](const ToneAnalyzer::Block& b) {
+                    const double pos = double(basePos) + double(b.startFrame) * sh.mixRateA / kRate;
+                    if (b.glitch) {
+                        if (sh.dllA.ready() && sh.aGlitchTimes.size() < 100000)
+                            sh.aGlitchTimes.push_back(sh.dllA.timeAt(pos));
+                        return;
+                    }
+                    sh.lastAPos = pos;
+                    sh.lastASrc = (b.unwrappedPhase + kPi / 2) / omega0;
+                    sh.haveA = true;
+                });
                 sh.toneA = ana.summary();
                 first = false;
             });
@@ -488,14 +523,33 @@ int run(const Options& opt) {
                 ana.feed(data, p.frames, kChannels, [&](const ToneAnalyzer::Block& b) {
                     if (!sh.warm) return;
                     sh.intervalMinSinadB = std::min(sh.intervalMinSinadB, b.sinadDb);
-                    if (b.glitch || !sh.dllA.ready() || !sh.dllB.ready()) return;
-                    // the tone phase names the A frame being played (up to whole tone periods); both
-                    // it and the analyzer's frame count are 48 kHz stream frames, the DLLs device frames
-                    const double srcFrame = (b.unwrappedPhase + kPi / 2) / omega0;
+                    if (!sh.dllA.ready() || !sh.dllB.ready()) return;
                     const double played =
                         sh.dllB.timeAt(double(basePos) + double(b.startFrame) * sh.mixRateB / kRate);
-                    const double produced = sh.dllA.timeAt(srcFrame * sh.mixRateA / kRate);
-                    sh.latencyMs = (played - produced) * 1000;
+                    if (b.glitch) {
+                        // a glitch that A also had (another sound on A) is not the bridge's
+                        bool fromA = false;
+                        for (double t : sh.aGlitchTimes) fromA = fromA || (t > played - 2.0 && t < played + 0.2);
+                        if (!fromA) ++sh.glitchBOwn;
+                        if (sh.bEvents.size() < 200) sh.bEvents.push_back({played - sh.warmTime, fromA});
+                        return;
+                    }
+                    if (!sh.haveA) return;
+                    // The tone phase names the tone frame being played (up to whole tone periods).
+                    // A's last clean block tells where tone frames sit in A's device frames, so the
+                    // DLL only extrapolates over the latency. Tone and analyzer frames are 48 kHz
+                    // stream frames, the DLLs count device frames at the mix rate.
+                    const double srcFrame = (b.unwrappedPhase + kPi / 2) / omega0;
+                    const double posA = sh.lastAPos + (srcFrame - sh.lastASrc) * sh.mixRateA / kRate;
+                    const double produced = sh.dllA.timeAt(posA);
+                    // Restarted phase tracking (after a glitch) shifts the reading by whole tone periods;
+                    // unwrap against the previous reading so only a real change remains.
+                    const double raw = (played - produced) * 1000;
+                    const double periodMs = 1000 / opt.toneHz;
+                    sh.latencyMs = sh.haveLatency
+                                       ? sh.latencyMs + (raw - sh.latencyMs) -
+                                             periodMs * std::round((raw - sh.latencyMs) / periodMs)
+                                       : raw;
                     sh.latMin = std::min(sh.latMin, sh.latencyMs);
                     sh.latMax = std::max(sh.latMax, sh.latencyMs);
                     sh.haveLatency = true;
@@ -517,6 +571,9 @@ int run(const Options& opt) {
             std::lock_guard lock(sh.mutex);
             sh.warm = true;
             sh.atWarm = bridge.stats();
+            sh.warmTime = qpcSeconds();
+            sh.warmPosA = sh.dllA.positionAt(sh.warmTime);
+            sh.warmPosB = sh.dllB.positionAt(sh.warmTime);
             sh.latMin = 1e9;
             sh.latMax = -1e9;
         }
@@ -528,16 +585,17 @@ int run(const Options& opt) {
             const double bridgePpm = (st.ratio - 1) * 1e6;
             const double sinad = sh.intervalMinSinadB < 1e8 ? sh.intervalMinSinadB : 0;
             std::printf("%6.0f s %s clocks %+8.2f ppm  bridge %+8.2f ppm  fill %+6.1f  fifo %5.0f  latency %7.3f ms  "
-                        "u/o/r %llu/%llu/%llu  glitch A %llu B %llu  SINAD %.0f dB\n",
+                        "u/o/r %llu/%llu/%llu  glitch A %llu B %llu (own %llu)  SINAD %.0f dB\n",
                         el, sh.warm ? " " : "w", clocksPpm, bridgePpm, st.fillError, st.fifoFrames, sh.latencyMs,
                         (unsigned long long)st.underruns, (unsigned long long)st.overruns,
                         (unsigned long long)st.resyncs, (unsigned long long)sh.toneA.glitchBlocks,
-                        (unsigned long long)sh.toneB.glitchBlocks, sinad);
-            std::fprintf(csv, "%.1f,%.3f,%.3f,%.2f,%.0f,%.4f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.1f\n", el, clocksPpm,
+                        (unsigned long long)sh.toneB.glitchBlocks, (unsigned long long)sh.glitchBOwn, sinad);
+            std::fprintf(csv, "%.1f,%.3f,%.3f,%.2f,%.0f,%.4f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.1f\n", el, clocksPpm,
                          bridgePpm, st.fillError, st.fifoFrames, sh.latencyMs, (unsigned long long)st.underruns,
                          (unsigned long long)st.overruns, (unsigned long long)st.resyncs,
                          (unsigned long long)sh.discontA, (unsigned long long)sh.discontB,
-                         (unsigned long long)sh.toneA.glitchBlocks, (unsigned long long)sh.toneB.glitchBlocks, sinad);
+                         (unsigned long long)sh.toneA.glitchBlocks, (unsigned long long)sh.toneB.glitchBlocks,
+                         (unsigned long long)sh.glitchBOwn, sinad);
             std::fflush(csv);
             std::fflush(stdout);
             sh.intervalMinSinadB = 1e9;
@@ -564,7 +622,7 @@ int run(const Options& opt) {
     st.resyncs -= warmResync;
     const double drift = sh.latMax >= sh.latMin ? sh.latMax - sh.latMin : -1;
     const bool pass = !sh.failed && exitCode == 0 && st.underruns == 0 && st.overruns == 0 && st.resyncs == 0 &&
-                      sh.toneB.blocks > 0 && sh.toneB.glitchBlocks == 0 && sh.discontB == 0 && drift >= 0 &&
+                      sh.toneB.blocks > 0 && sh.glitchBOwn == 0 && sh.discontB == 0 && drift >= 0 &&
                       drift < 1.0;
     std::printf("\n=== summary (after warm-up) ===\n");
     std::printf("A: %s\nB: %s\n", devA.name.c_str(), devB.name.c_str());
@@ -573,15 +631,16 @@ int run(const Options& opt) {
     std::printf("bridge: underruns %llu, overruns %llu, resyncs %llu (warm-up: %llu/%llu/%llu, not judged)\n",
                 (unsigned long long)st.underruns, (unsigned long long)st.overruns, (unsigned long long)st.resyncs,
                 (unsigned long long)warmUnder, (unsigned long long)warmOver, (unsigned long long)warmResync);
-    std::printf("B output: %llu blocks, %llu glitch blocks, min SINAD %.1f dB, mean %.1f dB, discontinuities %llu\n",
-                (unsigned long long)sh.toneB.blocks, (unsigned long long)sh.toneB.glitchBlocks, sh.toneB.minSinadDb,
-                sh.toneB.meanSinadDb, (unsigned long long)sh.discontB);
+    std::printf("B output: %llu blocks, %llu glitch blocks (%llu not explained by A), min SINAD %.1f dB, mean %.1f dB, "
+                "discontinuities %llu\n",
+                (unsigned long long)sh.toneB.blocks, (unsigned long long)sh.toneB.glitchBlocks,
+                (unsigned long long)sh.glitchBOwn, sh.toneB.minSinadDb, sh.toneB.meanSinadDb,
+                (unsigned long long)sh.discontB);
     std::printf("A source: %llu glitch blocks, discontinuities %llu (problems on A are not the bridge's)\n",
                 (unsigned long long)sh.toneA.glitchBlocks, (unsigned long long)sh.discontA);
     std::printf("latency drift (max - min): %.3f ms\n", drift);
-    for (const auto& e : sh.toneB.events)
-        std::printf("  B glitch at %.1f s after warm-up: SINAD %.1f dB, amplitude %.4f\n",
-                    double(e.index) * double(ac.blockFrames) / kRate, e.sinadDb, e.amplitude);
+    for (const auto& [at, fromA] : sh.bEvents)
+        std::printf("  B glitch at %.1f s after warm-up%s\n", at, fromA ? " (A had one too: other sound on A)" : "");
     std::printf("csv: %s\n", csvPath.c_str());
     std::printf("%s\n", pass ? "V2 PASS" : "V2 FAIL");
     return pass ? 0 : 1;
