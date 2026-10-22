@@ -12,7 +12,7 @@
 namespace {
 
 // Owns the display-device objects; created and deleted on the render thread by the scene graph.
-// The displayed texture is created by Qt (QRhiTexture) so Qt alone owns it; we only copy into its native
+// The displayed texture is created by Qt (QRhiTexture, owned by the QSGTexture) so Qt alone owns it; we only copy into its native
 // ID3D11Texture2D. An extra device reference, released last, keeps Qt's device alive until our own D3D
 // objects are gone even if Qt tears the QRhi down first.
 class VideoNode : public QSGSimpleTextureNode {
@@ -20,16 +20,17 @@ public:
     VideoNode(v6::SharedFrameRing& ring, ID3D11Device* dev, QRhi* rhi, QQuickWindow* w)
         : device_(dev), ring_(&ring), reader_(ring, dev), probe_(dev, ring.width(), ring.height()) {
         const QSize size(ring.width(), ring.height());
-        rhiTex_.reset(rhi->newTexture(QRhiTexture::BGRA8, size, 1, QRhiTexture::UsedAsTransferSource));
-        if (!rhiTex_->create()) throw std::runtime_error("QRhiTexture::create failed");
-        local_ = reinterpret_cast<ID3D11Texture2D*>(rhiTex_->nativeTexture().object);
-        setTexture(w->createTextureFromRhiTexture(rhiTex_.get()));
+        std::unique_ptr<QRhiTexture> t(rhi->newTexture(QRhiTexture::BGRA8, size, 1, QRhiTexture::UsedAsTransferSource));
+        if (!t->create()) throw std::runtime_error("QRhiTexture::create failed");
+        local_ = reinterpret_cast<ID3D11Texture2D*>(t->nativeTexture().object);
+        // The QSGTexture takes ownership of the QRhiTexture.
+        setTexture(w->createTextureFromRhiTexture(t.release()));
         setOwnsTexture(false);
         setFiltering(QSGTexture::Linear);
     }
 
     ~VideoNode() override {
-        delete texture();  // the QSGTexture wrapper first, then the QRhiTexture (unique_ptr member)
+        delete texture();  // deletes the QRhiTexture too, before our other D3D objects
     }
 
     v6::SharedFrameRing* ring() const { return ring_; }
@@ -49,8 +50,7 @@ private:
     v6::SharedFrameRing* ring_;
     v6::SharedFrameReader reader_;
     v6::FrameProbe probe_;
-    std::unique_ptr<QRhiTexture> rhiTex_;
-    ID3D11Texture2D* local_ = nullptr;  // owned by rhiTex_
+    ID3D11Texture2D* local_ = nullptr;  // owned by the QSGTexture's QRhiTexture
     bool haveFrame_ = false;
 };
 
