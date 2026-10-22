@@ -26,6 +26,9 @@ public:
     // Smoothed frame position at the given time (extrapolated from the last packet).
     double positionAt(double seconds) const;
 
+    // Smoothed time of the given frame position (inverse of positionAt).
+    double timeAt(double framePos) const;
+
     // Estimated frames per second of the device clock.
     double rate() const { return 1.0 / secondsPerFrame_; }
 

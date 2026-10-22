@@ -8,6 +8,7 @@
 
 #include "dc/clocksync/drift_sim.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +28,8 @@ std::vector<SimConfig> scenarios() {
         s.producer = p;
         s.consumer = c;
         s.bridge.channels = 1; // the bridge is channel-agnostic; mono keeps the hour-long runs fast
+        // the FIFO level swings by one producer packet; hold enough for both periods plus 10 ms
+        s.bridge.targetFrames = std::max<std::size_t>(1440, p.period + c.period + 480);
         list.push_back(s);
     };
     // Typical: two WASAPI devices with 10 ms periods, small crystal errors, some scheduling jitter.

@@ -16,7 +16,7 @@ public:
         double trackBandwidthHz = 0.01; // bandwidth once locked (slower = smoother pitch)
         double lockSeconds = 15;        // time at lock bandwidth, then a linear move of the same length
         double damping = 1.0;
-        double filterSeconds = 0.5; // time constant of the fill low-pass
+        double filterSeconds = 2.0; // time constant of the fill low-pass
         double maxDeviation = 2e-3; // ratio clamp: 1 +- 2000 ppm
     };
 

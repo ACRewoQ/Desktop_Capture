@@ -29,10 +29,10 @@ public:
     struct Config {
         int channels = 2;
         double nominalRate = 48000;
-        std::size_t targetFrames = 1440;  // FIFO level to hold (30 ms at 48 kHz)
+        std::size_t targetFrames = 1440;  // FIFO level to hold (30 ms); >= producer + consumer period + margin
         std::size_t fifoFrames = 16384;   // must exceed target + both device periods
         std::size_t maxBlockFrames = 4096; // largest pull() block
-        double dllBandwidthHz = 0.5;
+        double dllBandwidthHz = 0.1;
         DriftController::Config controller{};
         VariableResampler::Quality quality{};
     };

@@ -45,4 +45,8 @@ double TimeDll::positionAt(double seconds) const {
     return double(refPos_) + (seconds - refTime_) / secondsPerFrame_;
 }
 
+double TimeDll::timeAt(double framePos) const {
+    return refTime_ + (framePos - double(refPos_)) * secondsPerFrame_;
+}
+
 } // namespace dc::clocksync
