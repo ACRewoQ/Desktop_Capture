@@ -122,4 +122,4 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 & "$env:VCPKG_ROOT\vcpkg.exe" x-update-baseline --add-initial-baseline
 ```
 
-JUCE・Qt・FFmpeg はフェーズ 1 の技術検証（V3・V5・V7）で導入方法を確かめてから追加します。
+FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。JUCE・Qt は V5・V7 で導入方法を確かめてから追加します。

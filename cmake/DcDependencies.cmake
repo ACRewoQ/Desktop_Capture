@@ -31,6 +31,16 @@ if(DC_BUILD_TESTS)
     find_package(Catch2 3 CONFIG REQUIRED)
 endif()
 
+# --- FFmpeg (Windows tools only for now: dc-capbench) ---
+# vcpkg's FindFFMPEG wrapper sets FFMPEG_INCLUDE_DIRS / FFMPEG_LIBRARY_DIRS / FFMPEG_LIBRARIES.
+if(WIN32 AND DC_BUILD_TOOLS)
+    find_package(FFMPEG REQUIRED)
+    add_library(dc_ffmpeg INTERFACE)
+    target_include_directories(dc_ffmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(dc_ffmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(dc_ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
+endif()
+
 option(DC_WITH_QT "Build Qt based targets when Qt 6 is found" ON)
 set(DC_HAVE_QT OFF)
 if(DC_WITH_QT)
