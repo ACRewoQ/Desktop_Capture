@@ -49,13 +49,13 @@ void ClockBridge::pull(float* out, std::size_t count, double now) {
     while (stamps_.pop(s)) dll_.update(s.pos, s.time);
 
     if (state_ == State::Waiting) {
-        if (fifo_.available() < cfg_.targetFrames || !dll_.ready()) {
+        // keep only the newest targetFrames while waiting, so a long wait cannot overflow the FIFO
+        if (fifo_.available() > cfg_.targetFrames) fifo_.skip(fifo_.available() - cfg_.targetFrames);
+        if (fifo_.available() < cfg_.targetFrames || dll_.updates() < cfg_.startPackets) {
             std::memset(out, 0, count * ch * sizeof(float));
             publish();
             return;
         }
-        // Start with exactly targetFrames queued; older frames would only add latency.
-        fifo_.skip(fifo_.available() - cfg_.targetFrames);
         state_ = State::Running;
         lastPull_ = now;
     }

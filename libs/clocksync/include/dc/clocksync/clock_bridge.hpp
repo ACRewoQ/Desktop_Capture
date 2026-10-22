@@ -33,6 +33,9 @@ public:
         std::size_t fifoFrames = 16384;   // must exceed target + both device periods
         std::size_t maxBlockFrames = 4096; // largest pull() block
         double dllBandwidthHz = 0.1;
+        // producer packets to see before playback starts: devices often deliver their first packets
+        // in a burst, and a lock taken then starts with a large error (20 packets ~ 200 ms)
+        std::uint64_t startPackets = 20;
         DriftController::Config controller{};
         VariableResampler::Quality quality{};
     };
