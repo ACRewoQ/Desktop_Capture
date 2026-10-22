@@ -30,6 +30,8 @@ dc_apply_options(dc-v6-bench)
 dc_v6_debug_info(dc-v6-bench)
 
 if(DC_HAVE_QT)
+    # QRhi (rhi/qrhi.h) lives in the private Gui module, a separate package since Qt 6.9.
+    find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
     qt_standard_project_setup(REQUIRES 6.8)
     qt_add_executable(dc-v6-preview src/preview_main.cpp src/video_item.cpp src/video_item.hpp)
     qt_add_qml_module(dc-v6-preview
