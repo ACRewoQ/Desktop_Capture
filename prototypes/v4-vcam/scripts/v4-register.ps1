@@ -15,9 +15,9 @@ $ErrorActionPreference = 'Stop'
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
-    if ($Unregister) { $args += '-Unregister' }
-    $p = Start-Process powershell -Verb RunAs -ArgumentList $args -Wait -PassThru
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    if ($Unregister) { $argList += '-Unregister' }
+    $p = Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait -PassThru
     exit $p.ExitCode
 }
 
