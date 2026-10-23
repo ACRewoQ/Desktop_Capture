@@ -93,6 +93,22 @@ if (-not $SkipSmoke) {
     } finally {
         Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue
     }
+
+    Step 'Smoke: capd records the shared-memory audio (audio only, no GPU)'
+    $capdExe = Join-Path $bin "apps/capd/$Config/capd.exe"
+    $recFile = Join-Path $env:TEMP "dc-capd-smoke-$PID.mkv"
+    $writer = Start-Process -FilePath $toneExe -ArgumentList 'write', '--seconds', '5' -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 500
+        $res = & $capdExe record --no-video --seconds 2 --audio master,track/1 --output $recFile | Select-Object -Last 1
+        Write-Host "  $res"
+        Check ($LASTEXITCODE -eq 0 -and $res -match 'error=""') 'capd record exits cleanly'
+        Check ($res -match 'audio_silence_frames=0 ') 'no silence while the engine stand-in runs'
+        Check ((Test-Path $recFile) -and (Get-Item $recFile).Length -gt 10000) 'MKV file written'
+    } finally {
+        Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue
+        Remove-Item $recFile -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host ''

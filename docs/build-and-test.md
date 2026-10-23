@@ -59,7 +59,7 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | 実行ファイル | 内容 |
 |---|---|
 | `apps\mixd\Debug\mixd.exe` | 音声エンジン（P0 では起動して待つだけ） |
-| `apps\capd\Debug\capd.exe` | キャプチャー（P0 では起動して待つだけ） |
+| `apps\capd\Debug\capd.exe` | キャプチャー（P2 骨格：`capd list`、`capd record`。[capd.md](capd.md)） |
 | `apps\ui\Debug\dc-ui.exe` | UI（P0 では Qt なしの仮の実行ファイル） |
 | `tools\mock_server\Debug\dc-mock-server.exe` | モックサーバー（偽エンジン） |
 | `tools\dc_cli\Debug\dc-cli.exe` | テスト用クライアント |
