@@ -26,6 +26,18 @@ if(WIN32)
     target_compile_definitions(dc_msgpack INTERFACE MSGPACK_NO_BOOST)
 endif()
 
+# --- Opus (LAN media transport) ---
+# vcpkg ships a CMake package (Opus::opus); distro packages have pkg-config only.
+find_package(Opus CONFIG QUIET)
+add_library(dc_opus INTERFACE)
+if(TARGET Opus::opus)
+    target_link_libraries(dc_opus INTERFACE Opus::opus)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(DC_OPUS REQUIRED IMPORTED_TARGET opus)
+    target_link_libraries(dc_opus INTERFACE PkgConfig::DC_OPUS)
+endif()
+
 # --- Catch2 (tests only) ---
 if(DC_BUILD_TESTS)
     find_package(Catch2 3 CONFIG REQUIRED)

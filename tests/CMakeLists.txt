@@ -2,6 +2,7 @@ add_executable(dc_tests
     test_clocksync.cpp
     test_codec.cpp
     test_integration.cpp
+    test_lanmedia.cpp
     test_meter.cpp
     test_param_store.cpp
     test_param_tree.cpp
@@ -9,7 +10,7 @@ add_executable(dc_tests
     test_schema.cpp
     test_shm.cpp
 )
-target_link_libraries(dc_tests PRIVATE dc::protocol dc::control dc::shmaudio dc::clocksync dc::mock_engine Catch2::Catch2WithMain)
+target_link_libraries(dc_tests PRIVATE dc::protocol dc::control dc::shmaudio dc::clocksync dc::lanmedia dc::mock_engine Catch2::Catch2WithMain)
 dc_apply_options(dc_tests)
 if(TARGET capd_core)
     target_sources(dc_tests PRIVATE test_capd.cpp)

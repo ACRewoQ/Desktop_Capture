@@ -6,7 +6,8 @@
   1. Configures with the "windows" CMake preset (vcpkg installs dependencies on first run)
   2. Builds all targets
   3. Runs every unit / integration test with ctest
-  4. Smoke tests across real processes: dc-mock-server + dc-cli, dc-shm-tone writer + reader
+  4. Smoke tests across real processes: dc-mock-server + dc-cli, dc-shm-tone writer + reader,
+     dc-lan-tone sender + receiver
 
 .EXAMPLE
   .\scripts\test.ps1
@@ -140,6 +141,23 @@ if (-not $SkipSmoke) {
     } finally {
         Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue
         Remove-Item $recFile -ErrorAction SilentlyContinue
+    }
+
+    Step 'Smoke: LAN audio stream across processes (UDP loopback)'
+    $lanExe = Join-Path $bin "tools/lan_tone/$Config/dc-lan-tone.exe"
+    $port = 47890
+    $outFile = Join-Path $env:TEMP 'dc-lan-tone-recv.txt'
+    $recv = Start-Process -FilePath $lanExe -ArgumentList 'recv', '--port', $port, '--seconds', '10' -PassThru `
+        -WindowStyle Hidden -RedirectStandardOutput $outFile
+    try {
+        Start-Sleep -Milliseconds 500
+        & $lanExe send --to "127.0.0.1:$port" --seconds 12 | Select-Object -Last 1 | ForEach-Object { Write-Host "  $_" }
+        $recv.WaitForExit(5000) | Out-Null
+        $verdict = Get-Content $outFile | Select-Object -Last 1
+        Write-Host "  $verdict"
+        Check ($verdict -match '^PASS') 'receiver played the tone without loss or clicks'
+    } finally {
+        Stop-Process -Id $recv.Id -ErrorAction SilentlyContinue
     }
 }
 
