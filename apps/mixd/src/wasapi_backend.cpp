@@ -334,6 +334,13 @@ public:
     bool failed() const override { return failed_.load(); }
     std::uint64_t glitches() const override { return glitches_.load(); }
     bool sharedFallback() const override { return sharedFallback_; }
+    std::string diagnostics() const override {
+        if (!input_ || glitches_.load() == 0) return {};
+        // a late read shows as a long wait before the discontinuity; a device-side drop as a short one
+        return ", last discontinuity: " + std::to_string(lastGapUs_.load() / 1000.0).substr(0, 6) + " ms since the read before, " +
+               std::to_string(lastSkipped_.load()) + " frames skipped, longest wait " +
+               std::to_string(maxGapUs_.load() / 1000.0).substr(0, 6) + " ms";
+    }
 
 private:
     bool fail(std::string* error, const char* what, HRESULT hr) {
@@ -422,6 +429,8 @@ private:
         proAudio();
         int silentWaits = 0;
         bool first = true;
+        double lastRead = 0;
+        UINT64 expectedPos = 0;
         while (!stop_) {
             if (WaitForSingleObject(event_, 200) != WAIT_OBJECT_0) {
                 if (++silentWaits >= 10) {
@@ -431,6 +440,10 @@ private:
                 continue;
             }
             silentWaits = 0;
+            const double now = qpcSecondsNow();
+            const auto gapUs = lastRead > 0 ? static_cast<std::int64_t>((now - lastRead) * 1e6) : 0;
+            lastRead = now;
+            if (gapUs > maxGapUs_.load()) maxGapUs_ = gapUs;
             UINT32 next = 0;
             HRESULT hr = S_OK;
             while (SUCCEEDED(hr = capture_->GetNextPacketSize(&next)) && next > 0) {
@@ -441,7 +454,12 @@ private:
                 hr = capture_->GetBuffer(&data, &frames, &flags, &devPos, &qpc);
                 if (FAILED(hr)) break;
                 const bool discontinuity = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0 && !first;
-                if (discontinuity) glitches_.fetch_add(1);
+                if (discontinuity) {
+                    lastGapUs_ = gapUs;
+                    lastSkipped_ = static_cast<std::int64_t>(devPos) - static_cast<std::int64_t>(expectedPos);
+                    glitches_.fetch_add(1);
+                }
+                expectedPos = devPos + frames;
                 first = false;
                 const std::size_t samples = static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels_);
                 if (samples <= scratch_.size()) {
@@ -483,6 +501,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> failed_{false};
     std::atomic<std::uint64_t> glitches_{0};
+    std::atomic<std::int64_t> lastGapUs_{0}, maxGapUs_{0}, lastSkipped_{0};
     std::thread thread_;
 };
 

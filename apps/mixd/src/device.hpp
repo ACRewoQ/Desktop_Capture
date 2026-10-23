@@ -45,6 +45,8 @@ public:
     virtual std::uint64_t glitches() const = 0; // device-side dropouts seen by the stream
     // Exclusive mode was asked for but the device has no 48 kHz exclusive format: it runs shared.
     virtual bool sharedFallback() const { return false; }
+    // Extra detail for the xrun log (inputs: what the last dropout looked like). Any thread.
+    virtual std::string diagnostics() const { return {}; }
 };
 
 class DeviceBackend {

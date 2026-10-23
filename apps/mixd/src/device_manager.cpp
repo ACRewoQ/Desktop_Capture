@@ -102,6 +102,7 @@ std::vector<std::string> DeviceManager::glitchDetails() const {
         for (const auto& p : statOutputs_)
             if (p->streaming && s.label.compare(s.label.size() - 4, 4, " out") == 0 && s.label.rfind(p->id + " ", 0) == 0)
                 line += bridge(p->bridge);
+        line += s.stream->diagnostics();
         out.push_back(line);
     }
     out.push_back("closed streams: " + std::to_string(closedGlitches_));
