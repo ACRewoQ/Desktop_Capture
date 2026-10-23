@@ -18,10 +18,14 @@
 | `libs/protocol` | 制御プロトコル：メッセージ、MessagePack コーデック、パラメーターツリー、スキーマ、ルーティング検証、メーターパケット |
 | `libs/control` | 制御プロトコルの TCP サーバー／クライアント（asio） |
 | `libs/shmaudio` | エンジン→キャプチャーの共有メモリ音声リング |
+| `libs/clocksync` | 別クロックのデバイス間で音声を渡すブリッジ（DLL によるドリフト推定、PI 制御、可変レート sinc リサンプラー）と、その検証用のトーン解析・シミュレーター（P1-V2） |
 | `tools/mock_server` | モックサーバー（プロトコルを話す偽エンジン） |
 | `tools/dc_cli` | テスト用クライアント（コマンドライン） |
 | `tools/shm_tone` | 共有メモリ音声の試験用の書き手・読み手 |
 | `tools/capbench` | P1-V3 検証ツール：画面キャプチャー（WGC / Desktop Duplication）→ GPU 上で NV12 変換 → FFmpeg ハードウェアエンコードの負荷計測（Windows のみ）。結果は [docs/verification/v3-capture-encode.md](docs/verification/v3-capture-encode.md) |
+| `tools/loopback_probe` | P1-V1 検証ツール：アプリ単位の音声キャプチャー（WASAPI Process Loopback）の自己テストと手動キャプチャー（Windows のみ）。結果は [docs/verification/v1-process-loopback.md](docs/verification/v1-process-loopback.md) |
+| `tools/drift_sim` | P1-V2 検証ツール：2 台のデバイスのクロックずれを模擬し、`ClockBridge` を 1 時間単位で試すシミュレーター |
+| `tools/drift_test` | P1-V2 検証ツール：実機 2 台（WASAPI）の間でクロックずれ補正を試し、プチノイズと遅延の変化を測る（Windows のみ）。結果は [docs/verification/v2-clock-drift.md](docs/verification/v2-clock-drift.md) |
 | `tests` | 単体テスト・結合テスト（Catch2） |
 | `docs/spec` | [制御プロトコル仕様](docs/spec/protocol.md)、[パラメーター一覧](docs/spec/protocol-params.md)、[共有メモリ音声フォーマット](docs/spec/shm-audio.md) |
 
