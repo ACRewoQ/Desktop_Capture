@@ -91,7 +91,6 @@ private:
     std::string clockKey_; // key of the clock stream, "" = timer
     StreamConfig config_;
     std::map<std::string, double> lastFailure_; // key -> time of the last failed open
-    std::vector<std::string> errors_;
 
     mutable std::mutex statsMutex_;
     std::uint64_t closedGlitches_ = 0; // from streams and bridges that were closed

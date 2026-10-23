@@ -114,7 +114,21 @@ void Controller::registerMethods() {
     });
 }
 
-void Controller::onDelta(const Delta&) { scheduleRebuild(); }
+void Controller::onDelta(const Delta& delta) {
+    // values the engine itself reports (load, counters, device lists, derived states) do not change
+    // the mix; everything else might
+    auto reportOnly = [](const std::string& path) {
+        static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
+                                                "/system/clock_active", "/devices/", "/mixer/solo_active"};
+        for (const char* p : kPrefixes)
+            if (path.rfind(p, 0) == 0) return true;
+        return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
+    };
+    bool relevant = !delta.removed.empty() &&
+                    std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) { return !reportOnly(r + "/"); });
+    for (const auto& c : delta.changes) relevant = relevant || !reportOnly(c.path);
+    if (relevant) scheduleRebuild();
+}
 
 void Controller::scheduleRebuild() {
     if (rebuildPending_) return;
