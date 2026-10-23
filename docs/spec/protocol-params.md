@@ -12,6 +12,9 @@
 | `/system/sample_rate` | int | ro | 48000 | `48000` | サンプルレート（48kHz 固定） |
 | `/system/block_size` | int | rw | 64 / 128 / 256 / 512 / 1024 | `256` | 音声バッファのサンプル数 |
 | `/system/clock_device` | string | rw |  | `""` | クロック基準デバイスの ID（"" = 自動） |
+| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ） |
+| `/system/clock_active` | string | ro |  | `""` | 実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー） |
+| `/system/latency_ms` | float | ro | 0 〜 1000 | `0` | クロック基準デバイスの出力バッファによる遅延 ms |
 | `/system/cpu_load` | float | ro | 0 〜 1 | `0` | 音声スレッドの負荷率 |
 | `/system/xruns` | int | ro | 0 〜 9.22337e+18 | `0` | 起動後の音切れ回数 |
 | `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
