@@ -10,8 +10,8 @@
        - shared mode: dc-engine-check analyses the device's loopback for dropouts (sine fit per 100 ms)
        - both modes: mixd's own counter /system/xruns (device underflows, missed periods, clock
          bridge underruns/overruns) and the peak /system/cpu_load
-     With -WithInput, track 1 takes the default input device (muted, so it does not disturb the
-     tone) to exercise an input stream and its clock bridge.
+     With -WithInput, track 1 takes an input device (muted, so it does not disturb the tone) to
+     exercise an input stream and its clock bridge: -InputDevice <id>, else the first listed input.
   3. Writes build\g2\engine_<time>.md and prints the table.
 
   A quiet 1 kHz tone plays on the output device; turn the speakers down (the loopback is taken before
@@ -21,6 +21,7 @@
   .\scripts\g2-engine.ps1 -Minutes 5
   .\scripts\g2-engine.ps1 -Minutes 10 -WithInput
   .\scripts\g2-engine.ps1 -Modes exclusive -Blocks 128 -Minutes 30 -Device '{0.0.0.00000000}.{...}'
+  .\scripts\g2-engine.ps1 -Minutes 15 -WithInput -InputDevice '{0.0.1.00000000}.{...}'
 #>
 param(
     [double]$Minutes = 5,
@@ -28,6 +29,7 @@ param(
     [int[]]$Blocks = @(128, 256),
     [string]$Device = '',
     [switch]$WithInput,
+    [string]$InputDevice = '',
     [switch]$NoBuild
 )
 
@@ -85,7 +87,7 @@ foreach ($mode in $Modes) {
             Set-Param '/system/block_size' $block
             Set-Param '/system/audio_mode' $mode
             if ($WithInput) {
-                $inId = Get-Param '/devices/input/1/id'
+                $inId = if ($InputDevice) { $InputDevice } else { Get-Param '/devices/input/1/id' }
                 Set-Param '/track/1/mute' true # processed but silent, so the tone stays clean
                 Set-Param '/track/1/input/kind' 'device'
                 Set-Param '/track/1/input/source' $inId
@@ -161,7 +163,7 @@ foreach ($mode in $Modes) {
     }
 }
 
-$md = @("# G2 audio engine check ($stamp)", '', "Minutes per case: $Minutes. With input: $WithInput.", '',
+$md = @("# G2 audio engine check ($stamp)", '', "Minutes per case: $Minutes. Output: $(if ($Device) { $Device } else { 'default' }). With input: $WithInput $(if ($InputDevice) { "($InputDevice)" })", '',
         '| mode | block | clock | latency ms | xruns | cpu max | loopback glitches | result | note |',
         '|---|---|---|---|---|---|---|---|---|')
 foreach ($r in $rows) {
