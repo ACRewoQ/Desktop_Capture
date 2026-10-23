@@ -21,6 +21,14 @@ function Check($ok, $what) {
 }
 function Result($lines) { ($lines | Where-Object { $_ -match '^RESULT' } | Select-Object -Last 1) }
 function Field($line, $name) { if ($line -match "$name=([0-9.]+)") { [double]$Matches[1] } else { -1 } }
+function DsWithoutProducer {
+    # Apps open the camera before the producer runs (Chrome even hides cameras that offer no format).
+    Step 'DirectShow camera without producer (no-signal picture keeps flowing)'
+    $out = & $probe ds --name 'Desktop Capture Camera (DirectShow)' --seconds 4
+    $out | ForEach-Object { Write-Host "  $_" }
+    $r = Result $out
+    Check ((Field $r 'frames') -gt 60 -and (Field $r 'stamped') -eq 0) 'DirectShow camera opens and flows without a producer'
+}
 
 Step 'Environment'
 Write-Host ((Get-CimInstance Win32_OperatingSystem).Caption + ' build ' + [Environment]::OSVersion.Version.Build)
@@ -29,6 +37,7 @@ Write-Host ((Get-CimInstance Win32_OperatingSystem).Caption + ' build ' + [Envir
 $win11 = [Environment]::OSVersion.Version.Build -ge 22000
 if (-not $win11) {
     # Windows 10: DirectShow camera only.
+    DsWithoutProducer
     $feedProc = Start-Process -FilePath $feed -ArgumentList '--target', 'ds', '--seconds', ($Seconds + 20) -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Seconds 2
@@ -73,6 +82,7 @@ try {
     $out | ForEach-Object { Write-Host "  $_" }
     $r = Result $out
     Check ((Field $r 'frames') -gt 60 -and (Field $r 'stamped') -eq 0) 'frames flow and carry no stamp'
+    DsWithoutProducer
 
     $feedProc = Start-Process -FilePath $feed -ArgumentList '--target', 'both', '--seconds', ($Seconds * 3 + 20) -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 2

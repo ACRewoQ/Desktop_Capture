@@ -48,14 +48,35 @@ file(READ "${SC}/softcamcore/FrameBuffer.cpp" _fb)
 string(REPLACE "DirectShow Softcam/" "DesktopCapture.VCamDS.v1/" _fb "${_fb}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/patched/FrameBuffer.cpp" "${_fb}")
 
+# Stock softcam offers no format while no sender runs, so apps fail to open it (and Chrome hides
+# it). Always offer 1080p30 and send a plain "no signal" colour until a sender of that size appears.
+function(v4_patch var from to)
+    string(FIND "${${var}}" "${from}" _at)
+    if(_at EQUAL -1)
+        message(FATAL_ERROR "V4: softcam patch target not found: ${from}")
+    endif()
+    string(REPLACE "${from}" "${to}" _out "${${var}}")
+    set(${var} "${_out}" PARENT_SCOPE)
+endfunction()
+file(READ "${SC}/softcamcore/DShowSoftcam.cpp" _ds)
+v4_patch(_ds "m_valid(m_frame_buffer ? true : false)" "m_valid(true)")
+v4_patch(_ds "m_width(m_frame_buffer.width())" "m_width(m_frame_buffer ? m_frame_buffer.width() : 1920)")
+v4_patch(_ds "m_height(m_frame_buffer.height())" "m_height(m_frame_buffer ? m_frame_buffer.height() : 1080)")
+v4_patch(_ds "m_framerate(m_frame_buffer.framerate())" "m_framerate(m_frame_buffer ? m_frame_buffer.framerate() : 30.0f)")
+v4_patch(_ds "Timer::sleep(0.100f);" "Timer::sleep(1.0f / 30);")
+v4_patch(_ds "std::memcpy(pData, m_screenshot.get(), size);"
+    "if (m_screenshot) std::memcpy(pData, m_screenshot.get(), size); else for (std::size_t i = 0; i + 2 < size; i += 3) { pData[i] = 0x60; pData[i + 1] = 0x30; pData[i + 2] = 0x20; }")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/patched/DShowSoftcam.cpp" "${_ds}")
+
 add_library(vcam_ds SHARED
     ds/vcam_ds.cpp ds/vcam_ds.def
     ${SC}/baseclasses/amfilter.cpp ${SC}/baseclasses/amvideo.cpp ${SC}/baseclasses/combase.cpp
     ${SC}/baseclasses/dllentry.cpp ${SC}/baseclasses/dllsetup.cpp ${SC}/baseclasses/mtype.cpp
     ${SC}/baseclasses/source.cpp ${SC}/baseclasses/winutil.cpp ${SC}/baseclasses/wxdebug.cpp
     ${SC}/baseclasses/wxlist.cpp ${SC}/baseclasses/wxutil.cpp
-    ${SC}/softcamcore/DShowSoftcam.cpp ${SC}/softcamcore/Misc.cpp ${SC}/softcamcore/SenderAPI.cpp
-    ${SC}/softcamcore/Watchdog.cpp "${CMAKE_CURRENT_BINARY_DIR}/patched/FrameBuffer.cpp")
+    ${SC}/softcamcore/Misc.cpp ${SC}/softcamcore/SenderAPI.cpp
+    ${SC}/softcamcore/Watchdog.cpp "${CMAKE_CURRENT_BINARY_DIR}/patched/FrameBuffer.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/patched/DShowSoftcam.cpp")
 # softcam / BaseClasses are older code: C++17 and permissive mode, default warnings.
 target_compile_features(vcam_ds PRIVATE cxx_std_17)
 target_compile_options(vcam_ds PRIVATE /permissive /EHsc /W1)
