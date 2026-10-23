@@ -54,6 +54,8 @@ void StripModel::simulate(int n) {
     endResetModel();
     emit countChanged();
     connect(&meterTimer_, &QTimer::timeout, this, &StripModel::simulateMeters);
+    // Precise: a coarse 33 ms timer lands on the 15.6 ms Windows tick and gives ~21 Hz.
+    meterTimer_.setTimerType(Qt::PreciseTimer);
     meterTimer_.start(33); // same rate as the engine's UDP meters
 }
 
