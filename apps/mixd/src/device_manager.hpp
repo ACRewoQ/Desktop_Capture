@@ -47,6 +47,8 @@ public:
 
     // Dropouts so far: device-side glitches plus bridge underruns/overruns. Any thread.
     std::uint64_t glitches() const;
+    // The same counters per stream, for the log: "<device> in: device 0, bridge underruns 2 ...".
+    std::vector<std::string> glitchDetails() const;
 
     // Enumerates synchronously (startup, before the manager thread runs).
     std::vector<DeviceInfo> enumerateNow() { return backend_.enumerate(); }
@@ -96,7 +98,11 @@ private:
     std::uint64_t closedGlitches_ = 0; // from streams and bridges that were closed
     std::vector<std::shared_ptr<InputPort>> statInputs_;
     std::vector<std::shared_ptr<OutputPort>> statOutputs_;
-    std::vector<Stream*> statStreams_;
+    struct StatStream {
+        Stream* stream;
+        std::string label; // "<device name> in|out"
+    };
+    std::vector<StatStream> statStreams_;
 };
 
 } // namespace dc::mixd

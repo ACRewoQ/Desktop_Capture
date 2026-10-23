@@ -245,8 +245,15 @@ void Controller::scheduleStats() {
     statsTimer_.async_wait([this](asio::error_code ec) {
         if (ec || stopped_) return;
         engine_.collectRetired();
+        const auto glitches = devices_.glitches();
         server_.publishNow({{"/system/cpu_load", std::round(engine_.cpuLoad() * 100.0) / 100.0},
-                            {"/system/xruns", static_cast<std::int64_t>(devices_.glitches())}});
+                            {"/system/xruns", static_cast<std::int64_t>(glitches)}});
+        if (glitches != loggedGlitches_) {
+            // where the dropouts come from (device, clock bridge), for diagnosis
+            std::cout << "xruns " << glitches << " (+" << (glitches - loggedGlitches_) << ")" << std::endl;
+            for (const auto& line : devices_.glitchDetails()) std::cout << "  " << line << std::endl;
+            loggedGlitches_ = glitches;
+        }
         scheduleStats();
     });
 }

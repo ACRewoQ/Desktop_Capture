@@ -68,7 +68,7 @@ void DeviceManager::refresh() {
 std::uint64_t DeviceManager::glitches() const {
     std::lock_guard lock(statsMutex_);
     std::uint64_t n = closedGlitches_;
-    for (auto* s : statStreams_) n += s->glitches();
+    for (const auto& s : statStreams_) n += s.stream->glitches();
     for (auto& p : statInputs_) {
         const auto st = p->bridge.stats();
         n += st.underruns + st.overruns;
@@ -78,6 +78,34 @@ std::uint64_t DeviceManager::glitches() const {
         n += st.underruns + st.overruns;
     }
     return n;
+}
+
+std::vector<std::string> DeviceManager::glitchDetails() const {
+    std::lock_guard lock(statsMutex_);
+    std::vector<std::string> out;
+    auto bridge = [](const clocksync::ClockBridge& b) {
+        const auto st = b.stats();
+        return ", bridge underruns " + std::to_string(st.underruns) + " overruns " + std::to_string(st.overruns) +
+               " resyncs " + std::to_string(st.resyncs) + " fifo " + std::to_string(static_cast<long long>(st.fifoFrames)) +
+               " target " + std::to_string(b.config().targetFrames) +
+               (st.underruns ? " last underrun: had " + std::to_string(static_cast<long long>(st.lastUnderrunAvailable)) +
+                                   " needed " + std::to_string(static_cast<long long>(st.lastUnderrunNeeded)) + " stamp age " +
+                                   std::to_string(static_cast<int>(st.lastUnderrunStampAge * 1000)) + " ms"
+                             : std::string());
+    };
+    for (const auto& s : statStreams_) {
+        std::string line = s.label + ": device glitches " + std::to_string(s.stream->glitches()) + ", period " +
+                           std::to_string(s.stream->periodFrames());
+        for (const auto& p : statInputs_)
+            if (s.label.size() > 3 && s.label.compare(s.label.size() - 3, 3, " in") == 0 && s.label.rfind(p->id + " ", 0) == 0)
+                line += bridge(p->bridge);
+        for (const auto& p : statOutputs_)
+            if (p->streaming && s.label.compare(s.label.size() - 4, 4, " out") == 0 && s.label.rfind(p->id + " ", 0) == 0)
+                line += bridge(p->bridge);
+        out.push_back(line);
+    }
+    out.push_back("closed streams: " + std::to_string(closedGlitches_));
+    return out;
 }
 
 void DeviceManager::run() {
@@ -131,7 +159,7 @@ void DeviceManager::accountClosed(const OpenStream& s) {
         closedGlitches_ += st.underruns + st.overruns;
         std::erase(statOutputs_, s.output);
     }
-    std::erase(statStreams_, s.stream.get());
+    std::erase_if(statStreams_, [&](const StatStream& x) { return x.stream == s.stream.get(); });
 }
 
 void DeviceManager::closeStream(const std::string& key) {
@@ -164,7 +192,7 @@ bool DeviceManager::openInput(const DeviceInfo& d, std::string* error) {
     OpenStream s{std::move(stream), d, *holder, nullptr, false};
     {
         std::lock_guard lock(statsMutex_);
-        statStreams_.push_back(s.stream.get());
+        statStreams_.push_back({s.stream.get(), d.id + " " + d.name + " in"});
         statInputs_.push_back(s.input);
     }
     streams_["in:" + d.id] = std::move(s);
@@ -215,7 +243,7 @@ bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* e
     OpenStream s{std::move(stream), d, nullptr, port, asClock};
     {
         std::lock_guard lock(statsMutex_);
-        statStreams_.push_back(s.stream.get());
+        statStreams_.push_back({s.stream.get(), d.id + " " + d.name + (asClock ? " (clock)" : "") + " out"});
         statOutputs_.push_back(port);
     }
     const std::string key = "out:" + d.id;

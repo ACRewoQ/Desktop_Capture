@@ -82,6 +82,7 @@ private:
     std::array<std::uint32_t, kMaxStrips> shmChannels_{};
     std::array<bool, kMaxStrips> shmDisconnected_{};
     std::uint32_t meterSeq_ = 0;
+    std::uint64_t loggedGlitches_ = 0;
 };
 
 } // namespace dc::mixd

@@ -74,7 +74,7 @@ foreach ($mode in $Modes) {
         $log = Join-Path $out "mixd_${stamp}_${mode}_$block.log"
         $proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm' `
             -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
-        $row = [ordered]@{ mode = $mode; block = $block; clock = ''; latency_ms = ''; period = ''; xruns = '';
+        $row = [ordered]@{ mode = $mode; block = $block; clock = ''; latency_ms = ''; xruns = '';
                            cpu_max = ''; loopback = ''; result = 'FAIL'; note = '' }
         try {
             Start-Sleep -Milliseconds 1500
@@ -102,7 +102,16 @@ foreach ($mode in $Modes) {
                 $rows += [pscustomobject]$row
                 continue
             }
-            if ($WithInput -and (Get-Param '/track/1/input/state') -ne 'ok') { $row.note = 'input stream did not open; ' }
+            if ($WithInput) {
+                # the input opens right after the clock; give it a moment before calling it missing
+                $inState = ''
+                for ($i = 0; $i -lt 20; $i++) {
+                    $inState = Get-Param '/track/1/input/state'
+                    if ($inState -eq 'ok') { break }
+                    Start-Sleep -Milliseconds 250
+                }
+                if ($inState -ne 'ok') { $row.note = "input stream did not open (see device error in $log); " }
+            }
             Start-Sleep -Seconds 3 # warm-up: bridges lock, first periods settle
             $row.latency_ms = Get-Param '/system/latency_ms'
             $x0 = [int64](Get-Param '/system/xruns')
@@ -140,6 +149,7 @@ foreach ($mode in $Modes) {
                 $row.loopback = 'n/a (exclusive)'
             }
             $row.result = if ($ok) { 'PASS' } else { 'FAIL' }
+            if ($x1 -ne $x0) { $row.note += "xrun sources in $log; " }
         } catch {
             $row.note += $_.Exception.Message
         } finally {
