@@ -60,6 +60,7 @@ if (-not $SkipSmoke) {
     function Invoke-Gui($exe, [string[]]$arguments, [int]$timeoutSec = 60) {
         $log = [System.IO.Path]::GetTempFileName()
         $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -RedirectStandardOutput $log
+        $null = $p.Handle # Windows PowerShell 5.1 leaves ExitCode empty unless the handle was taken before exit
         if (-not $p.WaitForExit($timeoutSec * 1000)) { Stop-Process -Id $p.Id -ErrorAction SilentlyContinue; $code = -1 }
         else { $code = $p.ExitCode }
         $out = Get-Content $log -Encoding UTF8
