@@ -23,6 +23,7 @@ public:
         float toneLevel = 0.25f; // inputs: peak amplitude
         double ppm = 0;         // clock offset against the system clock
         int periodFrames = 480; // shared mode period
+        bool sharedOnly = false; // no 48 kHz exclusive format: exclusive requests fall back to shared
     };
 
     // Two inputs (mono mic, stereo line) and two outputs (speakers, headphones), like the mock server.

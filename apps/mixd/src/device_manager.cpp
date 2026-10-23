@@ -200,15 +200,18 @@ bool DeviceManager::openInput(const DeviceInfo& d, std::string* error) {
 }
 
 bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* error) {
-    auto port = std::make_shared<OutputPort>(d.id, bridgeConfig(2, asClock ? 0 : (config_.exclusive ? config_.blockFrames : kSharedPeriod)));
+    // like inputs, the bridge is sized once the stream is open and its period is known (a device that
+    // cannot run exclusive falls back to the shared mode period)
+    auto holder = std::make_shared<std::shared_ptr<OutputPort>>();
     OutputCallback cb;
     if (asClock) {
-        cb = [this, p = port.get()](float* out, int count, int channels, double time) {
-            engine_.render(p, out, count, channels, time);
+        cb = [this, holder](float* out, int count, int channels, double time) {
+            engine_.render(holder->get(), out, count, channels, time);
         };
     } else {
         auto scratch = std::make_shared<std::vector<float>>(8192 * 2);
-        cb = [port, scratch](float* out, int count, int channels, double time) {
+        cb = [holder, scratch](float* out, int count, int channels, double time) {
+            auto& port = *holder;
             float* buf = scratch->data();
             int done = 0;
             while (done < count) {
@@ -230,6 +233,8 @@ bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* e
     }
     auto stream = backend_.openOutput(d, config_, std::move(cb), error);
     if (!stream) return false;
+    auto port = std::make_shared<OutputPort>(d.id, bridgeConfig(2, asClock ? 0 : stream->periodFrames()));
+    *holder = port;
     if (asClock) {
         // only one thread may render the engine: stop the previous clock before starting this one
         if (!clockKey_.empty()) closeStream(clockKey_);
@@ -378,6 +383,9 @@ void DeviceManager::reconcile() {
         st.latencyMs = cs.stream->latencySeconds() * 1000.0;
     }
     st.errors = std::move(errors);
+    for (auto& [k, s] : streams_)
+        if (s.stream->sharedFallback())
+            st.notes.push_back(s.device.name + ": 排他モードの 48kHz に対応していないため共有モードで開いた");
     if (listener_) listener_(st);
 }
 

@@ -13,9 +13,11 @@ namespace {
 
 class FakeStream final : public Stream {
 public:
-    FakeStream(FakeBackend::Device device, int period, InputCallback in, OutputCallback out,
+    FakeStream(FakeBackend::Device device, const StreamConfig& cfg, InputCallback in, OutputCallback out,
                std::shared_ptr<FakeBackend::Meter> meter)
-        : dev_(std::move(device)), period_(period), in_(std::move(in)), out_(std::move(out)), meter_(std::move(meter)) {}
+        : dev_(std::move(device)), fallback_(cfg.exclusive && dev_.sharedOnly),
+          period_(cfg.exclusive && !fallback_ ? cfg.blockFrames : dev_.periodFrames), in_(std::move(in)), out_(std::move(out)),
+          meter_(std::move(meter)) {}
     ~FakeStream() override { stop(); }
 
     bool start(std::string*) override {
@@ -32,6 +34,7 @@ public:
     double latencySeconds() const override { return period_ / kSampleRate; }
     bool failed() const override { return false; }
     std::uint64_t glitches() const override { return 0; }
+    bool sharedFallback() const override { return fallback_; }
 
 private:
     void run() {
@@ -72,6 +75,7 @@ private:
     }
 
     FakeBackend::Device dev_;
+    bool fallback_;
     int period_;
     InputCallback in_;
     OutputCallback out_;
@@ -150,7 +154,7 @@ std::unique_ptr<Stream> FakeBackend::openInput(const DeviceInfo& device, const S
     std::lock_guard lock(mutex_);
     for (const auto& d : devices_)
         if (d.info.id == device.id && d.info.input && d.info.connected)
-            return std::make_unique<FakeStream>(d, cfg.exclusive ? cfg.blockFrames : d.periodFrames, std::move(cb), nullptr,
+            return std::make_unique<FakeStream>(d, cfg, std::move(cb), nullptr,
                                                 nullptr);
     if (error) *error = "no such device";
     return nullptr;
@@ -161,7 +165,7 @@ std::unique_ptr<Stream> FakeBackend::openOutput(const DeviceInfo& device, const 
     std::lock_guard lock(mutex_);
     for (const auto& d : devices_)
         if (d.info.id == device.id && !d.info.input && d.info.connected)
-            return std::make_unique<FakeStream>(d, cfg.exclusive ? cfg.blockFrames : d.periodFrames, nullptr, std::move(cb),
+            return std::make_unique<FakeStream>(d, cfg, nullptr, std::move(cb),
                                                 meters_[d.info.id]);
     if (error) *error = "no such device";
     return nullptr;

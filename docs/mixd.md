@@ -48,7 +48,7 @@ JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台�
 `/system/audio_mode`：
 
 - shared：48kHz float で開き、Windows がデバイスのミックス形式に変換する（44.1kHz のデバイスもそのまま使える）。周期はデバイスの既定（通常 10ms）で、`/system/block_size` はエンジン内部の処理単位になる。
-- exclusive：48kHz で開ける PCM 形式（float32 / int32 / int24 / int16）を探し、周期を `/system/block_size` に合わせる（デバイスの最小周期が下限）。48kHz に対応しないデバイスや、他のアプリが排他で使っているデバイスは開けず、`device.error` イベントで理由を知らせる。
+- exclusive：48kHz で開ける PCM 形式（float32 / int32 / int24 / int16）を探し、周期を `/system/block_size` に合わせる（デバイスの最小周期が下限）。ドライバーが別のレート（44.1kHz など）に固定していて排他の 48kHz 形式がないデバイスは、そのデバイスだけ共有モードで開き（Windows がレート変換する）、ログに `device note` を出す。他のアプリが排他で使っているデバイスは開けず、`device.error` イベントで理由を知らせる。
 
 ## 録画の開始・停止
 

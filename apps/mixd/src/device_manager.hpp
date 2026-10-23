@@ -33,6 +33,7 @@ public:
         std::string clockActive; // "device/<id>" or "timer"
         double latencyMs = 0;
         std::vector<std::string> errors; // devices that could not be opened this round, with the reason
+        std::vector<std::string> notes;  // open streams running differently from what was asked
     };
 
     DeviceManager(DeviceBackend& backend, Engine& engine, Options options);

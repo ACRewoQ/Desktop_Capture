@@ -338,6 +338,51 @@ TEST_CASE("engine with fake devices: inputs reach the outputs, the clock follows
     devices.stop();
 }
 
+TEST_CASE("exclusive mode: a device without a 48 kHz exclusive format runs shared", "[mixd]") {
+    auto list = FakeBackend::standardDevices();
+    for (auto& d : list)
+        if (d.info.id == "fake-line") d.sharedOnly = true;
+    FakeBackend backend(list);
+    Engine engine(nullptr);
+    DeviceManager devices(backend, engine, {});
+    std::mutex mutex;
+    DeviceManager::State last;
+    devices.start([&](const DeviceManager::State& s) {
+        std::lock_guard lock(mutex);
+        last = s;
+    });
+
+    auto t = defaultTree(1);
+    t.set("/system/audio_mode", std::string("exclusive"));
+    t.set("/system/block_size", std::int64_t{128});
+    t.set("/track/1/input/kind", std::string("device"));
+    t.set("/track/1/input/source", std::string("fake-line"));
+    t.set("/track/1/channels", std::int64_t{2});
+    t.set("/master/out/1/target", std::string("device/fake-spk"));
+    std::uint64_t gen = 0;
+    DeviceManager::State s;
+    for (int i = 0; i < 60; ++i) {
+        devices.setDemand(deviceDemand(t));
+        {
+            std::lock_guard lock(mutex);
+            s = last;
+        }
+        engine.setPlan(buildPlan(t, s.ports, ++gen).plan);
+        engine.collectRetired();
+        if (s.clockActive == "device/fake-spk" && s.ports.inputs.size() == 1) break;
+        std::this_thread::sleep_for(50ms);
+    }
+    REQUIRE(s.ports.inputs.size() == 1);
+    CHECK(s.errors.empty());
+    REQUIRE(s.notes.size() == 1);
+    CHECK(s.notes[0].find("Fake Line In") != std::string::npos);
+    std::this_thread::sleep_for(1500ms);
+    backend.takeOutputPeak("fake-spk");
+    std::this_thread::sleep_for(500ms);
+    CHECK(backend.takeOutputPeak("fake-spk") == Approx(0.25).margin(0.02));
+    devices.stop();
+}
+
 TEST_CASE("mixd behind the control server: settings, tracks, input state, shared memory, recording", "[mixd][integration]") {
     asio::io_context io;
     proto::ParamStore store;

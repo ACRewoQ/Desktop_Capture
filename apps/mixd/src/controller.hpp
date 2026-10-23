@@ -79,6 +79,7 @@ private:
     PortTable ports_;
     std::vector<DeviceInfo> deviceList_;
     std::vector<std::string> lastErrors_;
+    std::vector<std::string> lastNotes_;
     std::array<std::uint32_t, kMaxStrips> shmChannels_{};
     std::array<bool, kMaxStrips> shmDisconnected_{};
     std::uint32_t meterSeq_ = 0;

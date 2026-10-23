@@ -194,6 +194,13 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
         }
         lastErrors_ = state.errors;
     }
+    if (state.notes != lastNotes_) {
+        if (options_.verbose)
+            for (const auto& n : state.notes)
+                if (std::find(lastNotes_.begin(), lastNotes_.end(), n) == lastNotes_.end())
+                    std::cout << "device note: " << n << std::endl;
+        lastNotes_ = state.notes;
+    }
     if (!samePorts(state.ports, ports_)) {
         ports_ = state.ports;
         scheduleRebuild();

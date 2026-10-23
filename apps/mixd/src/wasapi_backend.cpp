@@ -234,6 +234,24 @@ public:
         REFERENCE_TIME defPeriod = 0, minPeriod = 0;
         client_->GetDevicePeriod(&defPeriod, &minPeriod);
 
+        std::optional<Format> exclusiveFormat;
+        if (exclusive_) {
+            // the device format's channel count, then the mix format's
+            for (auto kind : {SampleKind::Float32, SampleKind::Int32, SampleKind::Int24In32, SampleKind::Int24, SampleKind::Int16}) {
+                auto f = makeFormat(kind, channels, mask);
+                if (client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.wfx.Format, nullptr) == S_OK) {
+                    exclusiveFormat = f;
+                    break;
+                }
+            }
+            // devices locked to another rate by their driver (Steinberg UR22 at 44.1 kHz, ...) cannot
+            // run exclusive at 48 kHz: open them shared, where Windows converts the rate
+            if (!exclusiveFormat) {
+                exclusive_ = false;
+                sharedFallback_ = true;
+            }
+        }
+
         if (!exclusive_) {
             format_ = makeFormat(SampleKind::Float32, channels, mask);
             const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
@@ -242,17 +260,7 @@ public:
             if (FAILED(hr)) return fail(error, "Initialize (shared)", hr);
             period_ = hnsToFrames(defPeriod);
         } else {
-            // the device format's channel count, then the mix format's
-            std::optional<Format> found;
-            for (auto kind : {SampleKind::Float32, SampleKind::Int32, SampleKind::Int24In32, SampleKind::Int24, SampleKind::Int16}) {
-                auto f = makeFormat(kind, channels, mask);
-                if (client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.wfx.Format, nullptr) == S_OK) {
-                    found = f;
-                    break;
-                }
-            }
-            if (!found) return fail(error, "排他モードで 48kHz の形式が見つからない", kUnsupportedFormat);
-            format_ = *found;
+            format_ = *exclusiveFormat;
             REFERENCE_TIME period = std::max(minPeriod, framesToHns(cfg.blockFrames));
             hr = client_->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, period, period,
                                      &format_.wfx.Format, nullptr);
@@ -321,6 +329,7 @@ public:
     double latencySeconds() const override { return latency_; }
     bool failed() const override { return failed_.load(); }
     std::uint64_t glitches() const override { return glitches_.load(); }
+    bool sharedFallback() const override { return sharedFallback_; }
 
 private:
     bool fail(std::string* error, const char* what, HRESULT hr) {
@@ -452,6 +461,7 @@ private:
     OutputCallback outCb_;
     std::function<void()> onFailure_;
     bool exclusive_ = false;
+    bool sharedFallback_ = false;
     Com<IAudioClient> client_;
     Com<IAudioCaptureClient> capture_;
     Com<IAudioRenderClient> render_;

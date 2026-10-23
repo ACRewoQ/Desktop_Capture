@@ -43,6 +43,8 @@ public:
     virtual double latencySeconds() const = 0; // output buffer latency (outputs)
     virtual bool failed() const = 0;          // device lost or stream error; the manager reopens it
     virtual std::uint64_t glitches() const = 0; // device-side dropouts seen by the stream
+    // Exclusive mode was asked for but the device has no 48 kHz exclusive format: it runs shared.
+    virtual bool sharedFallback() const { return false; }
 };
 
 class DeviceBackend {
