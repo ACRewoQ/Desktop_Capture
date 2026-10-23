@@ -302,6 +302,20 @@ struct Shared {
     std::vector<double> aGlitchTimes; // QPC seconds of A glitch blocks (other sounds on A)
     std::uint64_t glitchBOwn = 0;     // B glitch blocks with no A glitch around them: the bridge's
     std::vector<std::pair<double, bool>> bEvents; // B glitch blocks: seconds after warm-up, caused by A
+    std::vector<double> pendingB; // B glitch blocks (play time) waiting for A's analysis to catch up
+
+    // Decides for each pending B glitch whether A had a glitch around it. A's blocks finish on their
+    // own schedule, so a B block is judged only after A has certainly analysed that moment.
+    void resolveB(double now, bool all) {
+        std::erase_if(pendingB, [&](double played) {
+            if (!all && now < played + 2.5) return false;
+            bool fromA = false;
+            for (double t : aGlitchTimes) fromA = fromA || (t > played - 2.0 && t < played + 1.0);
+            if (!fromA) ++glitchBOwn;
+            if (bEvents.size() < 200) bEvents.push_back({played - warmTime, fromA});
+            return true;
+        });
+    }
     double warmTime = 0, warmPosA = 0, warmPosB = 0;
 };
 
@@ -527,11 +541,8 @@ int run(const Options& opt) {
                     const double played =
                         sh.dllB.timeAt(double(basePos) + double(b.startFrame) * sh.mixRateB / kRate);
                     if (b.glitch) {
-                        // a glitch that A also had (another sound on A) is not the bridge's
-                        bool fromA = false;
-                        for (double t : sh.aGlitchTimes) fromA = fromA || (t > played - 2.0 && t < played + 0.2);
-                        if (!fromA) ++sh.glitchBOwn;
-                        if (sh.bEvents.size() < 200) sh.bEvents.push_back({played - sh.warmTime, fromA});
+                        // a glitch that A also had (another sound on A) is not the bridge's; see resolveB
+                        sh.pendingB.push_back(played);
                         return;
                     }
                     if (!sh.haveA) return;
@@ -555,6 +566,7 @@ int run(const Options& opt) {
                     sh.haveLatency = true;
                 });
                 sh.toneB = ana.summary();
+                sh.resolveB(p.time, false);
             });
             if (!ok) return fail(sh, "loopback B");
         }
@@ -615,6 +627,7 @@ int run(const Options& opt) {
 
     auto st = bridge.stats();
     std::lock_guard lock(sh.mutex);
+    sh.resolveB(0, true);
     // bridge events during the warm-up (device start-up) are reported but not judged
     const auto warmUnder = sh.atWarm.underruns, warmOver = sh.atWarm.overruns, warmResync = sh.atWarm.resyncs;
     st.underruns -= warmUnder;
