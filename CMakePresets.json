@@ -22,6 +22,15 @@
       }
     },
     {
+      "name": "windows-juce",
+      "inherits": "windows",
+      "displayName": "Windows x64 + JUCE (VST3 host probe, V7)",
+      "binaryDir": "${sourceDir}/build/windows-juce",
+      "cacheVariables": {
+        "DC_WITH_JUCE": "ON"
+      }
+    },
+    {
       "name": "linux",
       "displayName": "Linux (system packages, protocol/mock development only)",
       "generator": "Ninja",
@@ -48,6 +57,11 @@
       "configuration": "Release"
     },
     {
+      "name": "windows-juce-release",
+      "configurePreset": "windows-juce",
+      "configuration": "Release"
+    },
+    {
       "name": "linux",
       "configurePreset": "linux"
     }
@@ -64,6 +78,14 @@
     {
       "name": "windows-release",
       "configurePreset": "windows",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-juce-release",
+      "configurePreset": "windows-juce",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

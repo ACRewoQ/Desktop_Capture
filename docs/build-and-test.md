@@ -122,4 +122,15 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 & "$env:VCPKG_ROOT\vcpkg.exe" x-update-baseline --add-initial-baseline
 ```
 
-FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。JUCE・Qt は V5・V7 で導入方法を確かめてから追加します。
+FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。JUCE は V7 で導入方法を確かめました（下記の 7 章）。Qt は V5 で確かめています。
+
+## 7. JUCE を使うターゲット（VST3 ホスト、V7）
+
+JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。重いので既定ではビルドせず、オプション `DC_WITH_JUCE` を ON にしたプリセット `windows-juce` を使います。
+
+```powershell
+.\scripts\vst3-probe.ps1 -SkipScan     # 取得・ビルド・ctest（vst3_* の 3 件）
+.\scripts\vst3-probe.ps1               # さらに手元の VST3 プラグインを全部試して out\vst3\report.md に出す
+```
+
+検証の結果と申し送りは [docs/verification/v7-vst3-host.md](verification/v7-vst3-host.md) にあります。
