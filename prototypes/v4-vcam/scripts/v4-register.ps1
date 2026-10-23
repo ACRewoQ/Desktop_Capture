@@ -43,7 +43,10 @@ try {
     }
     Copy-Item (Join-Path $root 'build\bin\*') $dest -Force
     $ok = $true
-    foreach ($dll in 'vcam_mf.dll', 'vcam_ds.dll') {
+    # MF virtual cameras exist from Windows 11 (build 22000); Windows 10 gets only the DirectShow one.
+    $dlls = @('vcam_ds.dll')
+    if ([Environment]::OSVersion.Version.Build -ge 22000) { $dlls = @('vcam_mf.dll', 'vcam_ds.dll') }
+    foreach ($dll in $dlls) {
         & regsvr32.exe /s (Join-Path $dest $dll)
         Write-Host "regsvr32 $dll -> $LASTEXITCODE"
         if ($LASTEXITCODE) { $ok = $false }

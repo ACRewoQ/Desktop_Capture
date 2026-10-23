@@ -8,7 +8,10 @@
 #>
 param([switch]$NoFeed)
 $bin = Join-Path $env:ProgramData 'DesktopCapture\vcam\bin'
-$cam = Start-Process -FilePath (Join-Path $bin 'vcam-mf-ctl.exe') -ArgumentList 'run' -PassThru -WindowStyle Hidden
+$cam = $null
+if ([Environment]::OSVersion.Version.Build -ge 22000) {  # MF camera: Windows 11 only
+    $cam = Start-Process -FilePath (Join-Path $bin 'vcam-mf-ctl.exe') -ArgumentList 'run' -PassThru -WindowStyle Hidden
+}
 $feed = $null
 if (-not $NoFeed) {
     $feed = Start-Process -FilePath (Join-Path $bin 'vcam-feed.exe') -ArgumentList '--target', 'both' -PassThru -WindowStyle Hidden
@@ -16,4 +19,4 @@ if (-not $NoFeed) {
 Write-Host 'Cameras are live. Pick one of them in the camera app.'
 Read-Host 'Press Enter to stop'
 if ($feed) { Stop-Process -Id $feed.Id -ErrorAction SilentlyContinue }
-Stop-Process -Id $cam.Id -ErrorAction SilentlyContinue
+if ($cam) { Stop-Process -Id $cam.Id -ErrorAction SilentlyContinue }

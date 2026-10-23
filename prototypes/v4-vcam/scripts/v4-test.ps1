@@ -26,6 +26,35 @@ Step 'Environment'
 Write-Host ((Get-CimInstance Win32_OperatingSystem).Caption + ' build ' + [Environment]::OSVersion.Version.Build)
 & $ctl supported
 
+$win11 = [Environment]::OSVersion.Version.Build -ge 22000
+if (-not $win11) {
+    # Windows 10: DirectShow camera only.
+    $feedProc = Start-Process -FilePath $feed -ArgumentList '--target', 'ds', '--seconds', ($Seconds + 20) -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Seconds 2
+        Step 'Device list (Windows 10)'
+        $list = & $probe list
+        $list | ForEach-Object { Write-Host "  $_" }
+        Check ($list -match '^\s+ds: Desktop Capture Camera \(DirectShow\)$') 'DirectShow camera is listed by DirectShow'
+        Check ($list -match '^\s+mf: Desktop Capture Camera \(DirectShow\)$') 'info only: DirectShow camera visible to MF apps'
+        Step 'DirectShow camera via DirectShow'
+        $out = & $probe ds --name 'Desktop Capture Camera (DirectShow)' --seconds $Seconds
+        $out | ForEach-Object { Write-Host "  $_" }
+        $r = Result $out
+        Check ((Field $r 'fps') -ge 27) 'fps >= 27'
+        Check ((Field $r 'unique') -ge (Field $r 'frames') * 0.9) 'frames come from the producer'
+        Check ((Field $r 'avg') -ge 0 -and (Field $r 'avg') -le 100) 'average latency <= 100 ms'
+    } finally {
+        Stop-Process -Id $feedProc.Id -ErrorAction SilentlyContinue
+    }
+    $failures = @($failures | Where-Object { $_ -notlike 'info only*' })
+    Write-Host ''
+    if ($failures.Count -eq 0) { Write-Host 'ALL V4 CHECKS PASSED (Windows 10)' -ForegroundColor Green; exit 0 }
+    Write-Host "$($failures.Count) CHECK(S) FAILED:" -ForegroundColor Red
+    $failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    exit 1
+}
+
 Step 'MF camera: start (session lifetime)'
 $cam = Start-Process -FilePath $ctl -ArgumentList 'run', '--seconds', ($Seconds * 4 + 30) -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 3

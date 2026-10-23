@@ -32,7 +32,8 @@ target_link_libraries(vcam_mf PRIVATE mfplat mf mfuuid mfsensorgroup ole32 advap
 
 add_executable(vcam-mf-ctl mf/vcam_mf_ctl.cpp)
 v4_strict(vcam-mf-ctl)
-target_link_libraries(vcam-mf-ctl PRIVATE mfplat mfsensorgroup ole32)
+target_link_libraries(vcam-mf-ctl PRIVATE mfplat mfsensorgroup ole32 delayimp)
+target_link_options(vcam-mf-ctl PRIVATE /DELAYLOAD:mfsensorgroup.dll)
 
 # --- DirectShow virtual camera (Windows 10) on top of softcam ----------------------------------
 include(FetchContent)

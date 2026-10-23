@@ -49,6 +49,13 @@ int wmain(int argc, wchar_t** argv) {
     for (int i = 2; i + 1 < argc; ++i)
         if (std::wstring(argv[i]) == L"--seconds") seconds = _wtof(argv[i + 1]);
 
+    // mfsensorgroup.dll is delay-loaded: on Windows 10 it lacks the virtual camera API, and the
+    // tool should say so instead of failing to start.
+    const HMODULE sg = LoadLibraryW(L"mfsensorgroup.dll");
+    if (!sg || !GetProcAddress(sg, "MFCreateVirtualCamera")) {
+        std::printf("MF virtual camera supported: no (this Windows has no MFCreateVirtualCamera)\n");
+        return cmd == L"supported" ? 1 : 3;
+    }
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION);
     int rc = 0;
