@@ -7,4 +7,5 @@ CMakeUserPresets.json
 .vscode/
 *.user
 *.suo
+/prototypes/*/build/
 build-rel/
