@@ -229,7 +229,7 @@ void ControlServer::onMessage(const std::shared_ptr<Session>& s, Message msg) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, Set>) {
                 auto outcome = store_.applySet(m, s->info.name);
-                if (outcome.delta) broadcast(*outcome.delta);
+                if (outcome.delta) emitDelta(*outcome.delta);
                 s->send(outcome.result);
             } else if constexpr (std::is_same_v<T, Call>) {
                 handleCall(s, m);
@@ -316,7 +316,12 @@ void ControlServer::broadcast(const Message& msg) {
 
 void ControlServer::publishNow(const std::vector<Change>& changes, const std::vector<std::string>& removed,
                                std::uint64_t originId, const std::string& originClient) {
-    if (auto delta = store_.publish(changes, removed, originId, originClient)) broadcast(*delta);
+    if (auto delta = store_.publish(changes, removed, originId, originClient)) emitDelta(*delta);
+}
+
+void ControlServer::emitDelta(const Delta& delta) {
+    broadcast(delta);
+    if (options_.onDelta) options_.onDelta(delta);
 }
 
 void ControlServer::broadcastEventNow(const Event& ev) { broadcast(ev); }

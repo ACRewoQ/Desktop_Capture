@@ -49,6 +49,9 @@ public:
         std::chrono::milliseconds idleTimeout{15000};
         // Optional log hook: every decoded client message (after Hello) and connection changes.
         std::function<void(const ClientInfo&, const std::string& text)> log;
+        // Optional hook: every Delta applied to the store (client Set or engine publish), called on the
+        // network thread right after it was broadcast. The engine uses it to follow parameter changes.
+        std::function<void(const proto::Delta&)> onDelta;
     };
 
     // Returns the Result to send. Handlers may call publishNow() to change the tree; those deltas
@@ -91,6 +94,7 @@ private:
     void handleHello(const std::shared_ptr<Session>& s, const proto::Hello& hello);
     void handleCall(const std::shared_ptr<Session>& s, const proto::Call& call);
     void broadcast(const proto::Message& msg);
+    void emitDelta(const proto::Delta& delta);
     void removeSession(std::uint64_t id);
     const CallHandler* findHandler(const std::string& method) const;
 

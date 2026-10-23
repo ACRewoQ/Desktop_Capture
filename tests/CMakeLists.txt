@@ -3,13 +3,14 @@ add_executable(dc_tests
     test_codec.cpp
     test_integration.cpp
     test_meter.cpp
+    test_mixd.cpp
     test_param_store.cpp
     test_param_tree.cpp
     test_routing.cpp
     test_schema.cpp
     test_shm.cpp
 )
-target_link_libraries(dc_tests PRIVATE dc::protocol dc::control dc::shmaudio dc::clocksync dc::mock_engine Catch2::Catch2WithMain)
+target_link_libraries(dc_tests PRIVATE dc::protocol dc::control dc::shmaudio dc::clocksync dc::mock_engine dc::mixd_core Catch2::Catch2WithMain)
 dc_apply_options(dc_tests)
 
 include(Catch)
