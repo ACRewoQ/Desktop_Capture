@@ -87,7 +87,8 @@ std::vector<std::string> DeviceManager::glitchDetails() const {
         const auto st = b.stats();
         return ", bridge underruns " + std::to_string(st.underruns) + " overruns " + std::to_string(st.overruns) +
                " resyncs " + std::to_string(st.resyncs) + " fifo " + std::to_string(static_cast<long long>(st.fifoFrames)) +
-               " target " + std::to_string(b.config().targetFrames) +
+               " target " + std::to_string(b.config().targetFrames) + " ratio " + std::to_string(st.ratio).substr(0, 8) +
+               " producer " + std::to_string(static_cast<long long>(st.producerRate)) + " Hz" + (st.locked ? " locked" : " unlocked") +
                (st.underruns ? " last underrun: had " + std::to_string(static_cast<long long>(st.lastUnderrunAvailable)) +
                                    " needed " + std::to_string(static_cast<long long>(st.lastUnderrunNeeded)) + " stamp age " +
                                    std::to_string(static_cast<int>(st.lastUnderrunStampAge * 1000)) + " ms"

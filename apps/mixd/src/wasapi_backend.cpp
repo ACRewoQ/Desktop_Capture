@@ -335,10 +335,17 @@ public:
     std::uint64_t glitches() const override { return glitches_.load(); }
     bool sharedFallback() const override { return sharedFallback_; }
     std::string diagnostics() const override {
-        if (!input_ || glitches_.load() == 0) return {};
+        // frames per second the device actually took or gave since start: should be about 48000
+        std::string out;
+        const double t0 = startTime_.load();
+        if (t0 > 0) {
+            const double secs = qpcSecondsNow() - t0;
+            if (secs > 1) out += ", rate " + std::to_string(static_cast<long long>(static_cast<double>(frames_.load()) / secs)) + " Hz";
+        }
+        if (!input_ || glitches_.load() == 0) return out;
         // a late read shows as a long wait before the discontinuity; a device-side drop as a short one
-        return ", last discontinuity: " + std::to_string(lastGapUs_.load() / 1000.0).substr(0, 6) + " ms since the read before, " +
-               std::to_string(lastSkipped_.load()) + " frames skipped, longest wait " +
+        return out + ", last discontinuity: " + std::to_string(lastGapUs_.load() / 1000.0).substr(0, 6) +
+               " ms since the read before, " + std::to_string(lastSkipped_.load()) + " frames skipped, longest wait " +
                std::to_string(maxGapUs_.load() / 1000.0).substr(0, 6) + " ms";
     }
 
@@ -420,6 +427,8 @@ private:
                 break;
             }
             written_ += static_cast<UINT64>(frames);
+            frames_.fetch_add(static_cast<std::uint64_t>(frames));
+            if (startTime_.load() == 0) startTime_ = now;
         }
         if (avrt_) AvRevertMmThreadCharacteristics(avrt_);
     }
@@ -467,6 +476,8 @@ private:
                     else toFloat(format_, data, scratch_.data(), samples);
                     inCb_(scratch_.data(), static_cast<int>(frames), static_cast<double>(qpc) * 1e-7, discontinuity);
                 }
+                frames_.fetch_add(frames);
+                if (startTime_.load() == 0) startTime_ = now;
                 hr = capture_->ReleaseBuffer(frames);
                 if (FAILED(hr)) break;
             }
@@ -502,6 +513,8 @@ private:
     std::atomic<bool> failed_{false};
     std::atomic<std::uint64_t> glitches_{0};
     std::atomic<std::int64_t> lastGapUs_{0}, maxGapUs_{0}, lastSkipped_{0};
+    std::atomic<std::uint64_t> frames_{0}; // frames rendered or captured since the first period
+    std::atomic<double> startTime_{0};
     std::thread thread_;
 };
 
