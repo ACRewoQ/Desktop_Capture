@@ -149,11 +149,27 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/mixer/track/move` | `track`:int, `position`:int | nil | P0 | 並び順の変更 |
 | `/capture/record/start` | なし | nil | P0 | 録画開始。録画中なら `conflict` |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止。録画中でなければ `conflict` |
+| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
 | `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P4 | ペアリング受付 |
 
 未実装・未知のメソッドは `unknown_method` を返します。
+
+#### 5.4.1 録画の開始・停止（エンジンと capd）
+
+録画の設定と状態はエンジンが持ち、実際の録画は capd が行います。capd はエンジンに role = 2（サービス）、`client` = `"capd"` で接続し、`/capture/*` と `/video/mix/#` をツリーで追います。
+
+| きっかけ | エンジン | capd |
+|---|---|---|
+| `/capture/record/start`（UI・リモコン） | capd が未接続なら `conflict`（"capture process not running"）。`/capture/state` が `idle` か `error` でなければ `conflict`。それ以外は `/capture/state` = `starting` | `starting` を見て録画を始め、`/capture/report` `state="recording"`, `file` |
+| `report recording` | `/capture/state` = `recording`、`/capture/file`、`/capture/error` = `""`、`capture.started`。以後 `/capture/elapsed_ms` を数える | |
+| `/capture/record/stop` | `recording` でなければ `conflict`。それ以外は `/capture/state` = `stopping` | ファイルを閉じて `/capture/report` `state="idle"`, `file`, `duration_ms` |
+| `report idle` | `/capture/state` = `idle`、`capture.stopped` | |
+| capd 側の失敗（エンコーダーを開けない、ディスク満杯で安全停止など） | `/capture/state` = `error`、`/capture/error` = `error` | `/capture/report` `state="error"`, `error` |
+| 録画中（`starting` / `recording` / `stopping`）に capd の接続が切れた | `/capture/state` = `error`、`/capture/error` = "capture process disconnected" | |
+
+`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
 
 ### 5.5 Event（通知）
 
