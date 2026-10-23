@@ -116,6 +116,9 @@ int main(int argc, char** argv) {
         opt.onDelta = [&controller](const proto::Delta& d) {
             if (controller) controller->onDelta(d);
         };
+        opt.onClient = [&controller](const control::ClientInfo& c, bool connected) {
+            if (controller) controller->onClient(c, connected);
+        };
         if (!quiet) {
             opt.log = [](const control::ClientInfo& c, const std::string& text) {
                 std::cout << "[" << c.name << "@" << c.address << "] " << text << std::endl;

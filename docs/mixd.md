@@ -50,6 +50,10 @@ JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台�
 - shared：48kHz float で開き、Windows がデバイスのミックス形式に変換する（44.1kHz のデバイスもそのまま使える）。周期はデバイスの既定（通常 10ms）で、`/system/block_size` はエンジン内部の処理単位になる。
 - exclusive：48kHz で開ける PCM 形式（float32 / int32 / int24 / int16）を探し、周期を `/system/block_size` に合わせる（デバイスの最小周期が下限）。48kHz に対応しないデバイスや、他のアプリが排他で使っているデバイスは開けず、`device.error` イベントで理由を知らせる。
 
+## 録画の開始・停止
+
+docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/state` など）を持ち、実際の録画は capd（role = サービス、名前 `capd`）が行う。`/capture/record/start` で `starting`、capd の `/capture/report state=recording` で `recording`（`elapsed_ms` はエンジンが 250ms ごとに更新）、`stop` で `stopping`、`report idle` で `idle`。録画中に capd が切断すると `error`。
+
 ## 試験
 
 - `ctest`：`[mixd]` のテストがフィルター、パン、ミキサー（ルーティング、センド、キュー、ミュート）、共有メモリ、計画（ソロ、入力状態、デバイス要求）、仮想デバイスでのクロック切り替え、制御サーバー越しの結合を確かめる。

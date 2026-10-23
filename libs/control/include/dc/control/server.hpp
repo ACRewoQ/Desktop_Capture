@@ -52,6 +52,9 @@ public:
         // Optional hook: every Delta applied to the store (client Set or engine publish), called on the
         // network thread right after it was broadcast. The engine uses it to follow parameter changes.
         std::function<void(const proto::Delta&)> onDelta;
+        // Optional hook: a client finished its Hello (connected = true) or a ready client went away
+        // (false). Network thread. The engine uses it to follow capd (role Service).
+        std::function<void(const ClientInfo&, bool connected)> onClient;
     };
 
     // Returns the Result to send. Handlers may call publishNow() to change the tree; those deltas

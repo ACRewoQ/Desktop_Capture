@@ -41,7 +41,7 @@ bool samePorts(const PortTable& a, const PortTable& b) { return a.inputs == b.in
 Controller::Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
                        shm::AudioRingWriter* shm, Options options)
     : io_(io), server_(server), devices_(devices), engine_(engine), shm_(shm), options_(options), meterTimer_(io),
-      statsTimer_(io) {}
+      statsTimer_(io), recordTimer_(io) {}
 
 void Controller::start(const std::vector<DeviceInfo>& devices) {
     seed(devices);
@@ -56,6 +56,7 @@ void Controller::stop() {
         stopped_ = true;
         meterTimer_.cancel();
         statsTimer_.cancel();
+        recordTimer_.cancel();
     });
 }
 
@@ -108,6 +109,9 @@ void Controller::registerMethods() {
     server_.registerMethod("/mixer/track/add", [this](CallContext& ctx) { return addTrack(ctx); });
     server_.registerMethod("/mixer/track/remove", [this](CallContext& ctx) { return removeTrack(ctx); });
     server_.registerMethod("/mixer/track/move", [this](CallContext& ctx) { return moveTrack(ctx); });
+    server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
+    server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
+    server_.registerMethod("/capture/report", [this](CallContext& ctx) { return captureReport(ctx); });
     server_.registerMethod("/devices/refresh", [this](CallContext&) {
         devices_.refresh();
         return Result{};
@@ -119,7 +123,9 @@ void Controller::onDelta(const Delta& delta) {
     // the mix; everything else might
     auto reportOnly = [](const std::string& path) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
-                                                "/system/clock_active", "/devices/", "/mixer/solo_active"};
+                                                "/system/clock_active", "/devices/", "/mixer/solo_active",
+                                                "/capture/state", "/capture/elapsed_ms", "/capture/file",
+                                                "/capture/error"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
         return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
@@ -242,6 +248,93 @@ void Controller::scheduleStats() {
         server_.publishNow({{"/system/cpu_load", std::round(engine_.cpuLoad() * 100.0) / 100.0},
                             {"/system/xruns", static_cast<std::int64_t>(devices_.glitches())}});
         scheduleStats();
+    });
+}
+
+// --- recording: the engine owns the state, capd records (docs/spec/protocol.md 5.4.1) ---
+
+namespace {
+bool isCapd(const control::ClientInfo& c) { return c.role == ClientRole::Service && c.name == "capd"; }
+std::optional<std::string> strArg(const Args& args, const char* key) {
+    if (auto it = args.find(key); it != args.end())
+        if (auto* v = std::get_if<std::string>(&it->second)) return *v;
+    return std::nullopt;
+}
+} // namespace
+
+void Controller::onClient(const control::ClientInfo& client, bool connected) {
+    if (!isCapd(client)) return;
+    captureClients_ += connected ? 1 : -1;
+    if (connected || captureClients_ > 0) return;
+    const auto state = server_.store().tree().getAs<std::string>("/capture/state").value_or("idle");
+    if (state == "starting" || state == "recording" || state == "stopping") {
+        recordTimer_.cancel();
+        server_.publishNow({{"/capture/state", std::string("error")},
+                            {"/capture/error", std::string("capture process disconnected")}});
+        server_.broadcastEventNow({"capture.stopped", {{"file", server_.store().tree().getAs<std::string>("/capture/file").value_or("")},
+                                                       {"error", std::string("capture process disconnected")}}});
+    }
+}
+
+Result Controller::startRecording(CallContext& ctx) {
+    if (captureClients_ <= 0) return error(ErrorCode::Conflict, "capture process not running");
+    const auto state = server_.store().tree().getAs<std::string>("/capture/state").value_or("idle");
+    if (state != "idle" && state != "error") return error(ErrorCode::Conflict, "already recording (" + state + ")");
+    server_.publishNow({{"/capture/state", std::string("starting")}, {"/capture/elapsed_ms", std::int64_t{0}}}, {},
+                       ctx.call.id, ctx.client.name);
+    return {};
+}
+
+Result Controller::stopRecording(CallContext& ctx) {
+    const auto state = server_.store().tree().getAs<std::string>("/capture/state").value_or("idle");
+    if (state != "recording") return error(ErrorCode::Conflict, "not recording");
+    server_.publishNow({{"/capture/state", std::string("stopping")}}, {}, ctx.call.id, ctx.client.name);
+    return {};
+}
+
+Result Controller::captureReport(CallContext& ctx) {
+    if (ctx.client.role != ClientRole::Service) return error(ErrorCode::Unauthorized, "only the capture process reports");
+    const auto& args = ctx.call.args;
+    const auto state = strArg(args, "state");
+    if (!state || (*state != "recording" && *state != "idle" && *state != "error"))
+        return error(ErrorCode::BadRequest, "state must be recording, idle or error");
+    const auto& tree = server_.store().tree();
+    const auto file = strArg(args, "file").value_or(tree.getAs<std::string>("/capture/file").value_or(""));
+    if (*state == "recording") {
+        recordStart_ = std::chrono::steady_clock::now();
+        server_.publishNow({{"/capture/state", std::string("recording")},
+                            {"/capture/file", file},
+                            {"/capture/error", std::string()},
+                            {"/capture/elapsed_ms", std::int64_t{0}}},
+                           {}, ctx.call.id, ctx.client.name);
+        server_.broadcastEventNow({"capture.started", {{"file", file}}});
+        scheduleRecordingClock();
+    } else if (*state == "idle") {
+        recordTimer_.cancel();
+        const auto elapsed = intArg(args, "duration_ms")
+                                 .value_or(tree.getAs<std::int64_t>("/capture/elapsed_ms").value_or(0));
+        server_.publishNow({{"/capture/state", std::string("idle")}, {"/capture/file", file}, {"/capture/elapsed_ms", elapsed}},
+                           {}, ctx.call.id, ctx.client.name);
+        server_.broadcastEventNow({"capture.stopped", {{"file", file}, {"duration_ms", elapsed}}});
+    } else {
+        recordTimer_.cancel();
+        const auto message = strArg(args, "error").value_or("capture failed");
+        server_.publishNow({{"/capture/state", std::string("error")}, {"/capture/error", message}}, {}, ctx.call.id,
+                           ctx.client.name);
+    }
+    return {};
+}
+
+void Controller::scheduleRecordingClock() {
+    recordTimer_.expires_after(std::chrono::milliseconds(250));
+    recordTimer_.async_wait([this](asio::error_code ec) {
+        if (ec || stopped_) return;
+        if (server_.store().tree().getAs<std::string>("/capture/state") != "recording") return;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                                   recordStart_)
+                                 .count();
+        server_.publishNow({{"/capture/elapsed_ms", std::int64_t{elapsed}}});
+        scheduleRecordingClock();
     });
 }
 

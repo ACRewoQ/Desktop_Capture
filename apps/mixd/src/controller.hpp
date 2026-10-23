@@ -40,6 +40,8 @@ public:
     // be called from any thread.
     void onDelta(const proto::Delta& delta);
     void onDeviceState(const DeviceManager::State& state);
+    // ControlServer::Options::onClient (network thread): follows the capture process (capd).
+    void onClient(const control::ClientInfo& client, bool connected);
 
 private:
     void seed(const std::vector<DeviceInfo>& devices);
@@ -55,6 +57,10 @@ private:
     proto::Result addTrack(control::CallContext& ctx);
     proto::Result removeTrack(control::CallContext& ctx);
     proto::Result moveTrack(control::CallContext& ctx);
+    proto::Result startRecording(control::CallContext& ctx);
+    proto::Result stopRecording(control::CallContext& ctx);
+    proto::Result captureReport(control::CallContext& ctx);
+    void scheduleRecordingClock();
 
     asio::io_context& io_;
     control::ControlServer& server_;
@@ -64,6 +70,9 @@ private:
     Options options_;
     asio::steady_timer meterTimer_;
     asio::steady_timer statsTimer_;
+    asio::steady_timer recordTimer_;
+    std::chrono::steady_clock::time_point recordStart_;
+    int captureClients_ = 0; // connected capd processes (role Service, name "capd")
     bool rebuildPending_ = false;
     bool stopped_ = false;
     std::uint64_t generation_ = 0;

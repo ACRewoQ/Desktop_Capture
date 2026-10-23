@@ -338,7 +338,7 @@ TEST_CASE("engine with fake devices: inputs reach the outputs, the clock follows
     devices.stop();
 }
 
-TEST_CASE("mixd behind the control server: settings, tracks, input state, shared memory", "[mixd][integration]") {
+TEST_CASE("mixd behind the control server: settings, tracks, input state, shared memory, recording", "[mixd][integration]") {
     asio::io_context io;
     proto::ParamStore store;
     Controller* ctlPtr = nullptr;
@@ -346,6 +346,9 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
     opt.port = 0;
     opt.onDelta = [&](const proto::Delta& d) {
         if (ctlPtr) ctlPtr->onDelta(d);
+    };
+    opt.onClient = [&](const control::ClientInfo& c, bool connected) {
+        if (ctlPtr) ctlPtr->onClient(c, connected);
     };
     control::ControlServer server(io, store, opt);
     FakeBackend backend;
@@ -417,6 +420,46 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
     backend.takeOutputPeak("fake-spk");
     std::this_thread::sleep_for(200ms);
     CHECK(backend.takeOutputPeak("fake-spk") < 0.001f);
+
+    // recording: the engine keeps the state, the capture process (capd) does the work
+    CHECK(client.call("/capture/record/start").get().code == proto::ErrorCode::Conflict); // capd not running
+    CHECK(client.call("/capture/report", {{"state", std::string("recording")}}).get().code ==
+          proto::ErrorCode::Unauthorized);
+    {
+        control::ControlClient::Options co2;
+        co2.port = server.port();
+        co2.clientName = "capd";
+        co2.role = proto::ClientRole::Service;
+        control::ControlClient capd(co2);
+        REQUIRE(capd.connect(3s));
+        std::this_thread::sleep_for(100ms); // onClient runs after the snapshot was sent
+        REQUIRE(client.call("/capture/record/start").get().code == proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) { return t.getAs<std::string>("/capture/state") == "starting"; }));
+        CHECK(capd.call("/capture/report", {{"state", std::string("bogus")}}).get().code == proto::ErrorCode::BadRequest);
+        REQUIRE(capd.call("/capture/report", {{"state", std::string("recording")}, {"file", std::string("C:/v/a.mkv")}})
+                    .get()
+                    .code == proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) {
+            return t.getAs<std::string>("/capture/state") == "recording" && t.getAs<std::string>("/capture/file") == "C:/v/a.mkv" &&
+                   t.getAs<std::int64_t>("/capture/elapsed_ms").value_or(0) > 0;
+        }));
+        CHECK(client.call("/capture/record/start").get().code == proto::ErrorCode::Conflict);
+        REQUIRE(client.call("/capture/record/stop").get().code == proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) { return t.getAs<std::string>("/capture/state") == "stopping"; }));
+        REQUIRE(capd.call("/capture/report", {{"state", std::string("idle")}, {"duration_ms", std::int64_t{1234}}}).get().code ==
+                proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) {
+            return t.getAs<std::string>("/capture/state") == "idle" && t.getAs<std::int64_t>("/capture/elapsed_ms") == 1234;
+        }));
+        // capd goes away in the middle of a recording
+        REQUIRE(client.call("/capture/record/start").get().code == proto::ErrorCode::Ok);
+        REQUIRE(capd.call("/capture/report", {{"state", std::string("recording")}}).get().code == proto::ErrorCode::Ok);
+        capd.disconnect();
+    }
+    CHECK(waitFor([](const proto::ParamTree& t) {
+        return t.getAs<std::string>("/capture/state") == "error" &&
+               t.getAs<std::string>("/capture/error") == "capture process disconnected";
+    }));
 
     client.disconnect();
     ctl.stop();

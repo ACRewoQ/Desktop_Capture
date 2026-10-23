@@ -192,8 +192,11 @@ void ControlServer::removeSession(std::uint64_t id) {
     auto it = sessions_.find(id);
     if (it == sessions_.end()) return;
     if (options_.log) options_.log(it->second->info, "disconnected");
-    if (it->second->ready) --readyClients_;
+    const bool wasReady = it->second->ready;
+    const ClientInfo info = it->second->info;
+    if (wasReady) --readyClients_;
     sessions_.erase(it);
+    if (wasReady && options_.onClient) options_.onClient(info, false);
 }
 
 namespace {
@@ -278,6 +281,7 @@ void ControlServer::handleHello(const std::shared_ptr<Session>& s, const Hello& 
     w.sessionId = options_.sessionId;
     s->send(w);
     s->send(store_.snapshot());
+    if (options_.onClient) options_.onClient(s->info, true);
 }
 
 const ControlServer::CallHandler* ControlServer::findHandler(const std::string& method) const {
