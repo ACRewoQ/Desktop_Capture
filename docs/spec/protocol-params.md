@@ -12,6 +12,9 @@
 | `/system/sample_rate` | int | ro | 48000 | `48000` | サンプルレート（48kHz 固定） |
 | `/system/block_size` | int | rw | 64 / 128 / 256 / 512 / 1024 | `256` | 音声バッファのサンプル数 |
 | `/system/clock_device` | string | rw |  | `""` | クロック基準デバイスの ID（"" = 自動） |
+| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ） |
+| `/system/clock_active` | string | ro |  | `""` | 実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー） |
+| `/system/latency_ms` | float | ro | 0 〜 1000 | `0` | クロック基準デバイスの出力バッファによる遅延 ms |
 | `/system/cpu_load` | float | ro | 0 〜 1 | `0` | 音声スレッドの負荷率 |
 | `/system/xruns` | int | ro | 0 〜 9.22337e+18 | `0` | 起動後の音切れ回数 |
 | `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
@@ -118,6 +121,7 @@
 | `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
+| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
 | `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |

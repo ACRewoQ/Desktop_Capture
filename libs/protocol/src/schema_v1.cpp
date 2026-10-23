@@ -73,6 +73,10 @@ Schema buildV1() {
     sc.add(ic("/system/sample_rate", {48000}, 48000, "サンプルレート（48kHz 固定）", RO));
     sc.add(ic("/system/block_size", {64, 128, 256, 512, 1024}, 256, "音声バッファのサンプル数"));
     sc.add(s("/system/clock_device", "", "クロック基準デバイスの ID（\"\" = 自動）"));
+    sc.add(e("/system/audio_mode", {"shared", "exclusive"}, "shared",
+             "WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ）"));
+    sc.add(s("/system/clock_active", "", "実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー）", RO));
+    sc.add(f("/system/latency_ms", 0.0, 1000.0, 0.0, "クロック基準デバイスの出力バッファによる遅延 ms", RO));
     sc.add(f("/system/cpu_load", 0.0, 1.0, 0.0, "音声スレッドの負荷率", RO));
     sc.add(i("/system/xruns", 0, kI64Max, 0, "起動後の音切れ回数", RO));
 
@@ -154,6 +158,8 @@ Schema buildV1() {
     sc.addMethod({"/mixer/track/move", "track:int, position:int", "nil", "並び順を変える", "P0"});
     sc.addMethod({"/capture/record/start", "", "nil", "録画開始", "P0"});
     sc.addMethod({"/capture/record/stop", "", "nil", "録画停止", "P0"});
+    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?", "nil",
+                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ）", "P2"});
     sc.addMethod({"/track/#/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/track/#/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
