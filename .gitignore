@@ -8,3 +8,4 @@ CMakeUserPresets.json
 *.user
 *.suo
 /prototypes/*/build/
+build-rel/
