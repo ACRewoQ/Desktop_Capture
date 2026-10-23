@@ -575,6 +575,7 @@ int run(const Options& opt) {
     const double t0 = qpcSeconds();
     const double total = opt.warmupSec + opt.minutes * 60;
     double nextLog = 10;
+    std::uint64_t seenUnderruns = 0;
     int exitCode = 0;
     while (!sh.stop) {
         Sleep(200);
@@ -592,6 +593,13 @@ int run(const Options& opt) {
         if (el >= nextLog || el >= total) {
             nextLog += 10;
             const auto st = bridge.stats();
+            if (st.underruns != seenUnderruns) {
+                seenUnderruns = st.underruns;
+                std::printf("         underrun #%llu: FIFO %.0f frames, needed %.0f for a %.0f-frame block, newest A "
+                            "packet stamped %.1f ms before\n",
+                            (unsigned long long)st.underruns, st.lastUnderrunAvailable, st.lastUnderrunNeeded,
+                            st.lastUnderrunBlock, st.lastUnderrunStampAge * 1000);
+            }
             std::lock_guard lock(sh.mutex);
             const double clocksPpm = measuredPpm();
             const double bridgePpm = (st.ratio - 1) * 1e6;

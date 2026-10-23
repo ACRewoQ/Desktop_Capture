@@ -46,7 +46,10 @@ void ClockBridge::pull(float* out, std::size_t count, double now) {
         fifo_.skip(fifo_.available());
     }
     Stamp s;
-    while (stamps_.pop(s)) dll_.update(s.pos, s.time);
+    while (stamps_.pop(s)) {
+        dll_.update(s.pos, s.time);
+        lastStamp_ = s.time;
+    }
 
     if (state_ == State::Waiting) {
         // keep only the newest targetFrames while waiting, so a long wait cannot overflow the FIFO
@@ -74,6 +77,10 @@ void ClockBridge::pull(float* out, std::size_t count, double now) {
     const std::size_t need = resampler_.inputFramesRequired(count, ratio);
     if (fifo_.available() < need) {
         ++underruns_;
+        sUAvail_.store(double(fifo_.available()), std::memory_order_relaxed);
+        sUNeed_.store(double(need), std::memory_order_relaxed);
+        sUBlock_.store(double(count), std::memory_order_relaxed);
+        sUAge_.store(now - lastStamp_, std::memory_order_relaxed);
         std::memset(out, 0, count * ch * sizeof(float));
         restart(true);
         publish();
@@ -112,6 +119,10 @@ ClockBridge::Stats ClockBridge::stats() const {
     s.resyncs = sResyncs_.load(std::memory_order_relaxed);
     s.outputFrames = sOutput_.load(std::memory_order_relaxed);
     s.locked = sLocked_.load(std::memory_order_relaxed);
+    s.lastUnderrunAvailable = sUAvail_.load(std::memory_order_relaxed);
+    s.lastUnderrunNeeded = sUNeed_.load(std::memory_order_relaxed);
+    s.lastUnderrunBlock = sUBlock_.load(std::memory_order_relaxed);
+    s.lastUnderrunStampAge = sUAge_.load(std::memory_order_relaxed);
     return s;
 }
 

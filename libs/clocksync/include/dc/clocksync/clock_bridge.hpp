@@ -53,6 +53,11 @@ public:
         std::uint64_t resyncs = 0;   // restarts after a discontinuity reported by the producer
         std::uint64_t outputFrames = 0;
         bool locked = false;
+        // what the last underrun looked like, to tell a producer stall from a large consumer request
+        double lastUnderrunAvailable = 0; // frames in the FIFO
+        double lastUnderrunNeeded = 0;    // frames the block needed
+        double lastUnderrunBlock = 0;     // frames the consumer asked for
+        double lastUnderrunStampAge = 0;  // seconds since the newest producer packet was stamped
     };
 
     ClockBridge() : ClockBridge(Config{}) {}
@@ -94,6 +99,7 @@ private:
     bool haveSetpoint_ = false;
     double setpoint_ = 0;
     double lastPull_ = 0;
+    double lastStamp_ = 0;
     std::uint64_t underruns_ = 0;
     std::uint64_t resyncs_ = 0;
     std::uint64_t outputFrames_ = 0;
@@ -103,6 +109,7 @@ private:
     std::atomic<double> sRatio_{1}, sFillError_{0}, sFifo_{0}, sRate_{0};
     std::atomic<std::uint64_t> sUnderruns_{0}, sResyncs_{0}, sOutput_{0};
     std::atomic<bool> sLocked_{false};
+    std::atomic<double> sUAvail_{0}, sUNeed_{0}, sUBlock_{0}, sUAge_{0};
 };
 
 } // namespace dc::clocksync
