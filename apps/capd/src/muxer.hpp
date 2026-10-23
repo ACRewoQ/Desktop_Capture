@@ -48,6 +48,7 @@ public:
 
 private:
     void run();
+    bool isMp4() const;
     void fail(const std::string& what);
 
     std::string path_;

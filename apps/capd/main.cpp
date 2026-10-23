@@ -162,6 +162,7 @@ int cmdProbe(const std::string& file) {
         const AVStream* st = fmt->streams[i];
         const AVCodecParameters* cp = st->codecpar;
         const AVDictionaryEntry* title = av_dict_get(st->metadata, "title", nullptr, 0);
+        if (!title) title = av_dict_get(st->metadata, "handler_name", nullptr, 0);
         const Seen& s = seen[i];
         std::string kind;
         char info[96] = {};

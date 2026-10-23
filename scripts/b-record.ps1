@@ -36,7 +36,9 @@ $outDir = Join-Path $root ("build/b-record/" + (Get-Date -Format 'yyyyMMdd-HHmms
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $summary = Join-Path $outDir 'summary.md'
 
-& $capd list | Tee-Object -FilePath (Join-Path $outDir 'list.txt')
+$ErrorActionPreference = 'Continue'
+& $capd list 2>$null | Tee-Object -FilePath (Join-Path $outDir 'list.txt')
+$ErrorActionPreference = 'Stop'
 
 $cases = @(
     @{ name = 'wgc-h264-1080p60';     engine = $true;  args = @('--size', '1920x1080', '--fps', '60', '--audio', 'master,track/1,track/2') },
@@ -60,8 +62,11 @@ foreach ($c in $cases) {
     $pattern = Start-Process -FilePath $bench -ArgumentList 'pattern', '--seconds', ($Seconds + 6) -PassThru
     try {
         Start-Sleep -Milliseconds 1500
-        $log = & $capd record --seconds $Seconds --output $file @($c.args) 2>&1
+        # Windows PowerShell 5.1 turns a native command's stderr into errors under 'Stop'; FFmpeg warns there.
+        $ErrorActionPreference = 'Continue'
+        $log = & $capd record --seconds $Seconds --output $file @($c.args) 2>&1 | ForEach-Object { "$_" }
         $code = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
         $log | Set-Content (Join-Path $outDir "$($c.name).log") -Encoding utf8
         $log | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
         $result = ($log | Where-Object { $_ -match '^RESULT' } | Select-Object -Last 1)
@@ -71,7 +76,9 @@ foreach ($c in $cases) {
         if ($writer) { Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue }
         Stop-Process -Id $pattern.Id -ErrorAction SilentlyContinue
     }
-    $probe = if (Test-Path $file) { & $capd probe $file 2>&1 } else { @('no file') }
+    $ErrorActionPreference = 'Continue'
+    $probe = if (Test-Path $file) { & $capd probe $file 2>&1 | ForEach-Object { "$_" } } else { @('no file') }
+    $ErrorActionPreference = 'Stop'
     $probe | ForEach-Object { Write-Host "  $_" }
     $streams = ($probe | Where-Object { $_ -match '^STREAM' } | ForEach-Object { $_ -replace '^STREAM ', '' }) -join '<br>'
     "| $($c.name) | $($result -replace '\|', '/') | $streams |" | Add-Content $summary -Encoding utf8

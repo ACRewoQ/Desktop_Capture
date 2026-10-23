@@ -34,6 +34,8 @@ Muxer::~Muxer() {
     for (auto& [s, p] : queue_) av_packet_free(&p);
 }
 
+bool Muxer::isMp4() const { return std::string(fmt_->oformat->name) == "mp4"; }
+
 bool Muxer::needsGlobalHeader() const { return (fmt_->oformat->flags & AVFMT_GLOBALHEADER) != 0; }
 
 int Muxer::addStream(const AVCodecContext* encoder, const char* title) {
@@ -43,7 +45,8 @@ int Muxer::addStream(const AVCodecContext* encoder, const char* title) {
     if (r < 0) throw std::runtime_error("codec parameters: " + avError(r));
     st->time_base = encoder->time_base;
     if (encoder->codec_type == AVMEDIA_TYPE_VIDEO) st->avg_frame_rate = encoder->framerate;
-    if (title) av_dict_set(&st->metadata, "title", title, 0);
+    // MKV keeps a track title; MP4 has no such field and names tracks through the handler name instead.
+    if (title) av_dict_set(&st->metadata, isMp4() ? "handler_name" : "title", title, 0);
     streams_.push_back({encoder->time_base.num, encoder->time_base.den});
     return st->index;
 }
@@ -55,7 +58,7 @@ void Muxer::start() {
     }
     AVDictionary* opts = nullptr;
     // MP4: write the index at the front when finishing (not crash-safe, unlike MKV).
-    if (std::string(fmt_->oformat->name) == "mp4") av_dict_set(&opts, "movflags", "+faststart", 0);
+    if (isMp4()) av_dict_set(&opts, "movflags", "+faststart", 0);
     const int r = avformat_write_header(fmt_, &opts);
     av_dict_free(&opts);
     if (r < 0) throw std::runtime_error("write header: " + avError(r));
