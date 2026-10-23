@@ -12,6 +12,7 @@
 - 音声：エンジンの共有メモリ（`docs/spec/shm-audio.md`）から最大 8 ストリーム（マスター / トラック n）、AAC・Opus・PCM 24bit
 - 保存：MKV（既定、途中で止まっても再生できる）または MP4。書き込みは専用スレッド
 - レート制御：VBR / CBR / CQP（エンコーダーの種類ごとのオプションに対応づけ）
+- エンジン追従（`capd` を引数なしで起動）：エンジンにサービスとして接続し、`/capture/state` の `starting` で録画を始めて `/capture/report` で `recording` を返し、`stopping` でファイルを閉じて `idle` を返す。失敗は `error` と理由を返す（`docs/spec/protocol.md` 5.4.1）。接続は1秒ごとに再試行し、録画中に切れたら録画を閉じる
 
 ## 時刻のそろえ方
 
@@ -25,12 +26,15 @@
 
 ```powershell
 $capd = '.\build\windows\apps\capd\Release\capd.exe'
+& $capd                                       # エンジン（127.0.0.1:47800）に従う。--port で変更
 & $capd list                                  # モニターと、この PC で開けるハードウェアエンコーダー
 & $capd record --seconds 10                   # 1080p60 H.264、マスター音声、ビデオフォルダーへ
 & $capd record --size 3840x2160 --bitrate 40000 --audio master,track/1,track/2
 & $capd record --source dda --container mp4 --audio-codec opus
 & $capd probe <ファイル>                       # 各ストリームのコーデック・パケット数・先頭/末尾時刻
 ```
+
+mixd ができるまでは `dc-mock-server --capd` がエンジンの代わりになります（`--capd` なしのモックは今までどおり自分で録画したふりをします）。`dc-cli call /capture/record/start` / `stop` で録画を操作できます。
 
 エンジンの代わりに `dc-shm-tone write` を動かすと、マスター 440Hz・トラック N = 220×(N+1)Hz の音が入ります。
 
@@ -40,7 +44,8 @@ $capd = '.\build\windows\apps\capd\Release\capd.exe'
 
 | 項目 | 予定 |
 |---|---|
-| エンジン（mixd）の `/capture` 設定に従い、`/capture/record/start` / `stop` で録る | G2（レーン A と受け渡し方法を決めてから） |
+| mixd 本体との接続試験 | G2（mixd 側の record start/stop と `/capture/report` の実装後） |
+| ソース（モニター番号、WGC / DDA）の設定 | スキーマにまだないので既定（主モニター、WGC）。P3（B1）のシーン設定で入る |
 | シーン・複数レイヤー・ウィンドウ / カメラのソース | P3（B1） |
 | GPU リセット時に新しいファイルで続ける | P3。P2 はエラーで録画を止める |
 | プレビュー配信・仮想カメラ・全画面出力 | P3 / P4（ミックスの「出力先」として足す） |
@@ -59,5 +64,6 @@ $capd = '.\build\windows\apps\capd\Release\capd.exe'
 | `src/audio_encoder.*` | AAC / Opus / PCM |
 | `src/muxer.*` | MKV / MP4 書き出し（専用スレッド、書き込み失敗で録画を止める） |
 | `src/recorder.*` | 1 回の録画の組み立て |
+| `src/engine_follower.*` | エンジンに従う通常モード（接続、状態の追跡、`/capture/report`） |
 
 映像以外（設定・音声・エンコード・MKV）は Linux でもビルドでき、`tests/test_capd.cpp` で試験しています。

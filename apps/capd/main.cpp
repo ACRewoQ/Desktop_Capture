@@ -1,14 +1,14 @@
 // capd: capture process. P2 skeleton (lane B): one video mix with one scene (a monitor), recorded together with the
 // engine's audio from shared memory into MKV/MP4.
 //
+//   capd [serve] [--host H] [--port N]   normal mode: follow the engine's /capture settings and record start/stop
 //   capd --version
 //   capd list                     monitors and the hardware encoders that open on this PC (Windows)
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
 //
-// Following the engine's /capture settings and its record start/stop over the control connection is added once
-// the hand-over with mixd is fixed (G2).
 
+#include "src/engine_follower.hpp"
 #include "src/recorder.hpp"
 #include "src/settings.hpp"
 
@@ -54,6 +54,7 @@ void usage() {
     std::cout << R"(capd - capture process (P2 skeleton)
 
 usage:
+  capd [serve] [--host H] [--port N] [--no-video]   follow the engine (default)
   capd --version
   capd list
   capd record [options]
@@ -182,6 +183,24 @@ int cmdProbe(const std::string& file) {
     }
     avformat_close_input(&fmt);
     return 0;
+}
+
+int cmdServe(const std::vector<std::string>& args) {
+    EngineFollower::Options o;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error("missing value for " + a);
+            return args[++i];
+        };
+        if (a == "--host") o.host = next();
+        else if (a == "--port") o.port = static_cast<std::uint16_t>(std::atoi(next().c_str()));
+        else if (a == "--no-video") o.withVideo = false;
+        else if (a == "--shm-suffix") o.shmSuffix = next();
+        else throw std::runtime_error("unknown option " + a);
+    }
+    EngineFollower follower(o);
+    return follower.run(g_stop);
 }
 
 int cmdRecord(const std::vector<std::string>& args) {
@@ -333,10 +352,11 @@ int main(int argc, char** argv) {
                   << dc::shm::kVersion << ")\n";
         return 0;
     }
-    if (args.empty() || args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+    if (!args.empty() && (args[0] == "-h" || args[0] == "--help" || args[0] == "help")) {
         usage();
-        return args.empty() ? 1 : 0;
+        return 0;
     }
+    if (args.empty() || args[0].rfind("--", 0) == 0) args.insert(args.begin(), "serve");
 
     av_log_set_level(AV_LOG_WARNING);  // FFmpeg's per-encoder info lines are noise in the status output
     std::signal(SIGINT, onSignal);
@@ -348,6 +368,7 @@ int main(int argc, char** argv) {
         if (cmd == "list") return cmdList();
 #endif
         if (cmd == "record") return cmdRecord(args);
+        if (cmd == "serve") return cmdServe(args);
         if (cmd == "probe" && args.size() == 1) return cmdProbe(args[0]);
         usage();
         return 1;

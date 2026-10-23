@@ -1,5 +1,6 @@
 // dc-mock-server: fake engine for UI development and protocol tests.
-//   dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--quiet]
+//   dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--quiet]
+//   --capd: recording is done by a connected capd (starting/stopping + /capture/report) instead of faked
 
 #include "mock_engine.hpp"
 
@@ -34,13 +35,14 @@ int main(int argc, char** argv) {
         else if (a == "--bind") opt.bindAddress = next();
         else if (a == "--allow-remote") opt.allowRemote = true;
         else if (a == "--no-meters") mockOpt.meters = false;
+        else if (a == "--capd") mockOpt.delegateCapture = true;
         else if (a == "--quiet") quiet = true;
         else if (a == "--version") {
             std::cout << "dc-mock-server " << dc::kVersionString << " (protocol " << dc::proto::kProtocolVersion
                       << ")\n";
             return 0;
         } else {
-            std::cerr << "usage: dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--quiet]\n";
+            std::cerr << "usage: dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--quiet]\n";
             return 2;
         }
     }

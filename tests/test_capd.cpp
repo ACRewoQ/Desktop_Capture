@@ -1,7 +1,11 @@
 // capd's portable parts: settings from the parameter tree, and the audio time line (shared memory -> recording).
 
 #include "audio_capture.hpp"
+#include "engine_follower.hpp"
+#include "mock_engine.hpp"
 #include "settings.hpp"
+
+#include "dc/control/client.hpp"
 
 #include "dc/protocol/defaults.hpp"
 #include "dc/shmaudio/clock.hpp"
@@ -11,7 +15,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -226,4 +235,90 @@ TEST_CASE("audio follows the recording's time line across engine stops and resta
     CHECK(aligned > 30000);
 
     mem.reset();
+}
+
+// --- capd following the engine (mock engine in capd-delegating mode, protocol.md 5.4.1) ---
+
+
+namespace {
+
+std::string waitForState(control::ControlClient& c, const std::string& want, std::chrono::milliseconds timeout) {
+    const auto end = std::chrono::steady_clock::now() + timeout;
+    std::string state;
+    while (std::chrono::steady_clock::now() < end) {
+        state = c.tree().getAs<std::string>("/capture/state").value_or("");
+        if (state == want) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return state;
+}
+
+}  // namespace
+
+TEST_CASE("capd records when the engine says so and reports back", "[capd]") {
+    asio::io_context io;
+    proto::ParamStore store;
+    control::ControlServer::Options so;
+    so.port = 0;
+    control::ControlServer server(io, store, so);
+    mock::MockEngine::Options mo;
+    mo.meters = false;
+    mo.delegateCapture = true;
+    mock::MockEngine engine(io, server, mo);
+    server.start();
+    engine.start();
+    auto work = asio::make_work_guard(io);
+    std::thread ioThread([&] { io.run(); });
+
+    const auto dir = std::filesystem::temp_directory_path() / ("capd-follow-" + std::to_string(testPid()));
+    std::filesystem::remove_all(dir);
+
+    std::atomic<bool> stop{false};
+    EngineFollower::Options fo;
+    fo.port = server.port();
+    fo.withVideo = false;
+    fo.shmSuffix = ".capd-follow." + std::to_string(testPid());  // no engine audio: silence
+    EngineFollower follower(fo);
+    std::thread followerThread([&] { follower.run(stop); });
+
+    control::ControlClient::Options co;
+    co.port = server.port();
+    co.clientName = "ui";
+    control::ControlClient ui(co);
+    REQUIRE(ui.connect(std::chrono::seconds(2)));
+    // Wait until capd is connected: before that, "starting" would only be picked up late.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    REQUIRE(ui.set({{"/capture/directory", dir.string()}}).get().code == proto::ErrorCode::Ok);
+    REQUIRE(ui.call("/capture/record/start").get().code == proto::ErrorCode::Ok);
+    REQUIRE(waitForState(ui, "recording", std::chrono::seconds(3)) == "recording");
+    const auto file = ui.tree().getAs<std::string>("/capture/file").value_or("");
+    CHECK(file.find(dir.string()) == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    REQUIRE(ui.call("/capture/record/stop").get().code == proto::ErrorCode::Ok);
+    REQUIRE(waitForState(ui, "idle", std::chrono::seconds(3)) == "idle");
+    CHECK(ui.tree().getAs<std::int64_t>("/capture/elapsed_ms").value_or(0) >= 400);
+    CHECK(std::filesystem::file_size(std::filesystem::path(file)) > 1000);
+
+    // A recording capd cannot start (the folder is a file) ends in the error state with the reason.
+    const auto blocker = dir / "not-a-folder";
+    { std::ofstream(blocker) << "x"; }
+    REQUIRE(ui.set({{"/capture/directory", (blocker / "sub").string()}}).get().code == proto::ErrorCode::Ok);
+    REQUIRE(ui.call("/capture/record/start").get().code == proto::ErrorCode::Ok);
+    REQUIRE(waitForState(ui, "error", std::chrono::seconds(3)) == "error");
+    CHECK_FALSE(ui.tree().getAs<std::string>("/capture/error").value_or("").empty());
+
+    // Only a service client may report.
+    CHECK(ui.call("/capture/report", {{"state", std::string("idle")}}).get().code ==
+          proto::ErrorCode::Unauthorized);
+
+    ui.disconnect();
+    stop = true;
+    followerThread.join();
+    engine.stop();
+    server.stop();
+    work.reset();
+    asio::post(io, [&] { io.stop(); });
+    ioThread.join();
+    std::filesystem::remove_all(dir);
 }
