@@ -35,6 +35,7 @@ constexpr PROPERTYKEY kDeviceFormatKey = {{0xf19f064d, 0x82c, 0x4e27, {0xbc, 0x7
 constexpr HRESULT kDeviceInvalidated = static_cast<HRESULT>(0x88890004L); // AUDCLNT_E_DEVICE_INVALIDATED
 constexpr HRESULT kNotAligned = static_cast<HRESULT>(0x88890019L);        // AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED
 constexpr HRESULT kDeviceInUse = static_cast<HRESULT>(0x8889000AL);       // AUDCLNT_E_DEVICE_IN_USE
+constexpr REFERENCE_TIME kSharedInputBuffer = 1'000'000; // 100 ms
 constexpr HRESULT kUnsupportedFormat = static_cast<HRESULT>(0x88890008L); // AUDCLNT_E_UNSUPPORTED_FORMAT
 constexpr HRESULT kExclusiveNotAllowed = static_cast<HRESULT>(0x8889000EL); // AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED
 
@@ -256,7 +257,10 @@ public:
             format_ = makeFormat(SampleKind::Float32, channels, mask);
             const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
                                 AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-            hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, defPeriod, 0, &format_.wfx.Format, nullptr);
+            // inputs get a deeper buffer than one period: events still come every period, but a late
+            // read no longer overflows it (G2: the UR22 reported data discontinuities with 10 ms)
+            const REFERENCE_TIME buffer = input_ ? std::max<REFERENCE_TIME>(defPeriod, kSharedInputBuffer) : defPeriod;
+            hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, buffer, 0, &format_.wfx.Format, nullptr);
             if (FAILED(hr)) return fail(error, "Initialize (shared)", hr);
             period_ = hnsToFrames(defPeriod);
         } else {

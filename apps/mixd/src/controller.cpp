@@ -6,7 +6,9 @@
 #include "dc/version.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <iostream>
 #include <optional>
 
@@ -16,6 +18,20 @@ using namespace dc::proto;
 using control::CallContext;
 
 namespace {
+
+// "HH:MM:SS " in local time, so log lines can be matched with what someone heard
+std::string clockStamp() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof buf, "%H:%M:%S ", &tm);
+    return buf;
+}
 
 Result error(ErrorCode code, std::string message) {
     Result r;
@@ -189,7 +205,7 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
     if (state.errors != lastErrors_) {
         for (const auto& e : state.errors) {
             if (std::find(lastErrors_.begin(), lastErrors_.end(), e) != lastErrors_.end()) continue;
-            if (options_.verbose) std::cout << "device error: " << e << std::endl;
+            if (options_.verbose) std::cout << clockStamp() << "device error: " << e << std::endl;
             server_.broadcastEventNow({"device.error", {{"message", e}}});
         }
         lastErrors_ = state.errors;
@@ -198,7 +214,7 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
         if (options_.verbose)
             for (const auto& n : state.notes)
                 if (std::find(lastNotes_.begin(), lastNotes_.end(), n) == lastNotes_.end())
-                    std::cout << "device note: " << n << std::endl;
+                    std::cout << clockStamp() << "device note: " << n << std::endl;
         lastNotes_ = state.notes;
     }
     if (!samePorts(state.ports, ports_)) {
@@ -257,7 +273,7 @@ void Controller::scheduleStats() {
                             {"/system/xruns", static_cast<std::int64_t>(glitches)}});
         if (glitches != loggedGlitches_) {
             // where the dropouts come from (device, clock bridge), for diagnosis
-            std::cout << "xruns " << glitches << " (+" << (glitches - loggedGlitches_) << ")" << std::endl;
+            std::cout << clockStamp() << "xruns " << glitches << " (+" << (glitches - loggedGlitches_) << ")" << std::endl;
             for (const auto& line : devices_.glitchDetails()) std::cout << "  " << line << std::endl;
             loggedGlitches_ = glitches;
         }
