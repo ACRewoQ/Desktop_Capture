@@ -125,6 +125,7 @@ void MockEngine::registerMethods() {
     server_.registerMethod("/mixer/track/move", [this](CallContext& ctx) { return moveTrack(ctx); });
     server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
     server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
+    server_.registerMethod("/capture/report", [this](CallContext& ctx) { return captureReport(ctx); });
 }
 
 std::vector<int> MockEngine::tracksInOrder() const {
@@ -219,10 +220,18 @@ Result MockEngine::moveTrack(CallContext& ctx) {
 
 Result MockEngine::startRecording(CallContext& ctx) {
     const auto& tree = server_.store().tree();
-    if (tree.getAs<std::string>("/capture/state") != "idle")
+    const auto state = tree.getAs<std::string>("/capture/state").value_or("idle");
+    if (state != "idle" && !(options_.delegateCapture && state == "error"))
         return error(ErrorCode::Conflict, "already recording");
     if (tree.getAs<std::int64_t>("/capture/mix").value_or(0) == 0)
         return error(ErrorCode::Conflict, "no video mix assigned to the capture output");
+
+    if (options_.delegateCapture) {
+        // capd sees "starting", records, and answers with /capture/report.
+        server_.publishNow({{"/capture/state", std::string("starting")}, {"/capture/error", std::string()}}, {},
+                           ctx.call.id, ctx.client.name);
+        return {};
+    }
 
     char name[64];
     const std::time_t now = std::time(nullptr);
@@ -250,6 +259,10 @@ Result MockEngine::startRecording(CallContext& ctx) {
 Result MockEngine::stopRecording(CallContext& ctx) {
     const auto& tree = server_.store().tree();
     if (tree.getAs<std::string>("/capture/state") != "recording") return error(ErrorCode::Conflict, "not recording");
+    if (options_.delegateCapture) {
+        server_.publishNow({{"/capture/state", std::string("stopping")}}, {}, ctx.call.id, ctx.client.name);
+        return {};
+    }
     recordTimer_.cancel();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                                recordStart_).count();
@@ -257,6 +270,43 @@ Result MockEngine::stopRecording(CallContext& ctx) {
     server_.publishNow({{"/capture/state", std::string("idle")}, {"/capture/elapsed_ms", std::int64_t{elapsed}}}, {},
                        ctx.call.id, ctx.client.name);
     server_.broadcastEventNow({"capture.stopped", {{"file", file}, {"duration_ms", std::int64_t{elapsed}}}});
+    return {};
+}
+
+Result MockEngine::captureReport(CallContext& ctx) {
+    if (ctx.client.role != ClientRole::Service) return error(ErrorCode::Unauthorized, "capd (service) only");
+    const auto& args = ctx.call.args;
+    auto str = [&](const char* key) {
+        auto it = args.find(key);
+        const std::string* v = it == args.end() ? nullptr : std::get_if<std::string>(&it->second);
+        return v ? *v : std::string();
+    };
+    const std::string state = str("state");
+    const std::string file = str("file");
+    if (state == "recording") {
+        recordStart_ = std::chrono::steady_clock::now();
+        server_.publishNow({{"/capture/state", std::string("recording")},
+                            {"/capture/elapsed_ms", std::int64_t{0}},
+                            {"/capture/file", file},
+                            {"/capture/error", std::string()}},
+                           {}, ctx.call.id, ctx.client.name);
+        server_.broadcastEventNow({"capture.started", {{"file", file}}});
+        scheduleRecordingClock();
+    } else if (state == "idle") {
+        recordTimer_.cancel();
+        std::int64_t duration = 0;
+        if (auto it = args.find("duration_ms"); it != args.end())
+            if (auto* d = std::get_if<std::int64_t>(&it->second)) duration = *d;
+        server_.publishNow({{"/capture/state", std::string("idle")}, {"/capture/elapsed_ms", duration}}, {},
+                           ctx.call.id, ctx.client.name);
+        server_.broadcastEventNow({"capture.stopped", {{"file", file}, {"duration_ms", duration}}});
+    } else if (state == "error") {
+        recordTimer_.cancel();
+        server_.publishNow({{"/capture/state", std::string("error")}, {"/capture/error", str("error")}}, {},
+                           ctx.call.id, ctx.client.name);
+    } else {
+        return error(ErrorCode::BadRequest, "state must be recording, idle or error");
+    }
     return {};
 }
 

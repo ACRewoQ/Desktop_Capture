@@ -53,11 +53,29 @@ if (-not $SkipSmoke) {
     $cliExe = Join-Path $bin "tools/dc_cli/$Config/dc-cli.exe"
     $toneExe = Join-Path $bin "tools/shm_tone/$Config/dc-shm-tone.exe"
 
+    $uiExe = Join-Path $bin "apps/ui/$Config/dc-ui.exe"
+    # dc-ui is a Qt GUI program: Qt DLLs from DC_QT_DIR, and its output only reaches a redirected stdout.
+    if ($env:DC_QT_DIR -and -not (Test-Path (Join-Path (Split-Path $uiExe) 'Qt6Core.dll'))) {
+        $env:PATH = (Join-Path $env:DC_QT_DIR 'bin') + ';' + $env:PATH
+    }
+    function Invoke-Gui($exe, [string[]]$arguments, [int]$timeoutSec = 60) {
+        $log = [System.IO.Path]::GetTempFileName()
+        $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -RedirectStandardOutput $log
+        $null = $p.Handle # Windows PowerShell 5.1 leaves ExitCode empty unless the handle was taken before exit
+        if (-not $p.WaitForExit($timeoutSec * 1000)) { Stop-Process -Id $p.Id -ErrorAction SilentlyContinue; $code = -1 }
+        else { $code = $p.ExitCode }
+        $out = Get-Content $log -Encoding UTF8
+        Remove-Item $log -ErrorAction SilentlyContinue
+        return @{ Code = $code; Output = $out }
+    }
+
     Step 'Smoke: the three process skeletons start'
-    foreach ($exe in @("apps/mixd/$Config/mixd.exe", "apps/capd/$Config/capd.exe", "apps/ui/$Config/dc-ui.exe")) {
+    foreach ($exe in @("apps/mixd/$Config/mixd.exe", "apps/capd/$Config/capd.exe")) {
         $out = & (Join-Path $bin $exe) --version
         Check ($LASTEXITCODE -eq 0 -and $out) "$exe --version -> $out"
     }
+    $r = Invoke-Gui $uiExe @('--version')
+    Check ($r.Code -eq 0 -and $r.Output) "apps/ui/$Config/dc-ui.exe --version -> $($r.Output)"
 
     Step 'Smoke: mock server <-> CLI client (separate processes)'
     $port = 47811
@@ -81,6 +99,20 @@ if (-not $SkipSmoke) {
         Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
     }
 
+    if ($r.Output -match 'Qt ') {
+        Step 'Smoke: dc-ui self test against the mock server (a window opens for a few seconds)'
+        $port = 47812
+        $mock = Start-Process -FilePath $mockExe -ArgumentList '--port', $port, '--quiet' -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 800
+            $r = Invoke-Gui $uiExe @('--selftest', '--connect', "127.0.0.1:$port")
+            $r.Output | ForEach-Object { Write-Host "  $_" }
+            Check ($r.Code -eq 0 -and ($r.Output -match 'SELFTEST PASSED')) 'dc-ui --selftest'
+        } finally {
+            Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
+        }
+    }
+
     Step 'Smoke: shared memory audio across processes'
     $writer = Start-Process -FilePath $toneExe -ArgumentList 'write', '--seconds', '4' -PassThru -WindowStyle Hidden
     try {
@@ -93,6 +125,22 @@ if (-not $SkipSmoke) {
         Check ($read -match ' 1=0\.2[0-9]') 'track 1 slot carries the tone'
     } finally {
         Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue
+    }
+
+    Step 'Smoke: capd records the shared-memory audio (audio only, no GPU)'
+    $capdExe = Join-Path $bin "apps/capd/$Config/capd.exe"
+    $recFile = Join-Path $env:TEMP "dc-capd-smoke-$PID.mkv"
+    $writer = Start-Process -FilePath $toneExe -ArgumentList 'write', '--seconds', '5' -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 500
+        $res = & $capdExe record --no-video --seconds 2 --audio master,track/1 --output $recFile | Select-Object -Last 1
+        Write-Host "  $res"
+        Check ($LASTEXITCODE -eq 0 -and $res -match 'error=""') 'capd record exits cleanly'
+        Check ($res -match 'audio_silence_frames=0 ') 'no silence while the engine stand-in runs'
+        Check ((Test-Path $recFile) -and (Get-Item $recFile).Length -gt 10000) 'MKV file written'
+    } finally {
+        Stop-Process -Id $writer.Id -ErrorAction SilentlyContinue
+        Remove-Item $recFile -ErrorAction SilentlyContinue
     }
 
     Step 'Smoke: LAN audio stream across processes (UDP loopback)'

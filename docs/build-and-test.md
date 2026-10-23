@@ -59,8 +59,8 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | 実行ファイル | 内容 |
 |---|---|
 | `apps\mixd\Debug\mixd.exe` | 音声エンジン（P0 では起動して待つだけ） |
-| `apps\capd\Debug\capd.exe` | キャプチャー（P0 では起動して待つだけ） |
-| `apps\ui\Debug\dc-ui.exe` | UI（P0 では Qt なしの仮の実行ファイル） |
+| `apps\capd\Debug\capd.exe` | キャプチャー（P2 骨格：`capd list`、`capd record`。[capd.md](capd.md)） |
+| `apps\ui\Debug\dc-ui.exe` | UI（Qt 6 Quick。Qt が見つからないときは仮の実行ファイル） |
 | `tools\mock_server\Debug\dc-mock-server.exe` | モックサーバー（偽エンジン） |
 | `tools\dc_cli\Debug\dc-cli.exe` | テスト用クライアント |
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
@@ -88,6 +88,30 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 ```
 
 `watch` を開いたまま別のターミナルから `set` すると、差分がすぐ届くのを確認できます。
+
+### UI をモックサーバーで動かす
+
+`dc-ui` は Qt の DLL を `DC_QT_DIR\bin` から読みます（`scripts\test.ps1` は自動で PATH に足します）。
+
+```powershell
+$env:PATH = "$env:DC_QT_DIR\bin;$env:PATH"
+.\build\windows\tools\mock_server\Debug\dc-mock-server.exe          # 1つ目
+.\build\windows\apps\ui\Debug\dc-ui.exe                             # 2つ目（既定は 127.0.0.1:47800）
+.\build\windows\apps\ui\Debug\dc-ui.exe --connect 192.168.1.10 --remote --fullscreen   # リモコンとして
+```
+
+| 操作 | 方法 |
+|---|---|
+| フェーダー | 縦にドラッグ（指を置いた位置から相対）。ダブルタップで 0 dB |
+| パン | 横にドラッグ。ダブルタップで中央 |
+| LC / HC（ローカット・ハイカット） | タップで入切、縦ドラッグで周波数 |
+| M / S | ミュート / ソロ |
+| トラックの追加 | 一番右の「+ ステレオ」「+ モノ」（最大 64） |
+| 移動・削除 | トラック名をタップしてメニュー（削除は 2 回押し） |
+| 録画 | 右上の「録画」ボタン。録画中は経過時間を表示し、もう一度押すと停止 |
+| クリップ表示 | メーター上の赤い印をタップで消す |
+
+`dc-ui --selftest --connect 127.0.0.1:<port>` は、つないだ先でトラックの追加・編集・削除、録画の開始・停止、メーター受信、画面の描画を自動で確かめて終了します（つないだ先の状態を変えるので、モックサーバー相手に使います）。
 
 ### 共有メモリ音声を試す
 
