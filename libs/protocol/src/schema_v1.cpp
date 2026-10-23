@@ -154,6 +154,8 @@ Schema buildV1() {
     sc.addMethod({"/mixer/track/move", "track:int, position:int", "nil", "並び順を変える", "P0"});
     sc.addMethod({"/capture/record/start", "", "nil", "録画開始", "P0"});
     sc.addMethod({"/capture/record/stop", "", "nil", "録画停止", "P0"});
+    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?", "nil",
+                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ）", "P2"});
     sc.addMethod({"/track/#/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/track/#/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
