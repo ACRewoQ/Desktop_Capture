@@ -37,10 +37,10 @@ cd C:\dev\Desktop_Capture
 
 | 段階 | 内容 |
 |---|---|
-| Configure | `cmake --preset windows`。初回は vcpkg が asio・msgpack・Catch2 を取得・ビルドします（数分） |
+| Configure | `cmake --preset windows`。初回は vcpkg が asio・msgpack・Catch2・Opus などを取得・ビルドします（数分） |
 | Build | 全ターゲットをビルド（既定は Debug。`-Config Release` も可） |
-| ctest | 単体テストと結合テスト（47 件）。モックサーバーと複数クライアントの TCP 通信、共有メモリのリングを含む |
-| Smoke | 別プロセス同士の確認：3 プロセスの起動、モックサーバー ⇔ dc-cli、dc-shm-tone の書き手 ⇔ 読み手 |
+| ctest | 単体テストと結合テスト。モックサーバーと複数クライアントの TCP 通信、共有メモリのリング、LAN メディア伝送（ネットワーク模擬と UDP ループバック）を含む |
+| Smoke | 別プロセス同士の確認：3 プロセスの起動、モックサーバー ⇔ dc-cli、dc-shm-tone の書き手 ⇔ 読み手、dc-lan-tone の送信 ⇔ 受信（UDP） |
 
 ## 3. 手で動かす場合
 
@@ -64,6 +64,8 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | `tools\mock_server\Debug\dc-mock-server.exe` | モックサーバー（偽エンジン） |
 | `tools\dc_cli\Debug\dc-cli.exe` | テスト用クライアント |
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
+| `tools\lan_sim\Debug\dc-lan-sim.exe` | LAN 音声伝送のネットワーク模擬シミュレーター |
+| `tools\lan_tone\Debug\dc-lan-tone.exe` | LAN 音声伝送の送受信テスト（実 UDP、PC 間でも使える） |
 | `tests\Debug\dc_tests.exe` | テスト本体 |
 
 ### モックサーバーで遊ぶ
@@ -110,7 +112,7 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 プロトコル・モックサーバー・共有メモリのライブラリは Windows API に依存しないので、Linux でもビルドとテストができます（Claude のクラウド環境での確認用）。Windows 専用の機能（WASAPI、WGC など）が入るフェーズ 2 以降は Windows が正です。
 
 ```bash
-sudo apt install cmake ninja-build g++ libasio-dev libmsgpack-cxx-dev catch2
+sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev
 cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 ```
 
