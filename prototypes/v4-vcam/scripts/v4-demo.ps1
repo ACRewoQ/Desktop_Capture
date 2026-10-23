@@ -7,7 +7,7 @@
   Run with -NoFeed to see the "no signal" picture instead.
 #>
 param([switch]$NoFeed)
-$bin = Join-Path $env:ProgramData 'DesktopCapture\vcam\bin'
+$bin = (Get-Content (Join-Path $env:ProgramData 'DesktopCapture\vcam\current.txt') -Raw -ErrorAction Stop).Trim()  # set by v4-register.ps1
 $cam = $null
 if ([Environment]::OSVersion.Version.Build -ge 22000) {  # MF camera: Windows 11 only
     $cam = Start-Process -FilePath (Join-Path $bin 'vcam-mf-ctl.exe') -ArgumentList 'run' -PassThru -WindowStyle Hidden

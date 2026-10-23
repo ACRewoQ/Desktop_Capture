@@ -7,7 +7,7 @@
 param([double]$Seconds = 10)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8  # vcam-probe prints device names as UTF-8
-$bin = Join-Path $env:ProgramData 'DesktopCapture\vcam\bin'
+$bin = (Get-Content (Join-Path $env:ProgramData 'DesktopCapture\vcam\current.txt') -Raw -ErrorAction Stop).Trim()  # set by v4-register.ps1
 $ctl = Join-Path $bin 'vcam-mf-ctl.exe'
 $feed = Join-Path $bin 'vcam-feed.exe'
 $probe = Join-Path $bin 'vcam-probe.exe'
