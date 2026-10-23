@@ -22,6 +22,7 @@
 | `tools/dc_cli` | テスト用クライアント（コマンドライン） |
 | `tools/shm_tone` | 共有メモリ音声の試験用の書き手・読み手 |
 | `tools/capbench` | P1-V3 検証ツール：画面キャプチャー（WGC / Desktop Duplication）→ GPU 上で NV12 変換 → FFmpeg ハードウェアエンコードの負荷計測（Windows のみ）。結果は [docs/verification/v3-capture-encode.md](docs/verification/v3-capture-encode.md) |
+| `tools/loopback_probe` | P1-V1 検証ツール：アプリ単位の音声キャプチャー（WASAPI Process Loopback）の自己テストと手動キャプチャー（Windows のみ）。結果は [docs/verification/v1-process-loopback.md](docs/verification/v1-process-loopback.md) |
 | `tests` | 単体テスト・結合テスト（Catch2） |
 | `docs/spec` | [制御プロトコル仕様](docs/spec/protocol.md)、[パラメーター一覧](docs/spec/protocol-params.md)、[共有メモリ音声フォーマット](docs/spec/shm-audio.md) |
 
