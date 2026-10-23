@@ -1,0 +1,126 @@
+// dc-ui: the mixer user interface, for the local PC and the remote controller (Qt 6 Quick, no
+// QtQuick.Controls; see docs/verification/v5-remote-lite.md). Talks to mixd, or to dc-mock-server
+// during development, over the control protocol.
+//
+//   dc-ui [--connect HOST[:PORT]] [--remote] [--fullscreen] [--backend default|d3d11|software]
+//         [--selftest]
+
+#include "connection.hpp"
+#include "recorder.hpp"
+#include "selftest.hpp"
+#include "strip_model.hpp"
+
+#include "dc/protocol/constants.hpp"
+#include "dc/version.hpp"
+
+#include <QCommandLineParser>
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QTimer>
+
+#include <cstdio>
+#include <cstring>
+
+namespace {
+
+int g_qmlWarnings = 0;
+QtMessageHandler g_previousHandler = nullptr;
+
+// Counts QML warnings (binding errors, missing types) so that the self test catches a broken screen.
+void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+    if (type >= QtWarningMsg && (msg.contains(QLatin1String("qml")) || msg.contains(QLatin1String(".qml"))))
+        ++g_qmlWarnings;
+    if (g_previousHandler) g_previousHandler(type, ctx, msg);
+}
+
+void print(const QString& line) {
+    std::fprintf(stdout, "%s\n", line.toUtf8().constData());
+    std::fflush(stdout);
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--version") == 0) {
+            std::printf("dc-ui %s (protocol %u, Qt %s)\n", dc::kVersionString, dc::proto::kProtocolVersion, qVersion());
+            return 0;
+        }
+
+#ifdef _WIN32
+    // Qt 6.10's DXGI VBlank thread never wakes on some setups (Reo's PC with a virtual monitor),
+    // which freezes D3D11 after the first frame. Found in P1/V6; must be set before the app object.
+    if (qEnvironmentVariableIsEmpty("QT_D3D_NO_VBLANK_THREAD")) qputenv("QT_D3D_NO_VBLANK_THREAD", "1");
+#endif
+    QGuiApplication app(argc, argv);
+    QGuiApplication::setApplicationName(QStringLiteral("dc-ui"));
+    QGuiApplication::setApplicationVersion(QString::fromLatin1(dc::kVersionString));
+
+    QCommandLineParser cli;
+    cli.setApplicationDescription(QStringLiteral("Desktop Capture mixer UI"));
+    cli.addHelpOption();
+    cli.addOptions({
+        {"connect", "Engine (mixd or dc-mock-server) to control.", "host[:port]", "127.0.0.1"},
+        {"remote", "Connect as a remote controller (role 1) instead of the local UI."},
+        {"fullscreen", "Show full screen (remote controller)."},
+        {"backend", "Scene graph backend: default (D3D11 on Windows), d3d11 or software.", "name", "default"},
+        {"selftest", "Run the scripted check against the engine, print the result and exit (changes its state)."},
+        {"no-meters", "With --selftest: do not expect meter packets."},
+    });
+    cli.process(app);
+
+    const QString backend = cli.value("backend");
+    if (backend == QLatin1String("software")) QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    else if (backend == QLatin1String("d3d11")) QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+
+    const bool selfTest = cli.isSet("selftest");
+    if (selfTest) g_previousHandler = qInstallMessageHandler(messageHandler);
+
+    dc::ui::Connection::Options opt;
+    const QStringList hostPort = cli.value("connect").split(QLatin1Char(':'));
+    opt.host = hostPort.value(0);
+    opt.port = hostPort.size() > 1 ? static_cast<quint16>(hostPort[1].toUInt()) : dc::proto::kDefaultControlPort;
+    opt.role = cli.isSet("remote") ? dc::proto::ClientRole::Remote : dc::proto::ClientRole::Local;
+    opt.clientName = cli.isSet("remote") ? QStringLiteral("dc-ui-remote") : QStringLiteral("dc-ui");
+
+    dc::ui::Connection connection(opt);
+    dc::ui::StripModel tracks(connection, dc::ui::StripModel::Kind::Tracks);
+    dc::ui::StripModel master(connection, dc::ui::StripModel::Kind::Master);
+    dc::ui::Recorder recorder(connection);
+
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("connection"), &connection);
+    engine.rootContext()->setContextProperty(QStringLiteral("tracks"), &tracks);
+    engine.rootContext()->setContextProperty(QStringLiteral("master"), &master);
+    engine.rootContext()->setContextProperty(QStringLiteral("recorder"), &recorder);
+    engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
+    engine.load(QUrl(QStringLiteral("qrc:/DcUi/Main.qml")));
+    if (engine.rootObjects().isEmpty()) return 1;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (!window) return 1;
+
+    connection.start();
+    if (!selfTest) return QGuiApplication::exec();
+
+    int frames = 0;
+    QObject::connect(window, &QQuickWindow::frameSwapped, [&] { ++frames; });
+    QTimer::singleShot(0, [&] {
+        print(QStringLiteral("dc-ui self test against %1").arg(connection.address()));
+        dc::ui::SelfTestOptions st;
+        st.expectMeters = !cli.isSet("no-meters");
+        int failures = dc::ui::runSelfTest(connection, tracks, master, recorder, print, st);
+        // The screen kept drawing while the models changed (catches the D3D11 first-frame freeze).
+        const bool drawing = dc::ui::waitUntil([&] { return frames >= 10; }, 3000);
+        print(QStringLiteral("%1 screen keeps drawing (%2 frames)").arg(drawing ? "  OK  " : "  FAIL", QString::number(frames)));
+        if (!drawing) ++failures;
+        print(QStringLiteral("%1 no QML warnings (%2)").arg(g_qmlWarnings == 0 ? "  OK  " : "  FAIL").arg(g_qmlWarnings));
+        if (g_qmlWarnings) ++failures;
+        print(failures ? QStringLiteral("SELFTEST FAILED (%1)").arg(failures) : QStringLiteral("SELFTEST PASSED"));
+        connection.stop();
+        QGuiApplication::exit(failures ? 1 : 0);
+    });
+    return QGuiApplication::exec();
+}

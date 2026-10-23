@@ -20,3 +20,7 @@ if(DC_BUILD_TOOLS)
         COMMAND ${CMAKE_COMMAND} -DDC_CLI=$<TARGET_FILE:dc-cli> -DDOC=${PROJECT_SOURCE_DIR}/docs/spec/protocol-params.md
                 -P ${PROJECT_SOURCE_DIR}/cmake/CheckSchemaDoc.cmake)
 endif()
+
+if(DC_HAVE_QT AND TARGET dc::ui_core)
+    add_subdirectory(ui)
+endif()
