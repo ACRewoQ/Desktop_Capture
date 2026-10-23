@@ -55,6 +55,33 @@ void LOG(const char* fmt, ...) {
         }                                                                \
     } while (0)
 
+// Undocumented attribute the Frame Server sets on the activate: PID of the camera app (as used by
+// the VCamSample reference implementation). Only for the log.
+constexpr GUID kFrameServerClientPid = {0x5f8d322e, 0x0fe4, 0x43e4, {0x9e, 0x50, 0xd8, 0x3e, 0xcd, 0x9f, 0xc2, 0xb8}};
+
+std::string guid_str(REFGUID g) {
+    wchar_t w[64] = {};
+    StringFromGUID2(g, w, 64);
+    char a[64] = {};
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, a, sizeof(a), nullptr, nullptr);
+    return a;
+}
+
+std::string process_name(DWORD pid) {
+    std::string out = "?";
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        wchar_t path[MAX_PATH];
+        DWORD n = MAX_PATH;
+        if (QueryFullProcessImageNameW(h, 0, path, &n)) {
+            char a[MAX_PATH * 3] = {};
+            WideCharToMultiByte(CP_UTF8, 0, path, -1, a, sizeof(a), nullptr, nullptr);
+            out = a;
+        }
+        CloseHandle(h);
+    }
+    return out;
+}
+
 constexpr UINT32 kFps = 30;
 constexpr DWORD kStreamId = 0;
 
@@ -220,6 +247,12 @@ public:
     }
 
     IMFAttributes* attributes() const { return attributes_.Get(); }
+
+    HRESULT set_provided_allocator(IUnknown* a) {
+        std::lock_guard lock(mutex_);
+        provided_allocator_.Reset();
+        return a ? a->QueryInterface(IID_PPV_ARGS(&provided_allocator_)) : S_OK;
+    }
     IMFStreamDescriptor* descriptor() const { return descriptor_.Get(); }
 
     HRESULT Start(IMFMediaType* type, const PROPVARIANT* start_pos) {
@@ -230,12 +263,18 @@ public:
         UINT32 w = 0, h = 0;
         MFGetAttributeSize(type, MF_MT_FRAME_SIZE, &w, &h);
         width_ = int(w), height_ = int(h);
+        // Prefer the allocator the Frame Server hands over (IMFSampleAllocatorControl), as the
+        // reference implementation does; otherwise use our own system-memory one.
         allocator_.Reset();
-        RETURN_IF_FAILED_LOG(MFCreateVideoSampleAllocatorEx(IID_PPV_ARGS(&allocator_)));
-        ComPtr<IMFAttributes> alloc_attr;
-        MFCreateAttributes(&alloc_attr, 1);
-        RETURN_IF_FAILED_LOG(allocator_->InitializeSampleAllocatorEx(4, 10, alloc_attr.Get(), type));
-        LOG("stream start: %s %dx%d", subtype_ == MFVideoFormat_NV12 ? "NV12" : "RGB32", width_, height_);
+        if (provided_allocator_) {
+            allocator_ = provided_allocator_;
+            if (allocator_) allocator_->UninitializeSampleAllocator();
+        } else {
+            RETURN_IF_FAILED_LOG(MFCreateVideoSampleAllocatorEx(IID_PPV_ARGS(&allocator_)));
+        }
+        RETURN_IF_FAILED_LOG(allocator_->InitializeSampleAllocator(10, type));
+        LOG("stream start: %s %dx%d (%s allocator)", subtype_ == MFVideoFormat_NV12 ? "NV12" : "RGB32", width_, height_,
+            provided_allocator_ ? "provided" : "own");
         state_ = MF_STREAM_STATE_RUNNING;
         pending_tokens_.clear();
         pending_ = 0;
@@ -464,6 +503,7 @@ private:
     ComPtr<IMFAttributes> attributes_;
     ComPtr<IMFStreamDescriptor> descriptor_;
     ComPtr<IMFVideoSampleAllocatorEx> allocator_;
+    ComPtr<IMFVideoSampleAllocatorEx> provided_allocator_;
     std::deque<ComPtr<IUnknown>> pending_tokens_;
     size_t pending_ = 0;
     std::thread worker_;
@@ -478,7 +518,7 @@ private:
 class VCamSource
     : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
                           ChainInterfaces<IMFMediaSourceEx, IMFMediaSource, IMFMediaEventGenerator>, IMFGetService,
-                          IKsControl> {
+                          IKsControl, IMFSampleAllocatorControl> {
 public:
     HRESULT Initialize(IMFAttributes* activate_attributes) {
         LOG("source initialize");
@@ -545,6 +585,7 @@ public:
         return pd_->Clone(out);
     }
     IFACEMETHODIMP Start(IMFPresentationDescriptor* pd, const GUID* time_format, const PROPVARIANT* start_pos) override {
+        LOG("source Start");
         if (!pd) return E_INVALIDARG;
         if (time_format && *time_format != GUID_NULL) return MF_E_UNSUPPORTED_TIME_FORMAT;
         std::lock_guard lock(mutex_);
@@ -602,10 +643,32 @@ public:
         (*out)->AddRef();
         return S_OK;
     }
-    IFACEMETHODIMP SetD3DManager(IUnknown*) override { return S_OK; }  // system-memory samples only
+    IFACEMETHODIMP SetD3DManager(IUnknown* m) override {  // system-memory samples only (prototype)
+        LOG("SetD3DManager %p (ignored)", static_cast<void*>(m));
+        return S_OK;
+    }
 
     // IMFGetService
-    IFACEMETHODIMP GetService(REFGUID, REFIID, LPVOID*) override { return MF_E_UNSUPPORTED_SERVICE; }
+    IFACEMETHODIMP GetService(REFGUID sid, REFIID iid, LPVOID*) override {
+        LOG("GetService %s %s -> unsupported", guid_str(sid).c_str(), guid_str(iid).c_str());
+        return MF_E_UNSUPPORTED_SERVICE;
+    }
+
+    // IMFSampleAllocatorControl
+    IFACEMETHODIMP SetDefaultAllocator(DWORD id, IUnknown* allocator) override {
+        LOG("SetDefaultAllocator stream %lu %p", id, static_cast<void*>(allocator));
+        if (id != kStreamId) return MF_E_INVALIDSTREAMNUMBER;
+        std::lock_guard lock(mutex_);
+        if (shutdown_) return MF_E_SHUTDOWN;
+        return stream_->set_provided_allocator(allocator);
+    }
+    IFACEMETHODIMP GetAllocatorUsage(DWORD id, DWORD* input_id, MFSampleAllocatorUsage* usage) override {
+        if (!input_id || !usage) return E_POINTER;
+        if (id != kStreamId) return MF_E_INVALIDSTREAMNUMBER;
+        *input_id = id;
+        *usage = MFSampleAllocatorUsage_UsesProvidedAllocator;
+        return S_OK;
+    }
 
     // IKsControl
     IFACEMETHODIMP KsProperty(PKSPROPERTY, ULONG, LPVOID, ULONG, ULONG*) override {
@@ -638,7 +701,10 @@ public:
     VCamActivate() {
         MFStartup(MF_VERSION, MFSTARTUP_LITE);
         MFCreateAttributes(&attr_, 4);
-        LOG("activate created");
+        // Same activate attributes as the reference implementation (VCamSample).
+        attr_->SetUINT32(MF_VIRTUALCAMERA_PROVIDE_ASSOCIATED_CAMERA_SOURCES, 1);
+        attr_->SetGUID(MFT_TRANSFORM_CLSID_Attribute, dc::vcam::kMfClsid);
+        LOG("activate created in %s", process_name(GetCurrentProcessId()).c_str());
     }
     ~VCamActivate() {
         attr_.Reset();
@@ -646,7 +712,9 @@ public:
     }
 
     IFACEMETHODIMP ActivateObject(REFIID riid, void** ppv) override {
-        LOG("ActivateObject");
+        UINT32 pid = 0;
+        attr_->GetUINT32(kFrameServerClientPid, &pid);
+        LOG("ActivateObject %s, client pid %u %s", guid_str(riid).c_str(), pid, pid ? process_name(pid).c_str() : "");
         if (!ppv) return E_POINTER;
         if (!source_) {
             auto s = Make<VCamSource>();
@@ -654,7 +722,9 @@ public:
             RETURN_IF_FAILED_LOG(s->Initialize(attr_.Get()));
             source_ = s;
         }
-        return source_.CopyTo(riid, ppv);
+        const HRESULT hr = source_.CopyTo(riid, ppv);
+        if (FAILED(hr)) LOG("ActivateObject: QueryInterface failed 0x%08lx", hr);
+        return hr;
     }
     IFACEMETHODIMP ShutdownObject() override {
         if (source_) source_->Shutdown();
