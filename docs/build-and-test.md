@@ -122,7 +122,7 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 & "$env:VCPKG_ROOT\vcpkg.exe" x-update-baseline --add-initial-baseline
 ```
 
-FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。JUCE は V7 で導入方法を確かめました（下記の 7 章）。Qt は V5 で確かめています。
+FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。Qt 6 は V5 で導入しました（vcpkg ではなく `scripts\install-qt.ps1` でビルド済みを `C:\dev\Qt` に入れ、環境変数 `DC_QT_DIR` で見つけます。見つからなければ Qt を使うターゲットは飛ばします）。JUCE は V7 で導入方法を確かめました（下記の 7 章）。
 
 ## 7. JUCE を使うターゲット（VST3 ホスト、V7）
 

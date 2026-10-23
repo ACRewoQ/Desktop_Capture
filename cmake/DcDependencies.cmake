@@ -41,6 +41,8 @@ if(WIN32 AND DC_BUILD_TOOLS)
     target_link_libraries(dc_ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
 endif()
 
+# --- Qt 6 (UI and Qt based probes, optional) ---
+# Prebuilt Qt from scripts/install-qt.ps1; DC_QT_DIR points at e.g. C:\dev\Qt\6.x.y\msvc2022_64.
 option(DC_WITH_QT "Build Qt based targets when Qt 6 is found" ON)
 set(DC_HAVE_QT OFF)
 if(DC_WITH_QT)
