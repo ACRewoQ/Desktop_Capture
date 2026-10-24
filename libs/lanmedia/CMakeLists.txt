@@ -6,6 +6,7 @@ add_library(dc_lanmedia
     src/net_sim.cpp
     src/packet.cpp
     src/udp_transport.cpp
+    src/video_link.cpp
     src/video_receiver.cpp
     src/video_sender.cpp
     src/video_sim.cpp

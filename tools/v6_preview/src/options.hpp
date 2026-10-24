@@ -20,6 +20,12 @@ struct CliOptions {
     std::string label;
     bool fullscreen = false;
     bool help = false;
+    // LAN video stream (lan_link.hpp)
+    std::string sendLan;      // engine host[:port] -> sender following its subscriptions
+    std::string engine;       // engine host[:port] -> viewer subscribing to it
+    std::string pairCode;
+    std::string stream = "video/preview";
+    int videoPort = 47811;
 };
 
 inline const char* kCommonUsage =
@@ -31,7 +37,8 @@ inline const char* kCommonUsage =
     "  --seconds N         stop after N seconds and print the report\n"
     "  --warmup N          frames excluded from the report (default 120)\n"
     "  --csv FILE          per-frame stage durations\n"
-    "  --label TEXT        title for the report\n";
+    "  --label TEXT        title for the report\n"
+    "  --stream S          LAN stream: video/preview (default) or video/lan\n";
 
 // Returns false on a bad option (message printed).
 inline bool parseCli(int argc, char** argv, CliOptions& o) {
@@ -82,6 +89,21 @@ inline bool parseCli(int argc, char** argv, CliOptions& o) {
         } else if (a == "--label") {
             if (!(v = next())) return false;
             o.label = v;
+        } else if (a == "--send-lan") {
+            if (!(v = next())) return false;
+            o.sendLan = v;
+        } else if (a == "--video-port") {
+            if (!(v = next())) return false;
+            o.videoPort = std::atoi(v);
+        } else if (a == "--engine") {
+            if (!(v = next())) return false;
+            o.engine = v;
+        } else if (a == "--pair") {
+            if (!(v = next())) return false;
+            o.pairCode = v;
+        } else if (a == "--stream") {
+            if (!(v = next())) return false;
+            o.stream = v;
         } else if (a == "--fullscreen") {
             o.fullscreen = true;
         } else {

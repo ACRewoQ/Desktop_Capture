@@ -7,6 +7,7 @@
 #include "dc/lanmedia/packet.hpp"
 #include "dc/lanmedia/udp_transport.hpp"
 #include "dc/lanmedia/video.hpp"
+#include "dc/lanmedia/video_link.hpp"
 #include "dc/lanmedia/video_sim.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <vector>
@@ -530,4 +532,49 @@ TEST_CASE("lanmedia: audio over real UDP sockets on loopback", "[lanmedia][udp]"
     CHECK(s.lost == 0);
     CHECK(s.rejected == 0);
     CHECK(s.streamId == sender.streamId());
+}
+
+TEST_CASE("lanmedia: video output and input over real UDP sockets, with a keyframe request", "[lanmedia][udp][video]") {
+    VideoOutput::Options oo;
+    oo.bindAddress = "127.0.0.1";
+    oo.port = 0;
+    VideoOutput out(oo);
+
+    std::mutex m;
+    std::vector<std::pair<std::uint64_t, bool>> got; // frame number, keyframe
+    std::size_t bytes = 0;
+    VideoInput::Options io;
+    io.bindAddress = "127.0.0.1";
+    VideoInput in(io, [&](const VideoReceiver::Frame& f) {
+        std::lock_guard lock(m);
+        got.emplace_back(f.number, f.keyframe);
+        bytes += f.data.size();
+    });
+    CHECK_FALSE(out.hasDestinations());
+    out.setDestinations({UdpTransport::Endpoint(asio::ip::make_address("127.0.0.1"), in.localPort())});
+    CHECK(out.hasDestinations());
+
+    // the viewer joins in the middle of a GOP: it asks for a keyframe, the encoder answers with one
+    std::vector<std::uint8_t> au(20000);
+    int sentKey = -1;
+    for (int f = 0; f < 60; ++f) {
+        for (std::size_t i = 0; i < au.size(); ++i) au[i] = static_cast<std::uint8_t>(f + i);
+        const bool key = out.keyframeWanted();
+        if (key && sentKey < 0) sentKey = f;
+        out.send(au, key, nowSeconds());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(sentKey > 0);
+    std::lock_guard lock(m);
+    REQUIRE_FALSE(got.empty());
+    CHECK(got.front().first == std::uint64_t(sentKey));
+    CHECK(got.front().second);
+    CHECK(got.size() == std::size_t(60 - sentKey));
+    CHECK(bytes == got.size() * au.size());
+    for (std::size_t i = 1; i < got.size(); ++i) CHECK(got[i].first == got[i - 1].first + 1);
+    const auto s = out.stats();
+    CHECK(s.keyframeRequests >= 1);
+    CHECK(s.haveReport); // reports reach the output's socket
+    CHECK(in.stats().lostDatagrams == 0);
 }

@@ -33,6 +33,9 @@ public:
     ~SenderPipeline();
     const std::string& encoderName() const { return encoder_->name(); }
     bool encoderIsHardware() const { return encoder_->hardware(); }
+    void requestKeyframe() {
+        if (encoder_) encoder_->requestKeyframe();
+    }
     void start();
     void stop();
 
