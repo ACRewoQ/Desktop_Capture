@@ -7,6 +7,8 @@
 #include "device_manager.hpp"
 #include "engine.hpp"
 #include "plan_builder.hpp"
+#include "recorder.hpp"
+#include "sampler.hpp"
 
 #include "dc/control/server.hpp"
 #include "dc/shmaudio/ring.hpp"
@@ -16,6 +18,8 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace dc::mixd {
@@ -62,6 +66,19 @@ private:
     proto::Result captureReport(control::CallContext& ctx);
     void scheduleRecordingClock();
 
+    // per-track recording (recorder.hpp)
+    proto::Result startTake(bool fromCapture, std::string* folder);
+    void stopTake(const std::string& error);
+    void scheduleRecorderClock();
+    void captureStateChanged(const std::string& state);
+
+    // sampler (sampler.hpp)
+    void padFileChanged(int pad, const std::string& file);
+    void sampleLoaded(SampleLoader::Result r);
+    std::shared_ptr<const SamplerTable> samplerTable() const;
+    void publishPlaying();
+    proto::Result samplerCommand(control::CallContext& ctx, Sampler::Command::Type type);
+
     asio::io_context& io_;
     control::ControlServer& server_;
     DeviceManager& devices_;
@@ -84,6 +101,20 @@ private:
     std::array<bool, kMaxStrips> shmDisconnected_{};
     std::uint32_t meterSeq_ = 0;
     std::uint64_t loggedGlitches_ = 0;
+
+    std::shared_ptr<RecorderTake> take_;
+    bool takeFromCapture_ = false;
+    asio::steady_timer recorderTimer_;
+
+    struct PadState {
+        std::string file;
+        std::uint64_t serial = 0;
+        std::shared_ptr<const SampleData> sample;
+    };
+    std::array<PadState, kSamplerPadCount> pads_;
+    std::uint64_t loadSerial_ = 0;
+    std::array<std::uint64_t, 2> lastPlaying_{};
+    std::unique_ptr<SampleLoader> loader_;
 };
 
 } // namespace dc::mixd

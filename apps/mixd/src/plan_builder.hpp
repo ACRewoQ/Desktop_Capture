@@ -46,8 +46,15 @@ struct BuildOptions {
     double testToneHz = 1000;
 };
 
+// Engine-side objects a plan carries besides the settings: the recording in progress (its streams
+// decide which strips are recorded, frozen for the take) and the sampler pads.
+struct PlanResources {
+    std::shared_ptr<RecorderTake> take;
+    std::shared_ptr<const SamplerTable> sampler;
+};
+
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,
-                      const BuildOptions& options = {});
+                      const BuildOptions& options = {}, const PlanResources& resources = {});
 
 // Track numbers in screen order (by /track/N/position).
 std::vector<int> tracksByPosition(const proto::ParamTree& tree);

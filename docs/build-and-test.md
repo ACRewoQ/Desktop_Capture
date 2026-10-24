@@ -66,6 +66,7 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
 | `tools\lan_sim\Debug\dc-lan-sim.exe` | LAN 音声伝送のネットワーク模擬シミュレーター |
 | `tools\lan_tone\Debug\dc-lan-tone.exe` | LAN 音声伝送の送受信テスト（実 UDP、PC 間でも使える） |
+| `tools\audio_check\Debug\dc-audio-check.exe` | 録音ファイル（WAV / FLAC / MP3 / Ogg）の長さ・レベル・テストトーンの途切れを調べる |
 | `tests\Debug\dc_tests.exe` | テスト本体 |
 
 ### モックサーバーで遊ぶ
@@ -83,6 +84,7 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 & $cli set /track/2/out/2/target track/1   # ルーティング
 & $cli call /mixer/track/add channels=1 name=Guest
 & $cli call /capture/record/start
+& $cli call /sampler/trigger pad=1   # サンプラー（モックは playing を切り替えるだけ）
 & $cli watch --meters                 # 差分・イベント・メーターを表示し続ける（Ctrl+C で終了）
 & $cli schema --markdown              # パラメーター一覧（docs/spec/protocol-params.md の元）
 ```
@@ -136,7 +138,7 @@ $env:PATH = "$env:DC_QT_DIR\bin;$env:PATH"
 プロトコル・モックサーバー・共有メモリのライブラリは Windows API に依存しないので、Linux でもビルドとテストができます（Claude のクラウド環境での確認用）。Windows 専用の機能（WASAPI、WGC など）が入るフェーズ 2 以降は Windows が正です。
 
 ```bash
-sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev
+sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev libflac-dev
 cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 ```
 
