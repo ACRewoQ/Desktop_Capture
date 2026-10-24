@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <set>
 
@@ -769,9 +770,23 @@ void LanService::tick() {
 
     bool stateChanged = false;
     std::map<std::string, double> delay;
+    const bool logStats = opts_.verbose && now >= nextStatsLog_;
+    if (logStats) nextStatsLog_ = now + 30;
     for (auto& [key, in] : inputs_) {
         if (!in.port) continue;
         const auto st = in.port->lan->stats();
+        if (logStats && st.received > 0) {
+            // for diagnosis: how the receive buffer follows the network
+            char line[320];
+            std::snprintf(line, sizeof line,
+                          "LAN in %s: fill %.1f / target %.1f ms, lateness peak %.1f ms, ratio %.6f, late %llu, "
+                          "concealed %llu, lost %llu, skips %llu, insertions %llu, resyncs %llu",
+                          key.c_str(), st.fillMs, st.targetMs, st.latenessPeakMs, st.ratio,
+                          static_cast<unsigned long long>(st.late), static_cast<unsigned long long>(st.concealed),
+                          static_cast<unsigned long long>(st.lost), static_cast<unsigned long long>(st.skips),
+                          static_cast<unsigned long long>(st.insertions), static_cast<unsigned long long>(st.resyncs));
+            std::cout << line << std::endl;
+        }
         const bool playing = st.state == lan::AudioReceiver::State::Running;
         if (in.port->streaming.exchange(playing) != playing) stateChanged = true;
         delay[key.substr(4)] = playing ? std::round(st.fillMs * 10.0) / 10.0 : 0.0;

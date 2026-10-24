@@ -166,6 +166,8 @@ private:
     std::vector<MediaRecv> mediaRecv_;
     void publishMedia(); // copies streams_ / inputs_ into the media tables
 
+    double nextStatsLog_ = 0; // tick(): receive statistics to the log every 30 s
+
     std::thread pump_;
     std::atomic<bool> pumpRunning_{false};
 };
