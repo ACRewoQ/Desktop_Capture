@@ -386,6 +386,9 @@ void Test::captures() {
     si.cb = sizeof si;
     PROCESS_INFORMATION pi{};
     wchar_t cmd[] = L"notepad.exe";
+    std::vector<HWND> notepadsBefore;  // the user's own Notepad windows stay open
+    for (const auto& w : listWindows())
+        if (_stricmp(w.exe.c_str(), "notepad.exe") == 0) notepadsBefore.push_back(w.hwnd);
     if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
         std::this_thread::sleep_for(2000ms);
         const auto win = call("/video/source/add", {{"kind", std::string("window")}});
@@ -396,9 +399,12 @@ void Test::captures() {
         push();
         check("window (Notepad) opens", waitState(win, "ok", 6s) == "ok");
         shot("22-window", 300ms);
-        // Win11's Notepad is a packaged app: the started process may hand over; close every Notepad window
+        // Win11's Notepad is a packaged app: the started process may hand over, so close the Notepad windows that
+        // appeared since the start
         for (const auto& w : listWindows())
-            if (_stricmp(w.exe.c_str(), "notepad.exe") == 0) PostMessageW(w.hwnd, WM_CLOSE, 0, 0);
+            if (_stricmp(w.exe.c_str(), "notepad.exe") == 0 &&
+                std::find(notepadsBefore.begin(), notepadsBefore.end(), w.hwnd) == notepadsBefore.end())
+                PostMessageW(w.hwnd, WM_CLOSE, 0, 0);
         TerminateProcess(pi.hProcess, 0);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);

@@ -61,34 +61,34 @@ $capdLog = Join-Path $outDir 'capd-serve.log'
 $capdProc = Start-Process -FilePath $capd -ArgumentList '--port', $port -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $capdLog -RedirectStandardError (Join-Path $outDir 'capd-serve.err')
 $engineLines = @()
-function Cli { param([Parameter(ValueFromRemainingArguments)]$a) $r = & $cli --port $port @a 2>&1 | ForEach-Object { "$_" }; $script:engineLines += "> dc-cli $($a -join ' ')"; $script:engineLines += $r; $r }
+function DcCli { param([Parameter(ValueFromRemainingArguments)]$a) $r = & $cli --port $port @a 2>&1 | ForEach-Object { "$_" }; $script:engineLines += "> dc-cli $($a -join ' ')"; $script:engineLines += $r; $r }
 try {
     Start-Sleep -Seconds 3
     $ErrorActionPreference = 'Continue'
-    Cli set /capture/directory $outDir | Out-Null
-    $src = (Cli call /video/source/add kind=text) -replace '^ok ', ''
-    Cli set "/video/source/$src/text/content" "B1 engine path" | Out-Null
-    Cli set "/video/source/$src/text/background" 4278190335 | Out-Null
-    $layer = (Cli call /video/scene/1/layer/add source=$src) -replace '^ok ', ''
-    Cli set "/video/scene/1/layer/$layer/width" 0.4 | Out-Null
-    Cli set "/video/scene/1/layer/$layer/height" 0.2 | Out-Null
-    $scene2 = (Cli call /video/scene/add) -replace '^ok ', ''
-    $color = (Cli call /video/source/add kind=color) -replace '^ok ', ''
-    Cli set "/video/source/$color/color/value" 4278255360 | Out-Null
-    Cli call "/video/scene/$scene2/layer/add" source=$color | Out-Null
-    Cli set /video/mix/1/preview_scene $scene2 | Out-Null
-    Cli set /video/mix/1/transition/duration_ms 1000 | Out-Null
-    Cli call /capture/record/start | Out-Null
+    DcCli set /capture/directory $outDir | Out-Null
+    $src = (DcCli call /video/source/add kind=text) -replace '^ok ', ''
+    DcCli set "/video/source/$src/text/content" "B1 engine path" | Out-Null
+    DcCli set "/video/source/$src/text/background" 4278190335 | Out-Null
+    $layer = (DcCli call /video/scene/1/layer/add source=$src) -replace '^ok ', ''
+    DcCli set "/video/scene/1/layer/$layer/width" 0.4 | Out-Null
+    DcCli set "/video/scene/1/layer/$layer/height" 0.2 | Out-Null
+    $scene2 = (DcCli call /video/scene/add) -replace '^ok ', ''
+    $color = (DcCli call /video/source/add kind=color) -replace '^ok ', ''
+    DcCli set "/video/source/$color/color/value" 4278255360 | Out-Null
+    DcCli call "/video/scene/$scene2/layer/add" source=$color | Out-Null
+    DcCli set /video/mix/1/preview_scene $scene2 | Out-Null
+    DcCli set /video/mix/1/transition/duration_ms 1000 | Out-Null
+    DcCli call /capture/record/start | Out-Null
     Start-Sleep -Seconds 2
-    Cli call /video/mix/1/take | Out-Null
+    DcCli call /video/mix/1/take | Out-Null
     Start-Sleep -Seconds 2
-    Cli call /video/mix/1/take | Out-Null
+    DcCli call /video/mix/1/take | Out-Null
     Start-Sleep -Seconds 2
-    Cli call /capture/record/stop | Out-Null
+    DcCli call /capture/record/stop | Out-Null
     Start-Sleep -Seconds 2
-    $state = Cli snapshot /capture
-    $sources = Cli snapshot /video/source
-    $devices = Cli snapshot /video/devices
+    $state = DcCli snapshot /capture
+    $sources = DcCli snapshot /video/source
+    $devices = DcCli snapshot /video/devices
     $ErrorActionPreference = 'Stop'
 } finally {
     Stop-Process -Id $capdProc.Id -ErrorAction SilentlyContinue

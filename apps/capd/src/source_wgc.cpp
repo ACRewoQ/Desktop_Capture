@@ -29,7 +29,7 @@ constexpr int kPoolBuffers = 2;
 
 class WgcSource final : public CaptureSource {
 public:
-    WgcSource(const Device& dev, HMONITOR monitor, HWND window, bool cursor) : dev_(dev) {
+    WgcSource(const Device& dev, HMONITOR monitor, HWND window, bool cursor) : dev_(dev), window_(window) {
         if (!wgc::GraphicsCaptureSession::IsSupported())
             throw std::runtime_error("Windows.Graphics.Capture is not supported on this system");
 
@@ -128,10 +128,12 @@ public:
     UINT height() const override { return height_; }
     std::int64_t frameQpc() const override { return frameQpc_; }
     std::uint64_t recoveries() const override { return recoveries_; }
-    bool closed() const override { return closed_; }
+    // Closed is not always raised for a window item when the window goes away, so the handle is checked as well.
+    bool closed() const override { return closed_ || (window_ && !IsWindow(window_)); }
 
 private:
     Device dev_;
+    HWND window_ = nullptr;
     wgd::Direct3D11::IDirect3DDevice rtDevice_{nullptr};
     wgc::GraphicsCaptureItem item_{nullptr};
     wgc::Direct3D11CaptureFramePool pool_{nullptr};
