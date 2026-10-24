@@ -20,6 +20,9 @@ struct RouteTarget {
 
 std::optional<RouteTarget> parseTarget(std::string_view s);
 
+// Stream number of a LAN target ("lan/3" -> 3), 0 if it is not lan/1 .. lan/kMaxLanStreams.
+int lanStreamOf(const RouteTarget& t);
+
 // Checks every /track/#/out, /track/#/send and /master/out target in the tree:
 // syntax, master restrictions, referenced tracks exist, no self routing and no cycles.
 ValidationError validateRouting(const ParamTree& tree);
