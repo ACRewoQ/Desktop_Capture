@@ -20,6 +20,10 @@ inline constexpr int kMaxTrackSends = 8;
 inline constexpr int kMaxFxPerTrack = 16;
 inline constexpr int kMaxVideoMixes = 4;
 inline constexpr int kMaxCaptureAudioStreams = 8;
+inline constexpr int kMaxLanStreams = 8;        // /lan/stream/1..8, output target lan/<n>
+inline constexpr int kMaxLanSubscriptions = 32; // /lan/sub/#
+inline constexpr int kMaxLanPeers = 16;         // /lan/peers/#
+inline constexpr int kMaxPairedClients = 16;    // /remote/paired/#
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 

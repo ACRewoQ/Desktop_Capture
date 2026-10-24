@@ -35,7 +35,8 @@ struct Change {
 
 using Args = std::map<std::string, Value>;
 
-enum class ClientRole : std::uint8_t { Local = 0, Remote = 1, Service = 2 };
+// Peer = another engine (mixd) on the LAN that receives this engine's streams.
+enum class ClientRole : std::uint8_t { Local = 0, Remote = 1, Service = 2, Peer = 3 };
 
 // client -> server, first message on a connection
 struct Hello {
@@ -43,8 +44,9 @@ struct Hello {
     std::string clientName;
     ClientRole role = ClientRole::Local;
     std::uint16_t meterPort = 0; // UDP port for meter packets, 0 = no meters
-    std::string pairCode;        // remote only, first connection
-    std::string token;           // remote only, after pairing
+    std::string pairCode;        // remote / peer, first connection
+    std::string token;           // remote / peer, after pairing
+    std::string clientId;        // stable id of the client installation (a peer: its server_id)
     bool operator==(const Hello&) const = default;
 };
 

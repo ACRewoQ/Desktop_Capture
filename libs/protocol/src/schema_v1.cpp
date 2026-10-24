@@ -51,10 +51,10 @@ void addStrip(Schema& sc, const std::string& base, bool isMaster) {
     sc.add(b(base + "/record/enabled", false, "トラック別録音（WAV/FLAC）の対象"));
     sc.add(e(base + "/record/tap", {"pre", "post"}, "post", "録音位置（フェーダー前 / 後）"));
     sc.add(s(base + "/out/#/target", "",
-             isMaster ? "出力先 1〜8。\"\" / device/<id> / vmic/<id> / lan/<stream>"
-                      : "出力先 1〜8。\"\" / master / track/<n> / device/<id> / vmic/<id> / lan/<stream>"));
+             isMaster ? "出力先 1〜8。\"\" / device/<id> / vmic/<id> / lan/<n>"
+                      : "出力先 1〜8。\"\" / master / track/<n> / device/<id> / vmic/<id> / lan/<n>"));
     if (!isMaster) {
-        sc.add(s(base + "/send/#/target", "", "センド先 1〜8。\"\" / track/<n> / device/<id> / vmic/<id> / lan/<stream>"));
+        sc.add(s(base + "/send/#/target", "", "センド先 1〜8。\"\" / track/<n> / device/<id> / vmic/<id> / lan/<n>"));
         sc.add(f(base + "/send/#/level_db", kMinVolumeDb, kMaxVolumeDb, 0.0, "センド量 dB"));
         sc.add(b(base + "/send/#/pre_fader", false, "フェーダー前から送る"));
     }
@@ -103,9 +103,11 @@ Schema buildV1() {
     sc.add(i("/track/#/position", 1, kMaxTracks, 1, "画面上の並び順（1 始まり、連番）", RO));
     sc.add(ic("/track/#/channels", {1, 2}, 2, "1 = モノ、2 = ステレオ"));
     sc.add(e("/track/#/input/kind", {"none", "device", "process", "lan", "sampler"}, "none", "入力の種類"));
-    sc.add(s("/track/#/input/source", "", "入力元（デバイス ID、実行ファイル名、LAN ストリーム ID）"));
+    sc.add(s("/track/#/input/source", "", "入力元（デバイス ID、実行ファイル名、LAN は <相手の id>/<n>）"));
     sc.add(i("/track/#/input/channel", 1, 64, 1, "デバイスの何チャンネル目から使うか"));
     sc.add(e("/track/#/input/state", {"none", "ok", "disconnected"}, "none", "入力の接続状態", RO));
+    sc.add(f("/track/#/input/lan_buffer_ms", 0.0, 200.0, 0.0, "LAN 入力の受信バッファ目標 ms（0 = 自動）"));
+    sc.add(f("/track/#/input/lan_delay_ms", 0.0, 1000.0, 0.0, "LAN 入力の今の受信バッファ量 ms", RO));
     addStrip(sc, "/track/#", false);
     addStrip(sc, "/master", true);
 
@@ -145,10 +147,40 @@ Schema buildV1() {
     sc.add(i("/video/preview/height", 90, 1080, 540, "プレビュー解像度（高さ）"));
     sc.add(i("/video/preview/fps", 5, 60, 30, "プレビューのフレームレート"));
     sc.add(i("/video/preview/bitrate_kbps", 500, 8000, 3000, "プレビューのビットレート kbps"));
+    sc.add(i("/video/lan/mix", 0, kMaxVideoMixes, 0, "LAN 送信（映像）に出す映像ミックス（0 = なし）"));
+    sc.add(i("/video/lan/width", 160, 3840, 1920, "LAN 送信の解像度（幅）"));
+    sc.add(i("/video/lan/height", 90, 2160, 1080, "LAN 送信の解像度（高さ）"));
+    sc.add(i("/video/lan/fps", 5, 60, 30, "LAN 送信のフレームレート"));
+    sc.add(i("/video/lan/bitrate_kbps", 500, 50000, 8000, "LAN 送信のビットレート kbps"));
+
+    // --- LAN media transport (docs/spec/protocol.md 10, docs/spec/lan-media.md) ---
+    sc.add(s("/lan/name", "", "LAN で名乗る名前（\"\" = コンピューター名）"));
+    sc.add(s("/lan/id", "", "この PC のエンジンの id（Welcome.server_id と同じ。インストールごとに固定）", RO));
+    sc.add(s("/lan/stream/#/name", "", "LAN 送信ストリーム 1〜8 の表示名（\"\" = LAN <n>）。出力先 lan/<n> で使う"));
+    sc.add(e("/lan/stream/#/codec", {"pcm16", "pcm24", "opus"}, "pcm24", "コーデック（pcm = 無圧縮・低遅延、opus = 無線向け）"));
+    sc.add(ic("/lan/stream/#/opus_frames", {120, 240, 480, 960}, 480, "Opus のパケット長（フレーム数、480 = 10 ms）"));
+    sc.add(i("/lan/stream/#/bitrate_kbps", 32, 512, 128, "Opus のビットレート kbps"));
+    sc.add(i("/lan/stream/#/subscribers", 0, kMaxLanSubscriptions, 0, "受信している相手の数", RO));
+    sc.add(b("/lan/stream/#/active", false, "何かが出力していて、受信者がいて送信中", RO));
+    sc.add(s("/lan/sub/#/stream", "", "購読しているストリーム（audio/<n> / video/preview / video/lan）", RO));
+    sc.add(s("/lan/sub/#/address", "", "送り先の UDP アドレス（ip:port）", RO));
+    sc.add(s("/lan/sub/#/client", "", "購読した接続の名前", RO));
+    sc.add(s("/lan/peers/#/id", "", "LAN 内の別の PC のエンジンの id", RO));
+    sc.add(s("/lan/peers/#/name", "", "その PC の名前", RO));
+    sc.add(s("/lan/peers/#/address", "", "制御の接続先（ip:port）", RO));
+    sc.add(e("/lan/peers/#/state", {"offline", "unpaired", "connecting", "connected", "refused"}, "offline",
+             "相手の状態（refused = ペアリングが取り消された）", RO));
+    sc.add(b("/lan/peers/#/manual", false, "手動で追加した相手（mDNS で見つからない場合）", RO));
+    sc.add(s("/lan/peers/#/stream/#/name", "", "相手の LAN 送信ストリームの表示名（接続中だけ）", RO));
+    sc.add(b("/lan/peers/#/stream/#/active", false, "相手のストリームに何かが出力している", RO));
 
     // --- remote ---
     sc.add(i("/remote/clients", 0, 4, 0, "接続中のリモコン数", RO));
     sc.add(b("/remote/pairing/active", false, "ペアリング受付中", RO));
+    sc.add(s("/remote/paired/#/id", "", "ペアリング済みの相手の id（Hello.client_id）", RO));
+    sc.add(s("/remote/paired/#/name", "", "ペアリング済みの相手の名前", RO));
+    sc.add(e("/remote/paired/#/role", {"remote", "peer"}, "remote", "相手の種類（リモコン / 別の PC のエンジン）", RO));
+    sc.add(b("/remote/paired/#/online", false, "今つながっている", RO));
 
     // --- methods ---
     sc.addMethod({"/session/resync", "", "nil", "スナップショットを送り直す（rev の飛びを検出したとき）", "P0"});
@@ -166,8 +198,15 @@ Schema buildV1() {
     sc.addMethod({"/master/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/master/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
     sc.addMethod({"/devices/refresh", "", "nil", "デバイス・プロセス一覧の更新", "P2"});
-    sc.addMethod({"/remote/pairing/start", "", "string（6桁コード）", "ペアリング受付開始", "P4"});
-    sc.addMethod({"/remote/pairing/stop", "", "nil", "ペアリング受付終了", "P4"});
+    sc.addMethod({"/remote/pairing/start", "", "string（6桁コード）", "ペアリング受付開始（2 分、1 台つながるまで）", "P3"});
+    sc.addMethod({"/remote/pairing/stop", "", "nil", "ペアリング受付終了", "P3"});
+    sc.addMethod({"/remote/unpair", "id:string", "nil", "ペアリングを取り消す（つながっていれば切断）", "P3"});
+    sc.addMethod({"/lan/subscribe", "stream:string, port:int", "int（購読番号）",
+                  "ストリームを受け取る。送り先は接続元の IP の port。接続が切れると自動で解除", "P3"});
+    sc.addMethod({"/lan/unsubscribe", "id:int", "nil", "購読をやめる", "P3"});
+    sc.addMethod({"/lan/peers/pair", "id:string, code:string", "nil", "相手の PC に表示された 6 桁コードでペアリングする", "P3"});
+    sc.addMethod({"/lan/peers/forget", "id:string", "nil", "相手のペアリング情報を消す（手動で追加した相手は一覧からも消す）", "P3"});
+    sc.addMethod({"/lan/peers/add", "address:string", "nil", "相手を IP アドレス（ip または ip:port）で手動追加", "P3"});
 
     return sc;
 }
