@@ -100,7 +100,73 @@
 | `/video/mix/#/width` | int | rw | 160 〜 3840 | `1920` | 合成解像度（幅） |
 | `/video/mix/#/height` | int | rw | 90 〜 2160 | `1080` | 合成解像度（高さ） |
 | `/video/mix/#/fps` | int | rw | 10 〜 120 | `60` | 合成フレームレート |
-| `/video/mix/#/active` | bool | ro |  | `false` | 出力先があり合成中 |
+| `/video/mix/#/active` | bool | ro |  | `false` | 出力先から参照されている（/capture/mix・/video/vcam/mix・/video/monitor/mix・/video/preview/mix） |
+| `/video/mix/#/background` | int | rw | 0 〜 4294967295 | `4278190080` | 背景色（0xAARRGGBB） |
+| `/video/mix/#/program_scene` | int | rw | 0 〜 32 | `0` | 本番に出しているシーン（0 = なし）。変えるとトランジションで切り替わる |
+| `/video/mix/#/preview_scene` | int | rw | 0 〜 32 | `0` | 次に出すシーン（プレビュー、0 = なし） |
+| `/video/mix/#/transition/type` | string | rw | cut / fade | `"fade"` | シーン切り替えの効果 |
+| `/video/mix/#/transition/duration_ms` | int | rw | 0 〜 10000 | `300` | フェードの長さ ms |
+| `/video/scene/#/name` | string | rw |  | `""` | シーン名 |
+| `/video/scene/#/position` | int | ro | 1 〜 32 | `1` | シーン一覧の並び順（1 始まり、連番） |
+| `/video/scene/#/layer/#/name` | string | rw |  | `""` | レイヤー名（"" = ソース名を表示） |
+| `/video/scene/#/layer/#/position` | int | ro | 1 〜 32 | `1` | 重なり順（1 = 最前面、連番） |
+| `/video/scene/#/layer/#/source` | int | rw | 0 〜 64 | `0` | 表示するソース /video/source/<n>（0 = なし） |
+| `/video/scene/#/layer/#/visible` | bool | rw |  | `true` | 表示 |
+| `/video/scene/#/layer/#/x` | float | rw | -4 〜 4 | `0` | 表示枠の左端（キャンバスの幅 = 1） |
+| `/video/scene/#/layer/#/y` | float | rw | -4 〜 4 | `0` | 表示枠の上端（キャンバスの高さ = 1） |
+| `/video/scene/#/layer/#/width` | float | rw | 0 〜 8 | `1` | 表示枠の幅（キャンバスの幅 = 1） |
+| `/video/scene/#/layer/#/height` | float | rw | 0 〜 8 | `1` | 表示枠の高さ（キャンバスの高さ = 1） |
+| `/video/scene/#/layer/#/fit` | string | rw | fit / fill / stretch | `"fit"` | 枠への収め方（fit = 縦横比を保って全体を表示、fill = 縦横比を保って枠を埋める、stretch = 引き伸ばす） |
+| `/video/scene/#/layer/#/crop/left` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/top` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/right` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/bottom` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/opacity` | float | rw | 0 〜 1 | `1` | 不透明度 |
+| `/video/scene/#/layer/#/chroma/enabled` | bool | rw |  | `false` | クロマキー |
+| `/video/scene/#/layer/#/chroma/color` | int | rw | 0 〜 16777215 | `65280` | 抜く色（0xRRGGBB） |
+| `/video/scene/#/layer/#/chroma/similarity` | float | rw | 0 〜 1 | `0.4` | 抜く色の範囲（大きいほど広く抜く） |
+| `/video/scene/#/layer/#/chroma/smoothness` | float | rw | 0 〜 1 | `0.08` | 境目のなめらかさ |
+| `/video/scene/#/layer/#/chroma/spill` | float | rw | 0 〜 1 | `0.1` | 色かぶりの除去 |
+| `/video/scene/#/layer/#/no_signal` | string | rw | transparent / image | `"transparent"` | ソースが途切れたときの表示（transparent = 透明、image = 「信号なし」画像） |
+| `/video/source/#/name` | string | rw |  | `""` | ソース名 |
+| `/video/source/#/kind` | string | ro | display / window / camera / image / media / text / color / lan | `"display"` | ソースの種類（追加時に決まる） |
+| `/video/source/#/state` | string | ro | none / ok / disconnected / error | `"none"` | capd が報告する状態（none = どのミックスでも使っていない） |
+| `/video/source/#/error` | string | ro |  | `""` | state = error の理由 |
+| `/video/source/#/width` | int | ro | 0 〜 16384 | `0` | ソースの実際の幅（capd が報告） |
+| `/video/source/#/height` | int | ro | 0 〜 16384 | `0` | ソースの実際の高さ（capd が報告） |
+| `/video/source/#/cursor` | bool | rw |  | `true` | マウスカーソルを入れる（display / window） |
+| `/video/source/#/display/id` | string | rw |  | `""` | モニター ID（/video/devices/display/#/id、"" = 主モニター） |
+| `/video/source/#/display/method` | string | rw | wgc / dda | `"wgc"` | 取得方式（wgc = Windows.Graphics.Capture、dda = Desktop Duplication） |
+| `/video/source/#/window/exe` | string | rw |  | `""` | ウィンドウの実行ファイル名（例 game.exe） |
+| `/video/source/#/window/title` | string | rw |  | `""` | ウィンドウタイトル |
+| `/video/source/#/window/match` | string | rw | title / exe | `"title"` | 閉じたあとにつなぎ直す条件（title = 実行ファイル名とタイトル、exe = 実行ファイル名だけ） |
+| `/video/source/#/camera/id` | string | rw |  | `""` | カメラ ID（/video/devices/camera/#/id） |
+| `/video/source/#/camera/name` | string | rw |  | `""` | カメラ名（ID が変わったときの照合用） |
+| `/video/source/#/camera/width` | int | rw | 0 〜 7680 | `0` | 取り込み解像度の幅（0 = カメラの既定） |
+| `/video/source/#/camera/height` | int | rw | 0 〜 4320 | `0` | 取り込み解像度の高さ（0 = カメラの既定） |
+| `/video/source/#/camera/fps` | int | rw | 0 〜 240 | `0` | 取り込みフレームレート（0 = カメラの既定） |
+| `/video/source/#/file` | string | rw |  | `""` | ファイルのパス（image / media） |
+| `/video/source/#/media/loop` | bool | rw |  | `true` | 動画を繰り返す |
+| `/video/source/#/text/content` | string | rw |  | `""` | 表示する文字（改行可） |
+| `/video/source/#/text/font` | string | rw |  | `"Yu Gothic UI"` | フォント名 |
+| `/video/source/#/text/size` | int | rw | 8 〜 512 | `48` | 文字の大きさ（ピクセル） |
+| `/video/source/#/text/color` | int | rw | 0 〜 4294967295 | `4294967295` | 文字色（0xAARRGGBB） |
+| `/video/source/#/text/background` | int | rw | 0 〜 4294967295 | `0` | 背景色（0xAARRGGBB、0 = 透明） |
+| `/video/source/#/text/bold` | bool | rw |  | `false` | 太字 |
+| `/video/source/#/text/italic` | bool | rw |  | `false` | 斜体 |
+| `/video/source/#/text/align` | string | rw | left / center / right | `"left"` | 行揃え |
+| `/video/source/#/text/wrap_width` | int | rw | 0 〜 7680 | `0` | 折り返し幅（ピクセル、0 = 折り返さない） |
+| `/video/source/#/color/value` | int | rw | 0 〜 4294967295 | `4278190080` | 単色ソースの色（0xAARRGGBB） |
+| `/video/source/#/lan/stream` | string | rw |  | `""` | LAN メディア伝送の受信ストリーム ID（レーン N） |
+| `/video/devices/display/#/id` | string | ro |  | `""` | モニター ID |
+| `/video/devices/display/#/name` | string | ro |  | `""` | モニター名 |
+| `/video/devices/display/#/width` | int | ro | 0 〜 16384 | `0` | 幅（物理ピクセル） |
+| `/video/devices/display/#/height` | int | ro | 0 〜 16384 | `0` | 高さ（物理ピクセル） |
+| `/video/devices/display/#/primary` | bool | ro |  | `false` | 主モニター |
+| `/video/devices/window/#/exe` | string | ro |  | `""` | 実行ファイル名 |
+| `/video/devices/window/#/title` | string | ro |  | `""` | ウィンドウタイトル |
+| `/video/devices/camera/#/id` | string | ro |  | `""` | カメラ ID |
+| `/video/devices/camera/#/name` | string | ro |  | `""` | カメラ名 |
 | `/video/vcam/mix` | int | rw | 0 〜 4 | `0` | 仮想カメラに出す映像ミックス（0 = なし） |
 | `/video/vcam/resolution` | string | rw | 1080p / 720p | `"1080p"` | 仮想カメラの解像度 |
 | `/video/monitor/mix` | int | rw | 0 〜 4 | `0` | 全画面表示に出す映像ミックス（0 = なし） |
@@ -122,6 +188,20 @@
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
 | `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
+| `/video/source/add` | kind:string, name:string? | int（新しいソース番号） | P3 | ソースを追加。番号は空いている最小の番号 |
+| `/video/source/remove` | source:int | nil | P3 | ソースを削除。そのソースを表示していたレイヤーも消える |
+| `/video/source/report` | source:int, state:string, width:int?, height:int?, error:string? | nil | P3 | capd がソースの状態を知らせる（role = サービスの接続だけ） |
+| `/video/scene/add` | name:string?, position:int? | int（新しいシーン番号） | P3 | シーンを追加 |
+| `/video/scene/remove` | scene:int | nil | P3 | シーンを削除。参照していた program / preview は 0 に戻る |
+| `/video/scene/move` | scene:int, position:int | nil | P3 | シーンの並び順を変える |
+| `/video/scene/#/layer/add` | source:int, name:string?, position:int? | int（新しいレイヤー番号） | P3 | レイヤーを追加（既定は最前面、キャンバス全体） |
+| `/video/scene/#/layer/remove` | layer:int | nil | P3 | レイヤーを削除 |
+| `/video/scene/#/layer/move` | layer:int, position:int | nil | P3 | 重なり順を変える（1 = 最前面） |
+| `/video/mix/add` | name:string? | int（新しいミックス番号） | P3 | 映像ミックスを追加（最大 4） |
+| `/video/mix/remove` | mix:int | nil | P3 | 映像ミックスを削除。参照していた出力先は 0 に戻る |
+| `/video/mix/#/take` | なし | nil | P3 | プレビューのシーンをトランジションで本番に出し、直前の本番シーンをプレビューに入れる |
+| `/video/devices/refresh` | なし | nil | P3 | モニター・ウィンドウ・カメラ一覧の更新を capd に頼む（イベント video.devices.refresh） |
+| `/video/devices/report` | kind:string, <n>/<field>:値… | nil | P3 | capd がモニター・ウィンドウ・カメラの一覧を知らせる（role = サービスの接続だけ） |
 | `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |

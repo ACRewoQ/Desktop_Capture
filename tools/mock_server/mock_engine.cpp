@@ -1,7 +1,9 @@
 #include "mock_engine.hpp"
 
 #include "dc/protocol/constants.hpp"
+#include "dc/control/video_methods.hpp"
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/video.hpp"
 #include "dc/version.hpp"
 
 #include <algorithm>
@@ -116,7 +118,29 @@ void MockEngine::seed() {
     put("/capture/audio/2/source", std::string("track/1"));
     put("/capture/audio/3/source", std::string("track/2"));
 
+    // what capd would report on a PC with two monitors and a webcam
+    put("/video/devices/display/1/id", std::string("mock-display-1"));
+    put("/video/devices/display/1/name", std::string("Mock Monitor 27\""));
+    put("/video/devices/display/1/width", std::int64_t{2560});
+    put("/video/devices/display/1/height", std::int64_t{1440});
+    put("/video/devices/display/1/primary", true);
+    put("/video/devices/display/2/id", std::string("mock-display-2"));
+    put("/video/devices/display/2/name", std::string("Mock Monitor 24\""));
+    put("/video/devices/display/2/width", std::int64_t{1920});
+    put("/video/devices/display/2/height", std::int64_t{1080});
+    put("/video/devices/display/2/primary", false);
+    put("/video/devices/window/1/exe", std::string("game.exe"));
+    put("/video/devices/window/1/title", std::string("Mock Game"));
+    put("/video/devices/window/2/exe", std::string("browser.exe"));
+    put("/video/devices/window/2/title", std::string("Mock Browser"));
+    put("/video/devices/camera/1/id", std::string("mock-camera-1"));
+    put("/video/devices/camera/1/name", std::string("Mock USB Camera"));
+    put("/video/source/1/state", std::string("ok"));
+    put("/video/source/1/width", std::int64_t{2560});
+    put("/video/source/1/height", std::int64_t{1440});
+
     server_.publishNow(c);
+    server_.publishNow(videoDerived(server_.store().tree()));
 }
 
 void MockEngine::registerMethods() {
@@ -126,6 +150,7 @@ void MockEngine::registerMethods() {
     server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
     server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
     server_.registerMethod("/capture/report", [this](CallContext& ctx) { return captureReport(ctx); });
+    control::registerVideoMethods(server_);
 }
 
 std::vector<int> MockEngine::tracksInOrder() const {

@@ -1,5 +1,7 @@
 #include "dc/protocol/defaults.hpp"
 
+#include "dc/protocol/video.hpp"
+
 #include <functional>
 
 namespace dc::proto {
@@ -31,7 +33,9 @@ void expand(const std::string& pattern, const Value& value, int fixedFirst, std:
 }
 
 bool isDynamic(const std::string& pattern) {
-    return pattern.find("/fx/") != std::string::npos || pattern.find('*') != std::string::npos;
+    return pattern.find("/fx/") != std::string::npos || pattern.find('*') != std::string::npos ||
+           startsWith(pattern, "/video/source/") || startsWith(pattern, "/video/scene/") ||
+           startsWith(pattern, "/video/devices/");
 }
 
 } // namespace
@@ -79,7 +83,9 @@ std::vector<Change> globalDefaults(const Schema& schema) {
     }
     for (auto& c : out) {
         if (c.path == "/video/mix/1/name") c.value = std::string("Mix A");
+        else if (c.path == "/video/mix/1/program_scene" || c.path == "/video/mix/1/preview_scene") c.value = std::int64_t{1};
     }
+    for (auto& c : videoStartDefaults(schema)) out.push_back(std::move(c));
     return out;
 }
 

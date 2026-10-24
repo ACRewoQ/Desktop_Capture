@@ -1,6 +1,7 @@
 add_library(dc_control
     src/client.cpp
     src/server.cpp
+    src/video_methods.cpp
 )
 add_library(dc::control ALIAS dc_control)
 target_include_directories(dc_control PUBLIC include)

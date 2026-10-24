@@ -66,6 +66,9 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | センド | 1 トラックあたり 8（`send/1`〜`send/8`） |
 | エフェクト | 1 トラックあたり 16 |
 | 映像ミックス | 最大 4 |
+| 映像ソース | 最大 64 |
+| シーン | 最大 32 |
+| レイヤー | 1 シーンあたり 32 |
 | 録画の音声ストリーム | 8（`/capture/audio/1`〜`8`） |
 | リモコン同時接続 | 4 |
 
@@ -89,6 +92,33 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 エンジンは次を拒否します（`conflict`）：自分自身への出力、ループ（例：1→2→1）、マスターからトラックへの出力、センドからマスターへの送り。存在しないトラックを指すと `not_found` です。処理順は出力先のつながりから自動で決めます（`processingOrder()`）。トラックを削除すると、そのトラックを指していた出力先・センド・録画音声ストリームは `""` に戻ります。
 
 録画の音声ストリーム `/capture/audio/#/source` は `""`、`master`、`track/<n>` のどれかです。
+
+### 4.4 ビデオミキサー
+
+映像の設定もエンジンのツリーが持ち、実際の取り込みと合成は capd が行います（レーン B1）。
+
+| 部分木 | 中身 | 番号 |
+|---|---|---|
+| `/video/source/#` | ソース（モニター、ウィンドウ、カメラ、画像、動画、文字、単色、LAN）。全ミックス・全シーンで共有し、同じソースを何枚のレイヤーに出しても取り込みは 1 回 | `/video/source/add` で追加 |
+| `/video/scene/#` | シーン。並び順は `position` | `/video/scene/add` |
+| `/video/scene/#/layer/#` | シーンに重ねるレイヤー。`source` でソースを指す。重なり順は `position`（1 = 最前面） | `/video/scene/#/layer/add` |
+| `/video/mix/#` | 映像ミックス（最大 4）。解像度・fps・背景色、本番シーン `program_scene` とプレビュー `preview_scene`、トランジション | `/video/mix/add` |
+| `/video/devices/display` ほか | capd が見つけたモニター・ウィンドウ・カメラの一覧（読み取り専用） | capd が報告 |
+
+- 番号はトラックと同じく**固定 ID** で、削除しても詰めません。追加は空いている最小の番号です。
+- シーンは全ミックスで共有します。ミックスごとに解像度が違ってもよいように、レイヤーの表示枠（`x`, `y`, `width`, `height`）はキャンバスの幅・高さを 1 とした割合で表します（全体 = `0, 0, 1, 1`）。はみ出し（負の値、1 超え）も可。ソースは枠の中に `fit`（縦横比を保って全体）、`fill`（縦横比を保って枠を埋める）、`stretch` で収めます。ソースの解像度が変わっても枠は変わりません。
+- クロップはソースの幅・高さに対する割合（左右・上下それぞれ 0〜1）で、収める前に切り取ります。
+- 色は整数で、背景・文字は `0xAARRGGBB`、クロマキーの色は `0xRRGGBB` です。
+- エンジンは次を拒否します（`not_found`）：存在しないソースを指すレイヤー、存在しないシーンを指す `program_scene` / `preview_scene`、存在しないミックスを指す出力先（`/capture/mix`、`/video/vcam/mix`、`/video/monitor/mix`、`/video/preview/mix`）。0 は「なし」です。
+- ソースを削除すると、そのソースを出していたレイヤーも消えます。シーンを削除すると、それを指していた `program_scene` / `preview_scene` は 0 に、ミックスを削除すると、それを指していた出力先は 0 に戻ります。
+- `/video/mix/#/active` は、出力先のどれかがそのミックスを指している間 true です（エンジンが計算）。capd は出力先があるミックスだけを合成します。
+- 起動直後のツリー：ソース 1 = 主モニター、シーン 1 = そのソースをキャンバス全体に出すレイヤー 1 枚、ミックス 1 の本番・プレビュー = シーン 1。
+
+**切り替え**：`program_scene` が変わると、capd はそのミックスの `transition/type`（`cut` / `fade`）と `transition/duration_ms` で前のシーンから新しいシーンへ切り替えます。リモコンなどは `program_scene` を直接変えてもよく、プレビュー式の操作では `/video/mix/#/take` で `preview_scene` を本番に出し、直前の本番シーンをプレビューに入れます。切り替え中にさらに変わったら、その時点の画から新しいシーンへ切り替えます。
+
+**ソースの状態**：capd はソースを開くたび・状態が変わるたびに `/video/source/report`（`source`, `state` = `ok` / `disconnected` / `error` / `none`, `width`, `height`, `error`）を送り、エンジンは `/video/source/#/state` などに反映します。どのミックスの本番・プレビュー・切り替え中のシーンにも出ていないソースは閉じて `none` になります。
+
+**一覧**：capd はモニター・カメラの一覧を起動時と変化時に、ウィンドウの一覧は `video.devices.refresh` イベントを受けたときに、`/video/devices/report` で送ります。引数は `kind`（`display` / `window` / `camera`）と、`"<番号>/<項目>"` をキーにした値（例 `"1/id"`, `"1/name"`）で、エンジンは `/video/devices/<kind>` を丸ごと置き換えます。UI はウィンドウ選択を開くときに `/video/devices/refresh` を呼びます。
 
 ## 5. メッセージ一覧
 
@@ -152,13 +182,15 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
+| `/video/source/add` ほか | 一覧参照 | | P3 | ビデオミキサーのソース・シーン・レイヤー・ミックスの追加・削除・並べ替え、`/video/mix/#/take`（4.4） |
+| `/video/source/report`, `/video/devices/report` | 4.4 参照 | nil | P3 | capd からの報告。role = サービス以外は `unauthorized` |
 | `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P4 | ペアリング受付 |
 
 未実装・未知のメソッドは `unknown_method` を返します。
 
 #### 5.4.1 録画の開始・停止（エンジンと capd）
 
-録画の設定と状態はエンジンが持ち、実際の録画は capd が行います。capd はエンジンに role = 2（サービス）、`client` = `"capd"` で接続し、`/capture/*` と `/video/mix/#` をツリーで追います。
+録画の設定と状態はエンジンが持ち、実際の録画は capd が行います。capd はエンジンに role = 2（サービス）、`client` = `"capd"` で接続し、`/capture/*` と `/video/*` をツリーで追います。
 
 | きっかけ | エンジン | capd |
 |---|---|---|
@@ -181,6 +213,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `capture.stopped` | `file`, `duration_ms` | 録画停止 |
 | `capture.segment` | `file`, `reason` | GPU リセットなどで新しいファイルに切り替えた（P3） |
 | `device.lost` / `device.restored` | `id`, `name` | デバイスの切断・復帰（P3） |
+| `video.devices.refresh` | なし | `/video/devices/refresh` が呼ばれた。capd が一覧を送り直す（P3） |
 
 ### 5.6 生存確認
 

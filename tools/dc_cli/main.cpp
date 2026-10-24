@@ -95,9 +95,10 @@ std::string rangeText(const ParamSpec& s) {
     } else if (!s.intChoices.empty()) {
         for (auto c : s.intChoices) out += (out.empty() ? "" : " / ") + std::to_string(c);
     } else if (s.min || s.max) {
-        auto num = [](double d) {
+        auto num = [&](double d) {
             char buf[32];
-            std::snprintf(buf, sizeof buf, "%g", d);
+            if (s.type == ValueType::Int && d > -1e15 && d < 1e15) std::snprintf(buf, sizeof buf, "%.0f", d);
+            else std::snprintf(buf, sizeof buf, "%g", d);
             return std::string(buf);
         };
         out = (s.min ? num(*s.min) : "") + " 〜 " + (s.max ? num(*s.max) : "");

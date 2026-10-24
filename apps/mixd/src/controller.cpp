@@ -1,7 +1,9 @@
 #include "controller.hpp"
 
 #include "dc/protocol/constants.hpp"
+#include "dc/control/video_methods.hpp"
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/video.hpp"
 #include "dc/shmaudio/clock.hpp"
 #include "dc/version.hpp"
 
@@ -119,6 +121,7 @@ void Controller::seed(const std::vector<DeviceInfo>& devices) {
     put("/mixer/track_count", std::int64_t{kInitialTracks});
     put("/capture/audio/1/source", std::string("master"));
     server_.publishNow(c);
+    server_.publishNow(videoDerived(server_.store().tree()));
 }
 
 void Controller::registerMethods() {
@@ -132,16 +135,18 @@ void Controller::registerMethods() {
         devices_.refresh();
         return Result{};
     });
+    control::registerVideoMethods(server_); // the video mixer's tree; capd does the work
 }
 
 void Controller::onDelta(const Delta& delta) {
+    control::followVideoDelta(server_, delta);
     // values the engine itself reports (load, counters, device lists, derived states) do not change
     // the mix; everything else might
     auto reportOnly = [](const std::string& path) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
-                                                "/capture/error"};
+                                                "/capture/error", "/video/"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
         return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
