@@ -12,6 +12,9 @@
 
 namespace dc::mixd {
 
+class RecorderTake;
+struct SamplerTable;
+
 inline constexpr int kMaxStrips = 65;     // 0 = master, 1..64 = tracks
 inline constexpr int kMaxBlockFrames = 1024; // largest chunk the mixer processes at once
 inline constexpr int kMaxInputPorts = 32;
@@ -49,6 +52,9 @@ struct StripPlan {
     std::vector<Destination> outputs;
     std::vector<SendPlan> sends;
     Tap shmTap = Tap::None; // export to shared memory slot id (pre: strip channels, post: stereo)
+    int samplerBank = -1;   // input from the sampler: -1 = none, 0 = all banks, 1..8 = one bank
+    int recordStream = -1;  // stream of MixPlan::take this strip is recorded to, -1 = not recorded
+    Tap recordTap = Tap::None;
     std::uint16_t meterId = 0;
 };
 
@@ -63,6 +69,8 @@ struct MixPlan {
     float cueGain = 1;
     // per input port: room for kMaxBlockFrames interleaved frames, filled by the engine each block
     mutable std::vector<std::vector<float>> inputScratch;
+    std::shared_ptr<RecorderTake> take;           // per-track recording in progress (null = none)
+    std::shared_ptr<const SamplerTable> sampler; // pads (null = sampler unused)
     float testToneGain = 0; // diagnostics: a sine added to the master input (mixd --test-tone)
     double testToneHz = 1000;
     // > 0: the test tone is a 50 ms burst starting at every multiple of this many seconds of QPC time

@@ -6,6 +6,7 @@
 
 #include "dsp.hpp"
 #include "plan.hpp"
+#include "sampler.hpp"
 
 #include "dc/shmaudio/ring.hpp"
 
@@ -55,6 +56,7 @@ public:
     const float* bus(int index, int channel) const { return buses_[index][channel].data(); }
 
     MeterBank& meters() { return meters_; }
+    Sampler& sampler() { return sampler_; }
 
 private:
     using Buffer = std::array<float, kMaxBlockFrames>;
@@ -73,6 +75,7 @@ private:
                       shm::AudioRingWriter* shm);
     float* destination(const Destination& d, int channel);
     void writeShm(shm::AudioRingWriter* shm, int slot, const float* const* x, int channels, int frames);
+    void record(const MixPlan& plan, const StripPlan& s, const float* const* x, int channels, int frames);
 
     std::uint64_t generation_ = ~0ull;
     std::unique_ptr<std::array<StripState, kMaxStrips>> strips_;
@@ -81,8 +84,10 @@ private:
     std::array<std::array<Buffer, 2>, kMaxOutputBuses>& buses_;
     std::array<Buffer, 2> work_{}, post_{}, pre_{}, cue_{};
     std::array<float, kMaxBlockFrames * 2> interleave_{};
+    std::array<bool, kMaxStrips> recorded_{}; // per take stream: written in this block
     double tonePhase_ = 0;
     MeterBank meters_;
+    Sampler sampler_;
 };
 
 } // namespace dc::mixd

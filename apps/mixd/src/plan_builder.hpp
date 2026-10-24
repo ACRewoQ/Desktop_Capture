@@ -55,8 +55,15 @@ struct BuildOptions {
     double testPulseSeconds = 0; // > 0: the tone only sounds 50 ms at each multiple of this QPC time
 };
 
+// Engine-side objects a plan carries besides the settings: the recording in progress (its streams
+// decide which strips are recorded, frozen for the take) and the sampler pads.
+struct PlanResources {
+    std::shared_ptr<RecorderTake> take;
+    std::shared_ptr<const SamplerTable> sampler;
+};
+
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,
-                      const BuildOptions& options = {});
+                      const BuildOptions& options = {}, const PlanResources& resources = {});
 
 // Devices whose ID changed (Windows re-registers a device after a sample rate change or on another
 // USB port): settings that point at an ID that is gone are moved to the one connected device of the
