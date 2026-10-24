@@ -162,14 +162,16 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/mixer/track/move` | `track`:int, `position`:int | nil | P0 | 並び順の変更 |
 | `/capture/record/start` | なし | nil | P0 | 録画開始。録画中なら `conflict` |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止。録画中でなければ `conflict` |
-| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
+| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int?, `reason`:str? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/recorder/start` | なし | str（テイクのフォルダー） | P3 | トラック別録音の開始（5.4.2） |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音の停止。録音中でなければ `conflict` |
 | `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
 | `/sampler/release` | `pad`:int, `bank`:int? | nil | P3 | パッドを離す |
 | `/sampler/stop` | `bank`:int?（なし = 全バンク） | nil | P3 | 再生中のパッドを止める |
-| `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え |
+| `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
+| `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
+| `/video/output/report` | `output`:str（`vcam` / `monitor`）, `state`:str, `detail`:str? | nil | P3 | capd から映像出力の状態を知らせる（5.4.4）。role = サービス以外は `unauthorized` |
 | `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P3 | ペアリング受付（8 章） |
 | `/remote/unpair` | `id`:str | nil | P3 | ペアリングの取り消し。つながっていれば切断する |
 | `/lan/subscribe` / `unsubscribe` | `stream`:str, `port`:int / `id`:int | int（購読番号）/ nil | P3 | ストリームの購読（10 章） |
@@ -190,8 +192,9 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `report idle` | `/capture/state` = `idle`、`capture.stopped` | |
 | capd 側の失敗（エンコーダーを開けない、ディスク満杯で安全停止など） | `/capture/state` = `error`、`/capture/error` = `error` | `/capture/report` `state="error"`, `error` |
 | 録画中（`starting` / `recording` / `stopping`）に capd の接続が切れた | `/capture/state` = `error`、`/capture/error` = "capture process disconnected" | |
+| capd が録画中にファイルを切り替えた（GPU リセットなど、P3） | `/capture/file` を新しいファイルに。`/capture/elapsed_ms` は数え続け、`capture.started` は送らない。`capture.segment` `file`, `reason` | 前のファイルを閉じ、新しいファイルを開いて `/capture/report` `state="recording"`, `file`, `reason` |
 
-`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
+`reason` は、録画中（`/capture/state` = `recording`）の `report recording` に付けたときだけ「ファイルの切り替え」の意味になります（`gpu_reset` など。UI は表示に使うだけ）。`recording` でないときの `reason` は無視します。`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
 
 #### 5.4.2 トラック別録音（レコーダー）
 
@@ -214,6 +217,23 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 再生中は `playing` が true になります（約 30Hz で更新）。再生中にファイルを差し替えるとその音は止まります。
 - `pad`・`bank` が範囲外なら `out_of_range` です。
 
+#### 5.4.4 映像出力の状態（仮想カメラ・全画面表示）
+
+仮想カメラ（`/video/vcam/*`）と全画面表示（`/video/monitor/*`）は capd が出します。capd は出力の状態が変わるたびに `/video/output/report` で知らせ、エンジンは `/video/<output>/state`・`/video/<output>/detail` に書きます（`detail` 省略 = `""`）。
+
+| `output` | `state` | 意味 |
+|---|---|---|
+| `vcam` | `off` | 出していない（`/video/vcam/mix` = 0、またはミックスがない） |
+| | `waiting` | 出しているが、カメラを開いているアプリがない |
+| | `active` | アプリがカメラを読んでいる |
+| | `unavailable` | 出せない（仮想カメラが未登録など）。`detail` に理由 |
+| `monitor` | `off` | 出していない（`/video/monitor/mix` = 0、またはミックスがない） |
+| | `active` | 表示中 |
+| | `no_display` | `/video/monitor/display` のモニターが見つからない。つながれば capd が自動で戻して `active` を送る |
+| | `error` | 表示できない。`detail` に理由。ほかの出力（録画・仮想カメラ）は止まらない |
+
+`output` か `state` が上の表にない値なら `bad_request` です。capd の接続が切れたら、エンジンは両方を `off`・`""` に戻します（capd は再接続したら今の状態を送り直します）。
+
 ### 5.5 Event（通知）
 
 パラメーターではない出来事を知らせます。状態そのものは必ずツリーにも載せ、Event は「起きたこと」の通知だけに使います（再接続したクライアントはツリーから状態を復元できるようにするため）。
@@ -232,6 +252,44 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - クライアントは 5 秒ごとに `Ping` を送ります。サーバーはすぐ `Pong` を返します。
 - サーバーは 15 秒間何も受信しなかった接続を切ります。
 - 切断されたクライアントは再接続し、スナップショットから作り直します。
+
+### 5.7 エフェクト
+
+各トラックとマスターに最大 16 個のエフェクトを挿入できます。処理順は `fx/1` → `fx/2` → …で、置き場所は Lo-Hi フィルターの後・録画の pre タップとフェーダーの前です（入力 → ローカット → ハイカット → エフェクト → [pre] → フェーダー → パン → [post]）。
+
+スロット `/track/#/fx/#`（マスターは `/master/fx/#`）の中身：
+
+| パス | 内容 |
+|---|---|
+| `type` | `eq4` / `comp` / `gate` / `reverb` / `delay` / `limiter`（内蔵）、`vst3:<id>`（`/plugins/#/id`） |
+| `name` | 表示名。内蔵は日本語名、VST3 はプラグイン名 |
+| `bypass` | バイパス（10ms で切り替え、バイパス中の VST3 は処理しない） |
+| `param/<キー>` | パラメーター（float）。内蔵はキーと範囲が決まっている（[protocol-params.md](protocol-params.md) の「エフェクトのパラメーター」表）。VST3 はキー `p<ParamID>`（VST3 の ParamID を 10 進で）、値は 0〜1 の正規化値 |
+| `status` | `ok`、`loading`（VST3 を読み込み中）、`failed`（読み込み失敗、理由は `error`）、`missing`（その VST3 がこの PC にない） |
+| `latency_samples` | エフェクトが足す遅延。トラック間の遅延補正はしない（ライブ用途のため。遅延のあるエフェクトを並列の経路に挿すと位相がずれる） |
+| `param_count` | パラメーターの総数 |
+| `editor` | VST3 のプラグイン画面をエンジンの PC に開く（true）・閉じる（false）。利用者が画面を閉じると false に戻る。内蔵エフェクトで true は `conflict` |
+
+コマンド：
+
+| メソッド | 引数 | 戻り値 | 説明 |
+|---|---|---|---|
+| `/track/#/fx/add` | `type`:str, `index`:int?（既定 末尾） | int（スロット番号） | 追加。`index` 以降は 1 つずつ後ろへずれる。16 個あれば `limit_reached`、知らない種別は `not_found`。VST3 は `status = loading` で追加され、読み込めたら `ok` とパラメーターが届く |
+| `/track/#/fx/remove` | `index`:int | nil | 削除。後ろのスロットは前に詰める |
+| `/track/#/fx/move` | `from`:int, `to`:int | nil | 並べ替え。番号は付け直す |
+| `/track/#/fx/#/params` | `offset`:int?（既定 0）, `count`:int?（既定 64、最大 256）, `keys`:str?（`,` 区切り） | str（JSON 配列） | パラメーターの情報。`keys` があればそのキーだけ、なければプラグインの並び順で `offset` から `count` 個 |
+
+マスターも同じ（`/master/fx/add` など）。スロット番号はトラック番号と違い固定 ID ではなく、削除・並べ替えのたびに 1 から振り直します（スロットの部分木を消して作り直すデルタが届きます）。
+
+`params` の戻り値は JSON の配列で、要素は `{"key", "name", "unit", "min", "max", "default", "value", "text", "steps", "log"}` です。`text` はプラグインが表示する値の文字列（例 `"-6.0 dB"`）、`steps` は 0 = 連続、2 以上 = 段階数、`log` は内蔵エフェクトの対数スライダー。VST3 の `min`/`max` は 0 と 1、`unit` はプラグインの申告するラベルです。
+
+VST3 のパラメーターは数万個あるものがあるので（V7）、ツリーには全部は載せません。載るのは、読み込み時のプラグインの並びで最初の 128 個、`params` で取得されたもの、プラグイン画面で動かされたもので、1 つのエフェクトにつき最大 1024 個です。ツリーにないパラメーターは `params` で取得してから Set します（取得したキーはそのデルタが `Result` より前に届きます）。プラグインの中で変わった値（画面での操作、プリセットの切り替え）もデルタで届きます。ホストが自動化用に用意しただけの空きスロット（名前が空や `#` で始まるもの）と MIDI CC 用のものは出しません。
+
+### 5.8 プラグイン（VST3）
+
+エンジンは起動時に前回のスキャン結果（キャッシュ）を読み、`/plugins/#` に一覧を載せます。`/plugins/scan` は標準の VST3 フォルダーと `/plugins/extra_dirs` を探し、新しいファイルと更新されたファイルだけを調べます（`rescan = true` で全部）。プラグインはスキャン用の子プロセスで 1 つずつ読み込むので、読み込みで落ちる・止まるプラグインがあってもエンジンは止まりません（`status` = `crashed` / `timeout`）。進み具合は `/plugins/scan/state`・`progress`・`current` で分かります。スキャン中にもう一度呼ぶと `conflict` です。
+
+`/plugins/#` の番号はスキャンのたびに名前順で振り直します。エフェクトの `type` には番号ではなく `id` を使います。
 
 ## 6. エラーコード
 

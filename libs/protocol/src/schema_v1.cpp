@@ -61,7 +61,14 @@ void addStrip(Schema& sc, const std::string& base, bool isMaster) {
     sc.add(s(base + "/fx/#/type", "", "エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>）", RO));
     sc.add(s(base + "/fx/#/name", "", "エフェクトの表示名", RO));
     sc.add(b(base + "/fx/#/bypass", false, "バイパス"));
-    sc.add(fAny(base + "/fx/#/param/*", "エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義"));
+    sc.add(fAny(base + "/fx/#/param/*",
+                "エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1"));
+    sc.add(e(base + "/fx/#/status", {"ok", "loading", "failed", "missing"}, "ok",
+             "状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない）", RO));
+    sc.add(s(base + "/fx/#/error", "", "失敗の理由", RO));
+    sc.add(i(base + "/fx/#/latency_samples", 0, 1000000, 0, "エフェクトが足す遅延（サンプル）", RO));
+    sc.add(i(base + "/fx/#/param_count", 0, 1000000, 0, "パラメーターの総数（VST3 はツリーに載っていないものも数える）", RO));
+    sc.add(b(base + "/fx/#/editor", false, "プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る）"));
 }
 
 Schema buildV1() {
@@ -168,6 +175,13 @@ Schema buildV1() {
     sc.add(e("/video/vcam/resolution", {"1080p", "720p"}, "1080p", "仮想カメラの解像度"));
     sc.add(i("/video/monitor/mix", 0, kMaxVideoMixes, 0, "全画面表示に出す映像ミックス（0 = なし）"));
     sc.add(s("/video/monitor/display", "", "全画面表示先のモニター ID"));
+    // what capd's outputs are doing (capd reports these with /video/output/report)
+    sc.add(e("/video/vcam/state", {"off", "waiting", "active", "unavailable"}, "off",
+             "仮想カメラの状態（waiting = カメラを開いたアプリがない、unavailable = 未登録など）", RO));
+    sc.add(s("/video/vcam/detail", "", "仮想カメラの状態の説明（unavailable の理由など）", RO));
+    sc.add(e("/video/monitor/state", {"off", "active", "no_display", "error"}, "off",
+             "全画面表示の状態（no_display = モニターが見つからない。つながれば自動で戻る）", RO));
+    sc.add(s("/video/monitor/detail", "", "全画面表示の状態の説明（error の内容など）", RO));
     sc.add(i("/video/preview/mix", 0, kMaxVideoMixes, 1, "リモコンのプレビューに出す映像ミックス"));
     sc.add(i("/video/preview/width", 160, 1920, 960, "プレビュー解像度（幅）"));
     sc.add(i("/video/preview/height", 90, 1080, 540, "プレビュー解像度（高さ）"));
@@ -202,6 +216,21 @@ Schema buildV1() {
     sc.add(s("/lan/peers/#/stream/#/name", "", "相手の LAN 送信ストリームの表示名（接続中だけ）", RO));
     sc.add(b("/lan/peers/#/stream/#/active", false, "相手のストリームに何かが出力している", RO));
 
+    // --- plugins (VST3, lane A1) ---
+    sc.add(s("/plugins/extra_dirs", "", "標準以外の VST3 フォルダー（; 区切り）"));
+    sc.add(e("/plugins/scan/state", {"idle", "scanning"}, "idle", "プラグインのスキャン状態", RO));
+    sc.add(f("/plugins/scan/progress", 0.0, 1.0, 0.0, "スキャンの進み具合", RO));
+    sc.add(s("/plugins/scan/current", "", "スキャン中のファイル", RO));
+    sc.add(s("/plugins/#/id", "", "エフェクト種別として使う ID（vst3:<id>）", RO));
+    sc.add(s("/plugins/#/name", "", "プラグイン名", RO));
+    sc.add(s("/plugins/#/vendor", "", "メーカー", RO));
+    sc.add(s("/plugins/#/category", "", "分類（プラグインの申告、例 Fx|EQ）", RO));
+    sc.add(b("/plugins/#/instrument", false, "音源（MIDI で鳴らすもの）", RO));
+    sc.add(e("/plugins/#/status", {"ok", "failed", "crashed", "timeout", "unsupported"}, "ok",
+             "スキャン結果（unsupported = モノ・ステレオのメイン入出力がない）", RO));
+    sc.add(s("/plugins/#/error", "", "スキャンで失敗した理由", RO));
+    sc.add(s("/plugins/#/path", "", "プラグインのファイル", RO));
+
     // --- remote ---
     sc.add(i("/remote/clients", 0, 4, 0, "接続中のリモコン数", RO));
     sc.add(b("/remote/pairing/active", false, "ペアリング受付中", RO));
@@ -218,8 +247,8 @@ Schema buildV1() {
     sc.addMethod({"/mixer/track/move", "track:int, position:int", "nil", "並び順を変える", "P0"});
     sc.addMethod({"/capture/record/start", "", "nil", "録画開始", "P0"});
     sc.addMethod({"/capture/record/stop", "", "nil", "録画停止", "P0"});
-    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?", "nil",
-                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ）", "P2"});
+    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?, reason:string?", "nil",
+                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ。reason は録画中のファイル切り替え）", "P2"});
     sc.addMethod({"/recorder/start", "", "string（テイクのフォルダー）",
                   "トラック別録音を開始。録音対象がなければ conflict", "P3"});
     sc.addMethod({"/recorder/stop", "", "nil", "トラック別録音を停止", "P3"});
@@ -232,7 +261,15 @@ Schema buildV1() {
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
     sc.addMethod({"/master/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/master/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
+    sc.addMethod({"/master/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
+    sc.addMethod({"/track/#/fx/#/params", "offset:int?, count:int?, keys:string?", "string（JSON 配列）",
+                  "パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる", "P3"});
+    sc.addMethod({"/master/fx/#/params", "offset:int?, count:int?, keys:string?", "string（JSON 配列）",
+                  "パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる", "P3"});
+    sc.addMethod({"/plugins/scan", "rescan:bool?", "nil", "VST3 プラグインを探す（rescan = 前回の結果を使わずに全部）", "P3"});
     sc.addMethod({"/devices/refresh", "", "nil", "デバイス・プロセス一覧の更新", "P2"});
+    sc.addMethod({"/video/output/report", "output:string, state:string, detail:string?", "nil",
+                  "capd が出力（vcam / monitor）の状態をエンジンに知らせる（role = サービスの接続だけ）", "P3"});
     sc.addMethod({"/remote/pairing/start", "", "string（6桁コード）", "ペアリング受付開始（2 分、1 台つながるまで）", "P3"});
     sc.addMethod({"/remote/pairing/stop", "", "nil", "ペアリング受付終了", "P3"});
     sc.addMethod({"/remote/unpair", "id:string", "nil", "ペアリングを取り消す（つながっていれば切断）", "P3"});
