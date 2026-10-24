@@ -167,7 +167,7 @@ FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました
 
 ## 7. JUCE を使うターゲット（VST3 ホスト）
 
-JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。mixd の VST3 ホスト（P3 A1）が使うので、Windows ではオプション `DC_WITH_JUCE` が既定で ON です（`windows` プリセットと `scripts\test.ps1` でもビルドされ、初回は取得とビルドに 10 分ほどかかります）。Linux では既定 OFF で、試すときは次のようにします（X11 などの開発パッケージが必要、プラグインの画面を開く `vst3_probe_test_plugin` は xvfb では通りません）。
+JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。mixd の VST3 ホスト（P3 A1）が使うので、Windows ではオプション `DC_WITH_JUCE` が既定で ON です（`windows` プリセットが `DC_WITH_JUCE=ON` を渡すので、前からある build\windows でも `scripts\test.ps1` でビルドされ、初回は取得とビルドに 10 分ほどかかります）。Linux では既定 OFF で、試すときは次のようにします（X11 などの開発パッケージが必要、プラグインの画面を開く `vst3_probe_test_plugin` は xvfb では通りません）。
 
 ```bash
 cmake -S . -B build/linux-juce -G Ninja -DDC_WITH_JUCE=ON && cmake --build build/linux-juce
