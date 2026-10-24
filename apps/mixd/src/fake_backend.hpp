@@ -24,6 +24,7 @@ public:
         double ppm = 0;         // clock offset against the system clock
         int periodFrames = 480; // shared mode period
         bool sharedOnly = false; // no 48 kHz exclusive format: exclusive requests fall back to shared
+        int exclusivePeriod = 0; // > 0: in exclusive mode the device only runs with this period
     };
 
     // Two inputs (mono mic, stereo line) and two outputs (speakers, headphones), like the mock server.

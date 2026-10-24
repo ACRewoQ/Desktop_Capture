@@ -16,12 +16,14 @@ public:
     FakeStream(FakeBackend::Device device, const StreamConfig& cfg, InputCallback in, OutputCallback out,
                std::shared_ptr<FakeBackend::Meter> meter)
         : dev_(std::move(device)), fallback_(cfg.exclusive && dev_.sharedOnly),
+          wrongPeriod_(cfg.exclusive && !fallback_ && dev_.exclusivePeriod > cfg.blockFrames),
           period_(cfg.exclusive && !fallback_ ? cfg.blockFrames : dev_.periodFrames), in_(std::move(in)), out_(std::move(out)),
           meter_(std::move(meter)) {}
     ~FakeStream() override { stop(); }
 
     bool start(std::string*) override {
         stop_ = false;
+        started_ = qpcSecondsNow();
         thread_ = std::thread([this] { run(); });
         return true;
     }
@@ -32,9 +34,11 @@ public:
     int channels() const override { return dev_.info.channels; }
     int periodFrames() const override { return period_; }
     double latencySeconds() const override { return period_ / kSampleRate; }
-    bool failed() const override { return false; }
+    bool failed() const override { return suggestedPeriod() > 0; }
     std::uint64_t glitches() const override { return 0; }
     bool sharedFallback() const override { return fallback_; }
+    // like the UR22: an exclusive period smaller than the device's own fails after a moment
+    int suggestedPeriod() const override { return wrongPeriod_ && started_.load() > 0 && qpcSecondsNow() - started_.load() > 0.2 ? dev_.exclusivePeriod : 0; }
 
 private:
     void run() {
@@ -76,7 +80,9 @@ private:
 
     FakeBackend::Device dev_;
     bool fallback_;
+    bool wrongPeriod_;
     int period_;
+    std::atomic<double> started_{0};
     InputCallback in_;
     OutputCallback out_;
     std::shared_ptr<FakeBackend::Meter> meter_;

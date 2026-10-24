@@ -336,6 +336,7 @@ public:
     bool failed() const override { return failed_.load(); }
     std::uint64_t glitches() const override { return glitches_.load(); }
     bool sharedFallback() const override { return sharedFallback_; }
+    int suggestedPeriod() const override { return suggestedPeriod_.load(); }
     std::string diagnostics() const override {
         // frames per second the device actually took or gave since start: should be about 48000
         std::string out;
@@ -356,6 +357,19 @@ private:
     bool fail(std::string* error, const char* what, HRESULT hr) {
         if (error) *error = std::string(what) + ": " + hrText(hr);
         return false;
+    }
+
+    // Exclusive mode: the device should wake us once per period. Measure the first second; a device
+    // that wakes much less often cannot be fed with this period. True = give up (failed, suggestion).
+    bool eventRateWrong(double now) {
+        if (!exclusive_ || events_ > kRateCheckEvents) return false;
+        if (++events_ == kRateSkipEvents) firstEvent_ = now;
+        if (events_ < kRateCheckEvents) return false;
+        const double perEvent = (now - firstEvent_) / (kRateCheckEvents - kRateSkipEvents) * kSampleRate;
+        if (perEvent < 1.5 * period_) return false;
+        suggestedPeriod_ = (static_cast<int>(perEvent) + 31) / 32 * 32;
+        markFailed();
+        return true;
     }
 
     void markFailed() {
@@ -400,6 +414,7 @@ private:
                 glitches_.fetch_add(1); // a period was missed
             }
             lastEvent = now;
+            if (eventRateWrong(now)) break;
 
             // when the first new frame will be played (QPC seconds): the device position at a QPC
             // instant plus what is queued ahead of it
@@ -456,6 +471,7 @@ private:
             const auto gapUs = lastRead > 0 ? static_cast<std::int64_t>((now - lastRead) * 1e6) : 0;
             lastRead = now;
             if (gapUs > maxGapUs_.load()) maxGapUs_ = gapUs;
+            if (eventRateWrong(now)) break;
             UINT32 next = 0;
             HRESULT hr = S_OK;
             // device positions count frames at the device rate (44.1 kHz for a device converted in
@@ -497,7 +513,6 @@ private:
                 if (startTime_.load() == 0) startTime_ = now;
                 hr = capture_->ReleaseBuffer(frames);
                 if (FAILED(hr)) break;
-                if (exclusive_) break; // exclusive mode: one buffer per event
             }
             if (FAILED(hr)) {
                 markFailed();
@@ -534,6 +549,10 @@ private:
     std::atomic<std::uint64_t> frames_{0}; // frames rendered or captured since the first period
     std::atomic<std::uint64_t> duplicates_{0}; // captured frames dropped as already delivered
     double devRate_ = kSampleRate;         // rate of the device positions
+    static constexpr int kRateSkipEvents = 10, kRateCheckEvents = 110;
+    int events_ = 0;                       // stream thread only
+    double firstEvent_ = 0;
+    std::atomic<int> suggestedPeriod_{0};
     std::atomic<double> startTime_{0};
     std::thread thread_;
 };

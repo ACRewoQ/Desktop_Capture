@@ -123,6 +123,14 @@ void DeviceManager::run() {
     }
 }
 
+StreamConfig DeviceManager::configFor(const std::string& key) const {
+    StreamConfig c = config_;
+    if (!c.exclusive) return c;
+    if (sharedOverride_.count(key)) c.exclusive = false;
+    else if (auto it = periodOverride_.find(key); it != periodOverride_.end()) c.blockFrames = std::max(c.blockFrames, it->second);
+    return c;
+}
+
 int DeviceManager::clockPeriod() const {
     if (!clockKey_.empty())
         if (auto it = streams_.find(clockKey_); it != streams_.end()) return it->second.stream->periodFrames();
@@ -180,7 +188,7 @@ bool DeviceManager::openInput(const DeviceInfo& d, std::string* error) {
     // the port through a holder filled in before start()
     auto holder = std::make_shared<std::shared_ptr<InputPort>>();
     auto stream = backend_.openInput(
-        d, config_,
+        d, configFor("in:" + d.id),
         [holder](const float* frames, int count, double time, bool discontinuity) {
             auto& port = *holder;
             if (discontinuity) port->bridge.producerDiscontinuity();
@@ -233,7 +241,7 @@ bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* e
             }
         };
     }
-    auto stream = backend_.openOutput(d, config_, std::move(cb), error);
+    auto stream = backend_.openOutput(d, configFor("out:" + d.id), std::move(cb), error);
     if (!stream) return false;
     auto port = std::make_shared<OutputPort>(d.id, bridgeConfig(2, asClock ? 0 : stream->periodFrames()));
     *holder = port;
@@ -285,6 +293,8 @@ void DeviceManager::reconcile() {
             timer_.reset();
         }
         lastFailure_.clear();
+        periodOverride_.clear();
+        sharedOverride_.clear();
         config_ = cfg;
     }
 
@@ -304,7 +314,13 @@ void DeviceManager::reconcile() {
             const bool wanted = s.device.input ? contains(demand.inputs, s.device.id) : contains(demand.outputs, s.device.id);
             const bool present = device(s.device.id, s.device.input) != nullptr;
             if (!wanted || !present || s.stream->failed()) {
-                if (s.stream->failed()) lastFailure_[k] = qpcSecondsNow();
+                if (const int period = s.stream->suggestedPeriod(); period > 0) {
+                    // reopen right away with the period the device uses, or shared if that was tried
+                    if (!periodOverride_.count(k)) periodOverride_[k] = period;
+                    else sharedOverride_.insert(k);
+                } else if (s.stream->failed()) {
+                    lastFailure_[k] = qpcSecondsNow();
+                }
                 drop.push_back(k);
             }
         }
@@ -388,6 +404,11 @@ void DeviceManager::reconcile() {
     for (auto& [k, s] : streams_)
         if (s.stream->sharedFallback())
             st.notes.push_back(s.device.name + ": 排他モードの 48kHz に対応していないため共有モードで開いた");
+        else if (sharedOverride_.count(k))
+            st.notes.push_back(s.device.name + ": 排他モードの周期どおりに動かないため共有モードで開いた");
+        else if (auto it = periodOverride_.find(k); it != periodOverride_.end())
+            st.notes.push_back(s.device.name + ": 排他モードで周期 " + std::to_string(config_.blockFrames) + " に対応せず、" +
+                               std::to_string(s.stream->periodFrames()) + " で開いた");
     if (listener_) listener_(st);
 }
 

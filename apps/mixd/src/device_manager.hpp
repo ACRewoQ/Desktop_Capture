@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <functional>
 #include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -70,6 +71,7 @@ private:
     bool openOutput(const DeviceInfo& d, bool asClock, std::string* error);
     clocksync::ClockBridge::Config bridgeConfig(int channels, int devicePeriod) const;
     int clockPeriod() const;
+    StreamConfig configFor(const std::string& key) const;
     bool retryAllowed(const std::string& key);
     void accountClosed(const OpenStream& s);
 
@@ -94,6 +96,10 @@ private:
     std::string clockKey_; // key of the clock stream, "" = timer
     StreamConfig config_;
     std::map<std::string, double> lastFailure_; // key -> time of the last failed open
+    // exclusive devices that ignored the period asked for: first reopened with the period they use,
+    // then, if that fails too, shared. Cleared when the mode or block size changes.
+    std::map<std::string, int> periodOverride_;
+    std::set<std::string> sharedOverride_;
 
     mutable std::mutex statsMutex_;
     std::uint64_t closedGlitches_ = 0; // from streams and bridges that were closed

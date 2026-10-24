@@ -45,6 +45,10 @@ public:
     virtual std::uint64_t glitches() const = 0; // device-side dropouts seen by the stream
     // Exclusive mode was asked for but the device has no 48 kHz exclusive format: it runs shared.
     virtual bool sharedFallback() const { return false; }
+    // Exclusive streams whose device signals less often than the period asked for (the Steinberg
+    // UR22 driver wakes every 10 ms whatever the period): the frames per wake-up it really uses. The
+    // stream reports failed() and the manager reopens it with this period.
+    virtual int suggestedPeriod() const { return 0; }
     // Extra detail for the xrun log (inputs: what the last dropout looked like). Any thread.
     virtual std::string diagnostics() const { return {}; }
 };
