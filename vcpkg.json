@@ -17,7 +17,9 @@
         "avformat",
         "nvcodec",
         "amf",
-        "qsv"
+        "qsv",
+        "gpl",
+        "x264"
       ],
       "platform": "windows"
     }

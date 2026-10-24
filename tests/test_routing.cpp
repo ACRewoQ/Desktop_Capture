@@ -32,7 +32,10 @@ TEST_CASE("target strings parse", "[routing]") {
     CHECK(parseTarget("track/12")->track == 12);
     CHECK(parseTarget("device/{0.0.0.00000000}.{abc}")->id == "{0.0.0.00000000}.{abc}");
     CHECK(parseTarget("vmic/cable-a")->kind == RouteTarget::Kind::VirtualMic);
-    CHECK(parseTarget("lan/studio-pc/1")->id == "studio-pc/1");
+    CHECK(parseTarget("lan/studio-pc/1")->id == "studio-pc/1"); // parses; validateRouting accepts lan/1..8 only
+    CHECK(lanStreamOf(*parseTarget("lan/3")) == 3);
+    CHECK(lanStreamOf(*parseTarget("lan/studio-pc/1")) == 0);
+    CHECK(lanStreamOf(*parseTarget("track/3")) == 0);
     CHECK_FALSE(parseTarget("track/0"));
     CHECK_FALSE(parseTarget("track/65"));
     CHECK_FALSE(parseTarget("track/x"));
@@ -80,7 +83,19 @@ TEST_CASE("self routing, missing tracks and master restrictions", "[routing]") {
     CHECK(validateRouting(t).code == ErrorCode::Conflict);
 
     t = tracks(2);
-    t.set("/master/out/1/target", std::string("lan/peer"));
+    t.set("/master/out/1/target", std::string("lan/1"));
+    CHECK_FALSE(validateRouting(t));
+
+    for (const char* bad : {"lan/peer", "lan/0", "lan/9", "lan/01", "lan/1x"}) {
+        t = tracks(2);
+        t.set("/master/out/1/target", std::string(bad));
+        CHECK(validateRouting(t).code == ErrorCode::OutOfRange);
+        t = tracks(2);
+        route(t, 1, "send/1", bad);
+        CHECK(validateRouting(t).code == ErrorCode::OutOfRange);
+    }
+    t = tracks(2);
+    route(t, 2, "out/3", "lan/8");
     CHECK_FALSE(validateRouting(t));
 
     t = tracks(2);

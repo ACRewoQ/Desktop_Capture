@@ -1,4 +1,5 @@
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/fx.hpp"
 #include "dc/protocol/param_store.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -93,4 +94,58 @@ TEST_CASE("engine publish adds, changes and removes paths", "[store]") {
     CHECK_FALSE(s.publish({{"/capture/state", std::string("recording")}}).has_value()); // no-op
     CHECK_THROWS_AS(s.publish({{"/nope", true}}), std::invalid_argument);
     CHECK_THROWS_AS(s.publish({{"/capture/state", std::string("dancing")}}), std::invalid_argument);
+}
+
+TEST_CASE("effect parameters are checked against the slot's type", "[store][fx]") {
+    auto s = seeded();
+    s.publish({{"/track/1/fx/1/type", std::string("comp")},
+               {"/track/1/fx/1/param/ratio", 4.0},
+               {"/track/1/fx/1/editor", false},
+               {"/master/fx/1/type", std::string("vst3:1a2b3c4d")},
+               {"/master/fx/1/param/p42", 0.5},
+               {"/master/fx/1/editor", false}});
+
+    CHECK(s.applySet(Set{1, {{"/track/1/fx/1/param/ratio", 8.0}}}, "ui").result.code == ErrorCode::Ok);
+    CHECK(s.applySet(Set{2, {{"/track/1/fx/1/param/ratio", 50.0}}}, "ui").result.code == ErrorCode::OutOfRange);
+    CHECK(s.tree().getAs<double>("/track/1/fx/1/param/ratio") == 8.0); // rolled back
+    CHECK(s.applySet(Set{3, {{"/master/fx/1/param/p42", 1.5}}}, "ui").result.code == ErrorCode::OutOfRange);
+    CHECK(s.applySet(Set{4, {{"/master/fx/1/param/p42", std::int64_t{1}}}}, "ui").result.code == ErrorCode::Ok);
+    CHECK(s.applySet(Set{5, {{"/track/1/fx/1/editor", true}}}, "ui").result.code == ErrorCode::Conflict);
+    CHECK(s.applySet(Set{6, {{"/master/fx/1/editor", true}}}, "ui").result.code == ErrorCode::Ok);
+    // a key the slot does not have is not in the tree
+    CHECK(s.applySet(Set{7, {{"/track/1/fx/1/param/p1", 0.5}}}, "ui").result.code == ErrorCode::NotFound);
+}
+
+TEST_CASE("effect catalog is consistent", "[schema][fx]") {
+    const auto& schema = schemaV1();
+    for (const auto& t : builtinFx()) {
+        INFO(t.type);
+        CHECK(findBuiltinFx(t.type) == &t);
+        CHECK_FALSE(isVst3Type(t.type));
+        for (const auto& p : t.params) {
+            INFO(p.key);
+            CHECK(p.min < p.max);
+            CHECK(p.defaultValue >= p.min);
+            CHECK(p.defaultValue <= p.max);
+            const auto path = "/track/1/fx/1/param/" + p.key;
+            CHECK(isValidPath(path));
+            CHECK(schema.find(path) != nullptr);
+            CHECK(findFxParam(t, p.key) == &p);
+        }
+    }
+    CHECK(vst3ParamKey(42) == "p42");
+    CHECK(vst3ParamId("p42") == 42u);
+    CHECK(vst3ParamId("p4294967295") == 4294967295u);
+    CHECK_FALSE(vst3ParamId("p042"));
+    CHECK_FALSE(vst3ParamId("ratio"));
+    CHECK_FALSE(vst3ParamId("p"));
+    auto fp = parseFxParamPath("/track/3/fx/2/param/ratio");
+    REQUIRE(fp);
+    CHECK(fp->slot == "/track/3/fx/2");
+    CHECK(fp->key == "ratio");
+    CHECK(parseFxParamPath("/master/fx/1/param/p7")->slot == "/master/fx/1");
+    CHECK_FALSE(parseFxParamPath("/track/3/volume_db"));
+    CHECK(schema.findMethod("/track/2/fx/3/params") != nullptr);
+    CHECK(schema.findMethod("/master/fx/move") != nullptr);
+    CHECK(schema.findMethod("/plugins/scan") != nullptr);
 }

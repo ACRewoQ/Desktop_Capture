@@ -105,7 +105,8 @@ void renumber(std::vector<Change>& c, const std::vector<int>& order, const std::
 }
 
 // Paths that hold a mix number (the video outputs).
-const char* const kMixRefs[] = {"/capture/mix", "/video/vcam/mix", "/video/monitor/mix", "/video/preview/mix"};
+const char* const kMixRefs[] = {"/capture/mix", "/video/vcam/mix", "/video/monitor/mix", "/video/preview/mix",
+                                 "/video/lan/mix"};
 
 const char* defaultSourceName(const std::string& kind) {
     if (kind == "display") return "Display";

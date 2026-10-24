@@ -96,7 +96,9 @@ void Recorder::start() {
         videoEncoder_->start([this](AVPacket* p) { muxer_->write(videoStream_, p); });
         const std::int64_t freq = shm::qpcFrequency();
         const std::int64_t fps = settings_.video.fps;
-        consumerId_ = mix_->addConsumer([this, freq, fps](ID3D11Texture2D* canvas, std::int64_t, std::int64_t qpc) {
+        const auto keyEvery = static_cast<std::int64_t>(settings_.forceKeyframeSeconds * double(fps));
+        consumerId_ = mix_->addConsumer([this, freq, fps, keyEvery](ID3D11Texture2D* canvas, std::int64_t,
+                                                                    std::int64_t qpc) {
             if (qpc < startQpc_) return;
             // Frame number on the recording's time line; a mix faster than the recording skips ticks.
             const auto pts = static_cast<std::int64_t>(
@@ -105,7 +107,9 @@ void Recorder::start() {
             auto surface = videoEncoder_->acquire();
             if (!surface.frame) return;  // encoder behind: this frame is dropped (counted by the encoder)
             converter_->convert(canvas, surface.texture, surface.arrayIndex);
-            videoEncoder_->submit(surface, pts);
+            // Forced keyframes land between the regular ones (GOP 2 s) so "capd probe" can count them.
+            const bool key = keyEvery > 0 && pts > 0 && lastPts_ / keyEvery != pts / keyEvery;
+            videoEncoder_->submit(surface, pts, key);
             lastPts_ = pts;
             ++videoFrames_;
         });

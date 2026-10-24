@@ -7,6 +7,7 @@
 //   dc-cli schema [--markdown]                         print the protocol v1 schema (offline)
 
 #include "dc/control/client.hpp"
+#include "dc/protocol/fx.hpp"
 #include "dc/protocol/meter.hpp"
 #include "dc/protocol/schema.hpp"
 #include "dc/version.hpp"
@@ -119,6 +120,26 @@ int printSchema(bool markdown) {
         for (const auto& m : schema.methods()) {
             std::cout << "| `" << m.pattern << "` | " << (m.args.empty() ? "なし" : m.args) << " | " << m.returns
                       << " | " << m.since << " | " << m.description << " |\n";
+        }
+        auto num = [](double d) {
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%g", d);
+            return std::string(buf);
+        };
+        std::cout << "\n## エフェクトのパラメーター（内蔵）\n\n"
+                     "`/track/#/fx/#/param/<キー>`（マスターは `/master/fx/#/param/<キー>`）。値は単位そのまま（float）。"
+                     "対数は UI のスライダーを対数で動かすもの。\n";
+        for (const auto& t : builtinFx()) {
+            std::cout << "\n### `" << t.type << "` " << t.name;
+            if (t.latencySamples > 0) std::cout << "（遅延 " << t.latencySamples << " サンプル）";
+            std::cout << "\n\n| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |\n|---|---|---|---|---|---|\n";
+            for (const auto& p : t.params) {
+                std::cout << "| `" << p.key << "` | " << p.name << " | " << p.unit << " | ";
+                if (p.steps == 2) std::cout << "0 / 1";
+                else std::cout << num(p.min) << " 〜 " << num(p.max);
+                std::cout << " | " << num(p.defaultValue) << " | " << (p.steps == 2 ? "スイッチ" : p.log ? "対数" : "")
+                          << " |\n";
+            }
         }
     } else {
         for (const auto& s : schema.params())
