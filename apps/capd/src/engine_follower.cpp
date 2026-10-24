@@ -29,7 +29,12 @@ EngineFollower::EngineFollower(Options options) : options_(std::move(options)) {
     if (options_.port == 0) options_.port = proto::kDefaultControlPort;
 }
 
-EngineFollower::~EngineFollower() { stopRecording(false); }
+EngineFollower::~EngineFollower() {
+    stopRecording(false);
+#ifdef _WIN32
+    video_.reset();
+#endif
+}
 
 bool EngineFollower::ensureConnected() {
     if (client_ && client_->connected()) return true;
@@ -48,11 +53,50 @@ bool EngineFollower::ensureConnected() {
     o.clientName = "capd";
     o.role = proto::ClientRole::Service;
     auto client = std::make_unique<control::ControlClient>(o);
+    client->onEvent = [this](const proto::Event& ev) {
+        if (ev.name == "video.devices.refresh") refreshWindows_ = true;
+    };
     std::string err;
     if (!client->connect(std::chrono::milliseconds(2000), &err)) return false;
     std::cout << "connected to the engine at " << options_.host << ":" << options_.port << "\n" << std::flush;
     client_ = std::move(client);
+#ifdef _WIN32
+    videoRev_ = 0;
+    if (video_) video_->reportAll();  // a restarted engine knows nothing about our sources
+#endif
     return true;
+}
+
+void EngineFollower::followVideo() {
+#ifdef _WIN32
+    if (!options_.withVideo) return;
+    if (!video_) {
+        try {
+            video_ = std::make_unique<VideoEngine>();
+            video_->setReporter([this](const std::string& method, const proto::Args& args) {
+                std::lock_guard lock(videoCallsMutex_);
+                videoCalls_.emplace_back(method, args);
+            });
+            std::cout << "video mixer on " << video_->adapterName() << "\n" << std::flush;
+        } catch (const std::exception& e) {
+            std::cout << "video mixer unavailable: " << e.what() << "\n" << std::flush;
+            options_.withVideo = false;
+            return;
+        }
+    }
+    const auto tree = client_->tree();
+    if (tree.rev() != videoRev_) {
+        videoRev_ = tree.rev();
+        video_->update(tree);
+    }
+    if (refreshWindows_.exchange(false)) video_->refreshDeviceLists(true);
+#endif
+    std::vector<std::pair<std::string, proto::Args>> calls;
+    {
+        std::lock_guard lock(videoCallsMutex_);
+        calls.swap(videoCalls_);
+    }
+    for (auto& [method, args] : calls) client_->call(method, std::move(args));  // answers are not needed
 }
 
 int EngineFollower::run(const std::atomic<bool>& stop) {
@@ -61,6 +105,7 @@ int EngineFollower::run(const std::atomic<bool>& stop) {
               << std::flush;
     while (!stop) {
         if (ensureConnected()) {
+            followVideo();
             const auto state = client_->tree().getAs<std::string>("/capture/state").value_or("idle");
             if (state != lastState_) {
                 lastState_ = state;
@@ -109,8 +154,11 @@ void EngineFollower::startRecording() {
     try {
 #ifdef _WIN32
         if (s.withVideo) {
-            mix_ = std::make_unique<VideoMix>(s.mix);
-            mix_->start();
+            if (!video_) throw std::runtime_error("the video mixer is not available");
+            int mixNo = 1;
+            if (auto v = client_->tree().getAs<std::int64_t>("/capture/mix")) mixNo = static_cast<int>(*v);
+            mix_ = video_->acquire(mixNo);
+            if (!mix_) throw std::runtime_error("video mix " + std::to_string(mixNo) + " does not exist");
         }
         recorder_ = std::make_unique<Recorder>(s, mix_.get(), path, options_.shmSuffix);
 #else
@@ -139,7 +187,6 @@ void EngineFollower::stopRecording(bool doReport) {
     const auto fin = recorder_->stop();
     recorder_.reset();
 #ifdef _WIN32
-    if (mix_) mix_->stop();
     mix_.reset();
 #endif
     std::cout << "stopped " << fin.file << " (" << fin.elapsedMs << " ms, " << fin.videoFrames << " frames, "

@@ -6,6 +6,7 @@ endif()
 
 add_library(capd_core STATIC
     src/settings.cpp
+    src/video_config.cpp
     src/audio_capture.cpp
     src/audio_encoder.cpp
     src/muxer.cpp
@@ -21,8 +22,13 @@ if(WIN32)
         src/converter.cpp
         src/compositor.cpp
         src/video_encoder.cpp
-        src/video_mix.cpp)
-    target_link_libraries(capd_core PUBLIC d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32)
+        src/video_mix.cpp
+        src/video_source.cpp
+        src/source_mf.cpp
+        src/text_renderer.cpp
+        src/mix_test.cpp)
+    target_link_libraries(capd_core PUBLIC d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32 d2d1 dwrite
+                                              windowscodecs dwmapi mfplat mfreadwrite mf mfuuid)
 endif()
 dc_apply_options(capd_core)
 if(MSVC)
