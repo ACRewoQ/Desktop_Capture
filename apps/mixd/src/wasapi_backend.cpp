@@ -375,10 +375,11 @@ private:
 
     // Exclusive capture: a device that overflows its buffer over and over in the first second (the
     // UR22 wakes every 10 ms but loses data with a 256-frame buffer) gets the device's own default
-    // period, at least twice the current one.
+    // period when that is longer (G2: 512 made the UR22 wake every 20 ms and still lose data), else
+    // twice the current one.
     bool captureOverflowing() {
         if (!exclusive_ || events_ > kRateCheckEvents || glitches_.load() < kOverflowLimit) return false;
-        const int suggestion = std::max(defaultPeriod_, 2 * period_);
+        const int suggestion = defaultPeriod_ > period_ ? defaultPeriod_ : 2 * period_;
         suggestedPeriod_ = (suggestion + 31) / 32 * 32;
         markFailed();
         return true;
