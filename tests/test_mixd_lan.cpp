@@ -336,7 +336,9 @@ TEST_CASE("pairing: LAN clients need a code once, then their token", "[mixd][lan
     CHECK(cb->call("/lan/peers/pair", {{"id", "addr:" + address}, {"code", std::string("123456")}}).get().code ==
           proto::ErrorCode::Unauthorized); // pairing is not open
     const auto code2 = std::get<std::string>(ca->call("/remote/pairing/start").get().value);
-    REQUIRE(cb->call("/lan/peers/pair", {{"id", "addr:" + address}, {"code", code2}}).get().code == proto::ErrorCode::Ok);
+    // the code as a number, the way dc-cli sends "012345"
+    REQUIRE(cb->call("/lan/peers/pair", {{"id", "addr:" + address}, {"code", std::int64_t{std::stoll(code2)}}}).get().code ==
+            proto::ErrorCode::Ok);
     CHECK(waitFor(*cb, [&](const proto::ParamTree& t) {
         return str(t, "/lan/peers/1/id") == a.lan->serverId() && str(t, "/lan/peers/1/state") == "connected";
     }));

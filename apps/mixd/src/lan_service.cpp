@@ -39,6 +39,18 @@ std::optional<std::string> strArg(const Args& args, const char* key) {
     return std::nullopt;
 }
 
+// A pairing code or id typed on a command line may arrive as a number ("012345" -> 12345).
+std::optional<std::string> textArg(const Args& args, const char* key, int digits = 0) {
+    if (auto s = strArg(args, key)) return s;
+    if (auto it = args.find(key); it != args.end())
+        if (auto* v = std::get_if<std::int64_t>(&it->second); v && *v >= 0) {
+            auto t = std::to_string(*v);
+            if (static_cast<int>(t.size()) < digits) t.insert(0, std::size_t(digits) - t.size(), '0');
+            return t;
+        }
+    return std::nullopt;
+}
+
 std::optional<std::int64_t> intArg(const Args& args, const char* key) {
     if (auto it = args.find(key); it != args.end())
         if (auto* v = std::get_if<std::int64_t>(&it->second)) return *v;
@@ -232,7 +244,7 @@ Result LanService::pairingStop(CallContext&) {
 }
 
 Result LanService::unpair(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
+    const auto id = textArg(ctx.call.args, "id");
     if (!id || !store_.removePaired(*id)) return error(ErrorCode::NotFound, "not paired");
     server_->disconnectIf([&](const control::ClientInfo& c) { return c.clientId == *id && !c.loopback; }, "unpaired");
     publishPaired();
@@ -652,8 +664,8 @@ void LanService::publishPeers() {
 }
 
 Result LanService::peerPair(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
-    const auto code = strArg(ctx.call.args, "code");
+    const auto id = textArg(ctx.call.args, "id");
+    const auto code = textArg(ctx.call.args, "code", 6);
     if (!id || !code) return error(ErrorCode::BadRequest, "id and code are required");
     Peer* p = findPeer(*id);
     if (!p || p->host.empty()) return error(ErrorCode::NotFound, "no such peer (or its address is unknown)");
@@ -687,7 +699,7 @@ Result LanService::peerPair(CallContext& ctx) {
 }
 
 Result LanService::peerForget(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
+    const auto id = textArg(ctx.call.args, "id");
     Peer* p = id ? findPeer(*id) : nullptr;
     if (!p) return error(ErrorCode::NotFound, "no such peer");
     store_.removePeerToken(*id);
