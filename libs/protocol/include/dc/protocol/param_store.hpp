@@ -49,7 +49,8 @@ private:
     SemanticValidator validator_;
 };
 
-// Default semantic validator: runs validateRouting() when a routing target changed.
+// Default semantic validator: runs validateRouting() when a routing target changed and
+// validateFxChanges() for effect parameters.
 ValidationError defaultSemanticValidator(const ParamTree& after, const std::vector<Change>& changes);
 
 } // namespace dc::proto
