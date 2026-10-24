@@ -20,6 +20,8 @@ inline constexpr int kMaxTrackSends = 8;
 inline constexpr int kMaxFxPerTrack = 16;
 inline constexpr int kMaxVideoMixes = 4;
 inline constexpr int kMaxCaptureAudioStreams = 8;
+inline constexpr int kSamplerBanks = 8;
+inline constexpr int kSamplerPads = 16; // per bank
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 
