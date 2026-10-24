@@ -24,3 +24,10 @@ add_library(dc::mixd_core ALIAS dc_mixd_core)
 add_executable(mixd main.cpp)
 target_link_libraries(mixd PRIVATE dc::mixd_core)
 dc_apply_options(mixd)
+
+# VST3 plugins (lane A1) need JUCE; without it mixd runs with the built-in effects only.
+if(DC_WITH_JUCE)
+    add_subdirectory(vst3)
+    target_link_libraries(mixd PRIVATE dc::mixd_vst3)
+    target_compile_definitions(mixd PRIVATE DC_HAVE_VST3=1)
+endif()

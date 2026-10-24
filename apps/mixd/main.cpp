@@ -3,12 +3,20 @@
 // output records to shared memory for capd.
 //
 //   mixd [--port N] [--bind ADDR] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
-//        [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]
+//        [--bridge-ms MS] [--test-tone HZ] [--plugin-cache FILE] [--no-plugins] [--quiet]
+//        [--list-devices] [--version]
+//   mixd --scan-plugin FILE --out JSON      (the VST3 scanner child process, started by mixd itself)
+//
+// With VST3 (DC_WITH_JUCE) the main thread runs JUCE's message loop (plugin creation and windows)
+// and the engine runs on a second thread.
 
 #include "src/controller.hpp"
 #include "src/device_manager.hpp"
 #include "src/engine.hpp"
 #include "src/fake_backend.hpp"
+#ifdef DC_HAVE_VST3
+#include "vst3_host.hpp"
+#endif
 
 #include "dc/protocol/constants.hpp"
 #include "dc/shmaudio/layout.hpp"
@@ -34,10 +42,13 @@ namespace {
 
 int usage() {
     std::cerr << "usage: mixd [--port N] [--bind ADDR] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]\n"
-                 "            [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]\n"
+                 "            [--bridge-ms MS] [--test-tone HZ] [--plugin-cache FILE] [--no-plugins] [--quiet]\n"
+                 "            [--list-devices] [--version]\n"
                  "  --fake-devices  in-process test devices instead of WASAPI (always on outside Windows)\n"
                  "  --bridge-ms     minimum latency of the clock bridge to non-clock devices (default: automatic)\n"
-                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n";
+                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n"
+                 "  --plugin-cache  VST3 scan results file (default %APPDATA%\\DesktopCapture\\vst3-cache.json)\n"
+                 "  --no-plugins    no VST3 host (built-in effects only)\n";
     return 2;
 }
 
@@ -52,8 +63,8 @@ int main(int argc, char** argv) {
     opt.sessionId = std::random_device{}();
     mixd::DeviceManager::Options devOpt;
     mixd::Controller::Options ctlOpt;
-    bool fake = false, useShm = true, quiet = false, list = false;
-    std::string shmSuffix;
+    bool fake = false, useShm = true, quiet = false, list = false, plugins = true;
+    std::string shmSuffix, pluginCache, scanFile, scanOut;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -78,78 +89,109 @@ int main(int argc, char** argv) {
             ctlOpt.build.testToneHz = std::stod(next());
             ctlOpt.build.testToneGain = 0.1f;
         } else if (a == "--quiet") quiet = true;
+        else if (a == "--plugin-cache") pluginCache = next();
+        else if (a == "--no-plugins") plugins = false;
+        else if (a == "--scan-plugin") scanFile = next();
+        else if (a == "--out") scanOut = next();
         else if (a == "--list-devices") list = true;
         else return usage();
+    }
+    if (!scanFile.empty()) {
+#ifdef DC_HAVE_VST3
+        return mixd::vst3::scanChildMain(scanFile, scanOut);
+#else
+        std::cerr << "this mixd was built without VST3 support\n";
+        return 2;
+#endif
     }
     if (opt.allowRemote && opt.bindAddress == "127.0.0.1") opt.bindAddress = "0.0.0.0";
     ctlOpt.verbose = !quiet;
 
-    try {
-        std::unique_ptr<mixd::DeviceBackend> backend;
+    auto runEngine = [&](mixd::PluginHost* host) -> int {
+        ctlOpt.plugins = host;
+        try {
+            std::unique_ptr<mixd::DeviceBackend> backend;
 #ifdef _WIN32
-        if (!fake) backend = mixd::makeWasapiBackend();
+            if (!fake) backend = mixd::makeWasapiBackend();
 #endif
-        if (!backend) backend = std::make_unique<mixd::FakeBackend>();
+            if (!backend) backend = std::make_unique<mixd::FakeBackend>();
 
-        if (list) {
-            for (const auto& d : backend->enumerate())
-                std::cout << (d.input ? "in  " : "out ") << (d.connected ? "ok   " : "gone ") << (d.isDefault ? "* " : "  ")
-                          << d.channels << "ch  " << d.name << "  [" << d.id << "]\n";
-            return 0;
-        }
-
-        shm::SharedMemory memory;
-        std::unique_ptr<shm::AudioRingWriter> writer;
-        if (useShm) {
-            std::string err;
-            memory = shm::SharedMemory::create(shm::kLayout.totalBytes, shmSuffix, &err);
-            if (!memory.valid()) {
-                std::cerr << "shared memory: " << err << " (continuing without it)\n";
-            } else {
-                writer = std::make_unique<shm::AudioRingWriter>(memory.data(), currentPid());
+            if (list) {
+                for (const auto& d : backend->enumerate())
+                    std::cout << (d.input ? "in  " : "out ") << (d.connected ? "ok   " : "gone ") << (d.isDefault ? "* " : "  ")
+                              << d.channels << "ch  " << d.name << "  [" << d.id << "]\n";
+                return 0;
             }
-        }
 
-        asio::io_context io;
-        proto::ParamStore store;
-        mixd::Controller* controller = nullptr;
-        opt.onDelta = [&controller](const proto::Delta& d) {
-            if (controller) controller->onDelta(d);
-        };
-        opt.onClient = [&controller](const control::ClientInfo& c, bool connected) {
-            if (controller) controller->onClient(c, connected);
-        };
-        if (!quiet) {
-            opt.log = [](const control::ClientInfo& c, const std::string& text) {
-                std::cout << "[" << c.name << "@" << c.address << "] " << text << std::endl;
+            shm::SharedMemory memory;
+            std::unique_ptr<shm::AudioRingWriter> writer;
+            if (useShm) {
+                std::string err;
+                memory = shm::SharedMemory::create(shm::kLayout.totalBytes, shmSuffix, &err);
+                if (!memory.valid()) {
+                    std::cerr << "shared memory: " << err << " (continuing without it)\n";
+                } else {
+                    writer = std::make_unique<shm::AudioRingWriter>(memory.data(), currentPid());
+                }
+            }
+
+            asio::io_context io;
+            proto::ParamStore store;
+            mixd::Controller* controller = nullptr;
+            opt.onDelta = [&controller](const proto::Delta& d) {
+                if (controller) controller->onDelta(d);
             };
+            opt.onClient = [&controller](const control::ClientInfo& c, bool connected) {
+                if (controller) controller->onClient(c, connected);
+            };
+            if (!quiet) {
+                opt.log = [](const control::ClientInfo& c, const std::string& text) {
+                    std::cout << "[" << c.name << "@" << c.address << "] " << text << std::endl;
+                };
+            }
+            control::ControlServer server(io, store, opt);
+            mixd::Engine engine(writer.get());
+            mixd::DeviceManager devices(*backend, engine, devOpt);
+            mixd::Controller ctl(io, server, devices, engine, writer.get(), ctlOpt);
+
+            server.start();
+            ctl.start(devices.enumerateNow());
+            controller = &ctl;
+            devices.start([&ctl](const mixd::DeviceManager::State& s) { ctl.onDeviceState(s); });
+            std::cout << "mixd " << kVersionString << " listening on " << opt.bindAddress << ":" << server.port()
+                      << (fake ? " (fake devices)" : "") << (writer ? ", shared memory on" : "")
+                      << (host ? ", VST3 on" : "") << ". Ctrl+C to stop."
+                      << std::endl;
+
+            asio::signal_set signals(io, SIGINT, SIGTERM);
+            signals.async_wait([&](const asio::error_code&, int) {
+                ctl.stop();
+                server.stop();
+                asio::post(io, [&] { io.stop(); });
+            });
+            io.run();
+            controller = nullptr;
+            devices.stop(); // stops every stream before the engine goes away
+            std::cout << "mixd stopped" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "error: " << e.what() << "\n";
+            return 1;
         }
-        control::ControlServer server(io, store, opt);
-        mixd::Engine engine(writer.get());
-        mixd::DeviceManager devices(*backend, engine, devOpt);
-        mixd::Controller ctl(io, server, devices, engine, writer.get(), ctlOpt);
+        return 0;
+    };
 
-        server.start();
-        ctl.start(devices.enumerateNow());
-        controller = &ctl;
-        devices.start([&ctl](const mixd::DeviceManager::State& s) { ctl.onDeviceState(s); });
-        std::cout << "mixd " << kVersionString << " listening on " << opt.bindAddress << ":" << server.port()
-                  << (fake ? " (fake devices)" : "") << (writer ? ", shared memory on" : "") << ". Ctrl+C to stop."
-                  << std::endl;
-
-        asio::signal_set signals(io, SIGINT, SIGTERM);
-        signals.async_wait([&](const asio::error_code&, int) {
-            ctl.stop();
-            server.stop();
-            asio::post(io, [&] { io.stop(); });
+#ifdef DC_HAVE_VST3
+    if (plugins && !list) {
+        return mixd::vst3::runWithMessageLoop([&] {
+            mixd::vst3::HostOptions ho;
+            ho.cacheFile = pluginCache;
+            ho.verbose = !quiet;
+            auto host = mixd::vst3::makeHost(ho);
+            return runEngine(host.get());
         });
-        io.run();
-        controller = nullptr;
-        devices.stop(); // stops every stream before the engine goes away
-        std::cout << "mixd stopped" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << "\n";
-        return 1;
     }
-    return 0;
+#else
+    (void)plugins;
+#endif
+    return runEngine(nullptr);
 }
