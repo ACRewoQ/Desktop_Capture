@@ -182,6 +182,7 @@ void Mixer::processStrip(const StripPlan& s, int frames, const float* const* inp
 
     st.lowcut.process(x, ch, frames, s.lowcut, s.lowcutHz);
     st.highcut.process(x, ch, frames, s.highcut, s.highcutHz);
+    for (const auto& fx : s.fx) fx->process(x, ch, frames);
 
     if (shm && s.shmTap == Tap::Pre) writeShm(shm, s.id, x, ch, frames);
     if (s.cue)

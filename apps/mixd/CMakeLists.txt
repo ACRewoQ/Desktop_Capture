@@ -6,6 +6,8 @@ add_library(dc_mixd_core STATIC
     src/dsp.cpp
     src/engine.cpp
     src/fake_backend.cpp
+    src/fx/builtin.cpp
+    src/fx_manager.cpp
     src/mixer.cpp
     src/plan_builder.cpp
     src/timer_clock.cpp

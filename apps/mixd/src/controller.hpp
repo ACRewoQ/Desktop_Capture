@@ -6,6 +6,7 @@
 
 #include "device_manager.hpp"
 #include "engine.hpp"
+#include "fx_manager.hpp"
 #include "plan_builder.hpp"
 
 #include "dc/control/server.hpp"
@@ -27,6 +28,7 @@ public:
         std::chrono::milliseconds meterInterval{33};
         std::chrono::milliseconds statsInterval{500};
         bool verbose = true;
+        PluginHost* plugins = nullptr; // VST3 host, null when the build has none
     };
 
     Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
@@ -84,6 +86,7 @@ private:
     std::array<bool, kMaxStrips> shmDisconnected_{};
     std::uint32_t meterSeq_ = 0;
     std::uint64_t loggedGlitches_ = 0;
+    FxManager fx_;
 };
 
 } // namespace dc::mixd

@@ -57,11 +57,12 @@ bool samePorts(const PortTable& a, const PortTable& b) { return a.inputs == b.in
 Controller::Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
                        shm::AudioRingWriter* shm, Options options)
     : io_(io), server_(server), devices_(devices), engine_(engine), shm_(shm), options_(options), meterTimer_(io),
-      statsTimer_(io), recordTimer_(io) {}
+      statsTimer_(io), recordTimer_(io), fx_(io, server, options.plugins, [this] { scheduleRebuild(); }, options.verbose) {}
 
 void Controller::start(const std::vector<DeviceInfo>& devices) {
     seed(devices);
     registerMethods();
+    fx_.start();
     scheduleRebuild();
     scheduleMeters();
     scheduleStats();
@@ -70,6 +71,7 @@ void Controller::start(const std::vector<DeviceInfo>& devices) {
 void Controller::stop() {
     asio::post(io_, [this] {
         stopped_ = true;
+        fx_.stop();
         meterTimer_.cancel();
         statsTimer_.cancel();
         recordTimer_.cancel();
@@ -135,9 +137,11 @@ void Controller::registerMethods() {
 }
 
 void Controller::onDelta(const Delta& delta) {
+    fx_.onDelta(delta);
     // values the engine itself reports (load, counters, device lists, derived states) do not change
-    // the mix; everything else might
+    // the mix; everything else might. Effect slots reach the mix through FxManager.
     auto reportOnly = [](const std::string& path) {
+        if (FxManager::handlesPath(path)) return true;
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
@@ -146,8 +150,9 @@ void Controller::onDelta(const Delta& delta) {
             if (path.rfind(p, 0) == 0) return true;
         return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
     };
-    bool relevant = !delta.removed.empty() &&
-                    std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) { return !reportOnly(r + "/"); });
+    bool relevant = !delta.removed.empty() && std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) {
+                        return !FxManager::handlesPath(r) && !reportOnly(r + "/");
+                    });
     for (const auto& c : delta.changes) relevant = relevant || !reportOnly(c.path);
     if (relevant) scheduleRebuild();
 }
@@ -165,7 +170,7 @@ void Controller::scheduleRebuild() {
 void Controller::rebuild() {
     const auto& tree = server_.store().tree();
     devices_.setDemand(deviceDemand(tree));
-    auto result = buildPlan(tree, ports_, ++generation_, options_.build);
+    auto result = buildPlan(tree, ports_, ++generation_, options_.build, &fx_.rack());
     engine_.setPlan(std::move(result.plan));
     engine_.collectRetired();
 
@@ -428,6 +433,7 @@ Result Controller::removeTrack(CallContext& ctx) {
         c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
     c.push_back({"/mixer/track_count", static_cast<std::int64_t>(order.size())});
     server_.publishNow(c, {trackBase(static_cast<int>(*id))}, ctx.call.id, ctx.client.name);
+    fx_.clearStrip(static_cast<int>(*id));
     return {};
 }
 

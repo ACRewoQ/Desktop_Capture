@@ -46,8 +46,9 @@ struct BuildOptions {
     double testToneHz = 1000;
 };
 
+// fx: the loaded effect slots per strip (FxManager::rack()), or nullptr for none.
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,
-                      const BuildOptions& options = {});
+                      const BuildOptions& options = {}, const FxRack* fx = nullptr);
 
 // Track numbers in screen order (by /track/N/position).
 std::vector<int> tracksByPosition(const proto::ParamTree& tree);

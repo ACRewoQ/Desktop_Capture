@@ -88,7 +88,7 @@ DeviceDemand deviceDemand(const ParamTree& tree) {
 }
 
 BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64_t generation,
-                      const BuildOptions& options) {
+                      const BuildOptions& options, const FxRack* fx) {
     BuildResult r;
     auto plan = std::make_unique<MixPlan>();
     plan->generation = generation;
@@ -178,6 +178,7 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
         s.highcut = flag(tree, base + "/highcut/enabled");
         s.highcutHz = num(tree, base + "/highcut/freq_hz", 18000);
         s.meterId = static_cast<std::uint16_t>(num(tree, base + "/meter_id", id));
+        if (fx) s.fx = (*fx)[static_cast<std::size_t>(id)];
         for (int k = 1; k <= proto::kMaxTrackOutputs; ++k) {
             const auto d = destination(str(tree, base + "/out/" + std::to_string(k) + "/target"), id != 0);
             if (!d) continue;
