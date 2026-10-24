@@ -44,6 +44,7 @@ struct BuildResult {
 struct BuildOptions {
     float testToneGain = 0;
     double testToneHz = 1000;
+    double testPulseSeconds = 0; // > 0: the tone only sounds 50 ms at each multiple of this QPC time
 };
 
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,

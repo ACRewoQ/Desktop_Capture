@@ -18,6 +18,8 @@ endif()
 add_library(dc_ui_core STATIC
     src/connection.cpp
     src/connection.hpp
+    src/exercise.cpp
+    src/exercise.hpp
     src/recorder.cpp
     src/recorder.hpp
     src/selftest.cpp
@@ -47,6 +49,7 @@ set(DC_UI_QML
     ToggleButton.qml
     AddTrackTile.qml
     StripMenu.qml
+    SourcePicker.qml
     MenuButton.qml
     Toast.qml
 )
@@ -66,6 +69,6 @@ qt_add_qml_module(dc-ui
 target_link_libraries(dc-ui PRIVATE dc::ui_core Qt6::Quick dc_version)
 dc_apply_options(dc-ui)
 if(NOT MSVC)
-    # qmlcachegen output shadows its own parameters
-    target_compile_options(dc-ui PRIVATE -Wno-shadow)
+    # qmlcachegen output shadows its own parameters, and narrows JS lengths (qsizetype) to int
+    target_compile_options(dc-ui PRIVATE -Wno-shadow -Wno-conversion)
 endif()

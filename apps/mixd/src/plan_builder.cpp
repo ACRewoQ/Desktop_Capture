@@ -95,6 +95,7 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
     plan->blockFrames = std::clamp(static_cast<int>(num(tree, "/system/block_size", 256)), 16, kMaxBlockFrames);
     plan->testToneGain = options.testToneGain;
     plan->testToneHz = options.testToneHz;
+    plan->testPulseSeconds = options.testPulseSeconds;
 
     const auto tracks = existingTracks(tree);
     std::set<int> trackSet(tracks.begin(), tracks.end());

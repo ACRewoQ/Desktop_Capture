@@ -1,12 +1,14 @@
 import QtQuick
 
-// Track menu opened from the strip name: move left / right, delete (asks twice).
+// Track menu opened from the strip name: input, move left / right, delete (asks twice).
 Item {
     id: root
     property int row: -1
     property string name
     property bool confirmDelete: false
     visible: row >= 0
+
+    signal inputRequested(int row, string name)
 
     function open(r, n) { row = r; name = n; confirmDelete = false }
     function close() { row = -1 }
@@ -46,6 +48,17 @@ Item {
                 color: Theme.text
                 font.pixelSize: 18
                 text: root.name
+            }
+            MenuButton {
+                objectName: "chooseInput"
+                width: parent.width
+                label: "入力を選ぶ"
+                onTapped: {
+                    const r = root.row
+                    const n = root.name
+                    root.close()
+                    root.inputRequested(r, n)
+                }
             }
             Row {
                 spacing: 10

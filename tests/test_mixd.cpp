@@ -563,3 +563,41 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
     ctlPtr = nullptr;
     devices.stop();
 }
+
+TEST_CASE("test pulse: 50 ms bursts start at multiples of the QPC period", "[mixd]") {
+    Mixer m;
+    MixPlan plan;
+    plan.generation = 1;
+    plan.buses = {outPort("spk")};
+    plan.master.outputs = {{Destination::Kind::Bus, 0}};
+    plan.testToneGain = 0.1f;
+    plan.testToneHz = 1000;
+    plan.testPulseSeconds = 2.0;
+
+    // Settle the master's smoothing between bursts (t = 10.5 .. 11.5 s, silence expected).
+    const double blockSec = 256 / kSampleRate;
+    double t = 10.5;
+    for (int b = 0; b < 150; ++b, t += blockSec) {
+        m.process(plan, 256, nullptr, nullptr, t);
+        const float* l = m.bus(0, 0);
+        for (int i = 0; i < 256; ++i) REQUIRE(l[i] == 0.0f);
+    }
+    // Blocks around t = 12 s: the burst starts at the sample that crosses 12.0 and lasts 50 ms.
+    t = 12.0 - 100.5 / kSampleRate;
+    std::vector<float> got;
+    for (int b = 0; b < 16; ++b, t += blockSec) {
+        m.process(plan, 256, nullptr, nullptr, t);
+        got.insert(got.end(), m.bus(0, 0), m.bus(0, 0) + 256);
+    }
+    int first = -1, last = -1;
+    for (int i = 0; i < static_cast<int>(got.size()); ++i)
+        if (std::fabs(got[static_cast<std::size_t>(i)]) > 1e-6f) {
+            if (first < 0) first = i;
+            last = i;
+        }
+    CHECK(first == 101);
+    CHECK(last - first == Approx(0.05 * kSampleRate).margin(2));
+    float peak = 0;
+    for (float v : got) peak = std::max(peak, std::fabs(v));
+    CHECK(peak == Approx(0.1).margin(0.002));
+}
