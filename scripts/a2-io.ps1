@@ -115,6 +115,9 @@ function Add-Row([string]$case, [bool]$ok, [string]$detail) {
     Write-Host "$case : $(if ($ok) { 'PASS' } else { 'FAIL' })  $detail" -ForegroundColor $(if ($ok) { 'Green' } else { 'Red' })
 }
 
+# powershell -File passes 'list,process' as one string
+$Cases = @($Cases | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+
 foreach ($case in $Cases) {
     Write-Host "`n=== $case ===" -ForegroundColor Cyan
     switch ($case) {
@@ -170,8 +173,8 @@ foreach ($case in $Cases) {
         }
         'rate' {
             if (-not $Device) { Add-Row 'rate' $false 'needs -Device (an output not at 48 kHz)'; break }
-            $g2 = @('-NoBuild', '-Minutes', $Minutes, '-Blocks', 256, '-Device', $Device)
-            if ($InputDevice) { $g2 += @('-WithInput', '-InputDevice', $InputDevice) }
+            $g2 = @{ NoBuild = $true; Minutes = $Minutes; Blocks = @(256); Device = $Device }
+            if ($InputDevice) { $g2.WithInput = $true; $g2.InputDevice = $InputDevice }
             & (Join-Path $PSScriptRoot 'g2-engine.ps1') @g2
             $passed = $LASTEXITCODE -eq 0
             $logs = Get-ChildItem (Join-Path $root 'build/g2') -Filter 'mixd_*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 2
