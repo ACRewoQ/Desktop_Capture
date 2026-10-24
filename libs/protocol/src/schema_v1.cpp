@@ -61,7 +61,14 @@ void addStrip(Schema& sc, const std::string& base, bool isMaster) {
     sc.add(s(base + "/fx/#/type", "", "エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>）", RO));
     sc.add(s(base + "/fx/#/name", "", "エフェクトの表示名", RO));
     sc.add(b(base + "/fx/#/bypass", false, "バイパス"));
-    sc.add(fAny(base + "/fx/#/param/*", "エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義"));
+    sc.add(fAny(base + "/fx/#/param/*",
+                "エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1"));
+    sc.add(e(base + "/fx/#/status", {"ok", "loading", "failed", "missing"}, "ok",
+             "状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない）", RO));
+    sc.add(s(base + "/fx/#/error", "", "失敗の理由", RO));
+    sc.add(i(base + "/fx/#/latency_samples", 0, 1000000, 0, "エフェクトが足す遅延（サンプル）", RO));
+    sc.add(i(base + "/fx/#/param_count", 0, 1000000, 0, "パラメーターの総数（VST3 はツリーに載っていないものも数える）", RO));
+    sc.add(b(base + "/fx/#/editor", false, "プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る）"));
 }
 
 Schema buildV1() {
@@ -146,6 +153,21 @@ Schema buildV1() {
     sc.add(i("/video/preview/fps", 5, 60, 30, "プレビューのフレームレート"));
     sc.add(i("/video/preview/bitrate_kbps", 500, 8000, 3000, "プレビューのビットレート kbps"));
 
+    // --- plugins (VST3, lane A1) ---
+    sc.add(s("/plugins/extra_dirs", "", "標準以外の VST3 フォルダー（; 区切り）"));
+    sc.add(e("/plugins/scan/state", {"idle", "scanning"}, "idle", "プラグインのスキャン状態", RO));
+    sc.add(f("/plugins/scan/progress", 0.0, 1.0, 0.0, "スキャンの進み具合", RO));
+    sc.add(s("/plugins/scan/current", "", "スキャン中のファイル", RO));
+    sc.add(s("/plugins/#/id", "", "エフェクト種別として使う ID（vst3:<id>）", RO));
+    sc.add(s("/plugins/#/name", "", "プラグイン名", RO));
+    sc.add(s("/plugins/#/vendor", "", "メーカー", RO));
+    sc.add(s("/plugins/#/category", "", "分類（プラグインの申告、例 Fx|EQ）", RO));
+    sc.add(b("/plugins/#/instrument", false, "音源（MIDI で鳴らすもの）", RO));
+    sc.add(e("/plugins/#/status", {"ok", "failed", "crashed", "timeout", "unsupported"}, "ok",
+             "スキャン結果（unsupported = モノ・ステレオのメイン入出力がない）", RO));
+    sc.add(s("/plugins/#/error", "", "スキャンで失敗した理由", RO));
+    sc.add(s("/plugins/#/path", "", "プラグインのファイル", RO));
+
     // --- remote ---
     sc.add(i("/remote/clients", 0, 4, 0, "接続中のリモコン数", RO));
     sc.add(b("/remote/pairing/active", false, "ペアリング受付中", RO));
@@ -165,6 +187,12 @@ Schema buildV1() {
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
     sc.addMethod({"/master/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/master/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
+    sc.addMethod({"/master/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});
+    sc.addMethod({"/track/#/fx/#/params", "offset:int?, count:int?, keys:string?", "string（JSON 配列）",
+                  "パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる", "P3"});
+    sc.addMethod({"/master/fx/#/params", "offset:int?, count:int?, keys:string?", "string（JSON 配列）",
+                  "パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる", "P3"});
+    sc.addMethod({"/plugins/scan", "rescan:bool?", "nil", "VST3 プラグインを探す（rescan = 前回の結果を使わずに全部）", "P3"});
     sc.addMethod({"/devices/refresh", "", "nil", "デバイス・プロセス一覧の更新", "P2"});
     sc.addMethod({"/remote/pairing/start", "", "string（6桁コード）", "ペアリング受付開始", "P4"});
     sc.addMethod({"/remote/pairing/stop", "", "nil", "ペアリング受付終了", "P4"});
