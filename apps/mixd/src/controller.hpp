@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <vector>
 
 namespace dc::mixd {
@@ -55,6 +56,8 @@ private:
     void rebuild();
     void applyDeviceState(const DeviceManager::State& state);
     void publishDevices(const std::vector<DeviceInfo>& devices);
+    void publishProcesses(const std::vector<ProcessInfo>& processes);
+    void rematch();
     void scheduleMeters();
     void scheduleStats();
     std::vector<proto::Change> deviceChanges(const std::vector<DeviceInfo>& devices) const;
@@ -83,6 +86,8 @@ private:
     std::uint64_t generation_ = 0;
     PortTable ports_;
     std::vector<DeviceInfo> deviceList_;
+    std::vector<ProcessInfo> processList_;
+    std::map<std::string, KnownDevice> known_; // every device seen since the start, for rematch()
     std::vector<std::string> lastErrors_;
     std::vector<std::string> lastNotes_;
     std::array<std::uint32_t, kMaxStrips> shmChannels_{};

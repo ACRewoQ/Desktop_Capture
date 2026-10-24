@@ -14,8 +14,8 @@ namespace {
 class FakeStream final : public Stream {
 public:
     FakeStream(FakeBackend::Device device, const StreamConfig& cfg, InputCallback in, OutputCallback out,
-               std::shared_ptr<FakeBackend::Meter> meter)
-        : dev_(std::move(device)), fallback_(cfg.exclusive && dev_.sharedOnly),
+               std::shared_ptr<FakeBackend::Meter> meter, std::shared_ptr<std::atomic<bool>> alive = nullptr)
+        : alive_(std::move(alive)), dev_(std::move(device)), fallback_(cfg.exclusive && dev_.sharedOnly),
           wrongPeriod_(cfg.exclusive && !fallback_ && dev_.exclusivePeriod > cfg.blockFrames),
           period_(cfg.exclusive && !fallback_ ? cfg.blockFrames : dev_.periodFrames), in_(std::move(in)), out_(std::move(out)),
           meter_(std::move(meter)) {}
@@ -34,7 +34,7 @@ public:
     int channels() const override { return dev_.info.channels; }
     int periodFrames() const override { return period_; }
     double latencySeconds() const override { return period_ / kSampleRate; }
-    bool failed() const override { return suggestedPeriod() > 0; }
+    bool failed() const override { return suggestedPeriod() > 0 || (alive_ && !alive_->load()); }
     std::uint64_t glitches() const override { return 0; }
     bool sharedFallback() const override { return fallback_; }
     // like the UR22: an exclusive period smaller than the device's own fails after a moment
@@ -78,6 +78,7 @@ private:
         }
     }
 
+    std::shared_ptr<std::atomic<bool>> alive_; // processes: false once the application ended
     FakeBackend::Device dev_;
     bool fallback_;
     bool wrongPeriod_;
@@ -89,6 +90,12 @@ private:
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
+
+std::string lowerName(std::string s) {
+    for (auto& c : s)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return s;
+}
 
 } // namespace
 
@@ -113,7 +120,8 @@ std::vector<FakeBackend::Device> FakeBackend::standardDevices() {
     };
 }
 
-FakeBackend::FakeBackend(std::vector<Device> devices) : devices_(std::move(devices)) {
+FakeBackend::FakeBackend(std::vector<Device> devices, std::vector<Process> processes)
+    : devices_(std::move(devices)), processes_(std::move(processes)) {
     for (const auto& d : devices_)
         if (!d.info.input) meters_[d.info.id] = std::make_shared<Meter>();
 }
@@ -129,6 +137,63 @@ void FakeBackend::setConnected(const std::string& id, bool connected) {
         cb = cb_;
     }
     if (cb) cb();
+}
+
+void FakeBackend::changeId(const std::string& id, const std::string& newId) {
+    std::function<void()> cb;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& d : devices_)
+            if (d.info.id == id) d.info.id = newId;
+        if (auto it = meters_.find(id); it != meters_.end()) {
+            meters_[newId] = it->second;
+            meters_.erase(it);
+        }
+        cb = cb_;
+    }
+    if (cb) cb();
+}
+
+void FakeBackend::setProcessRunning(const std::string& exe, bool running, std::uint32_t pid) {
+    std::lock_guard lock(mutex_);
+    for (auto& p : processes_) {
+        if (p.info.exe != exe) continue;
+        if (p.running && !running) p.alive->store(false);
+        if (!p.running && running) p.alive = std::make_shared<std::atomic<bool>>(true);
+        p.running = running;
+        if (pid) p.info.pid = pid;
+    }
+}
+
+std::vector<ProcessInfo> FakeBackend::enumerateProcesses() {
+    std::lock_guard lock(mutex_);
+    std::vector<ProcessInfo> out;
+    for (const auto& p : processes_)
+        if (p.running) out.push_back(p.info);
+    return out;
+}
+
+ProcessInfo FakeBackend::findProcess(const std::string& exe) {
+    std::lock_guard lock(mutex_);
+    for (const auto& p : processes_)
+        if (p.running && lowerName(p.info.exe) == lowerName(exe)) return p.info;
+    return {exe, 0, {}};
+}
+
+std::unique_ptr<Stream> FakeBackend::openProcess(const ProcessInfo& process, InputCallback cb, std::string* error) {
+    std::lock_guard lock(mutex_);
+    for (const auto& p : processes_)
+        if (p.running && p.info.pid == process.pid) {
+            Device d;
+            d.info.id = "pid-" + std::to_string(p.info.pid);
+            d.info.name = p.info.exe;
+            d.info.input = true;
+            d.info.channels = 2;
+            d.toneHz = p.toneHz;
+            return std::make_unique<FakeStream>(d, StreamConfig{}, std::move(cb), nullptr, nullptr, p.alive);
+        }
+    if (error) *error = "no such process";
+    return nullptr;
 }
 
 float FakeBackend::takeOutputPeak(const std::string& id) {
