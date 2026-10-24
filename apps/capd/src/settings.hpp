@@ -20,7 +20,9 @@ struct VideoSettings {
     int fps = 60;
     std::string rateControl = "vbr";  // cbr | vbr | cqp
     int bitrateKbps = 20000;
-    int quality = 23;  // cqp
+    int quality = 23;  // cqp (x264: crf)
+    int gopFrames = 0;  // frames between keyframes; 0 = 2 seconds
+    bool lowLatency = false;  // preview streams: the encoders' low-latency tuning instead of quality tuning
 };
 
 struct AudioStreamSettings {
@@ -47,6 +49,7 @@ struct RecordSettings {
     std::vector<AudioStreamSettings> audio;  // in stream order; empty entries are left out
     MixSettings mix;
     bool withVideo = true;  // false = audio only (Linux tests, or no mix assigned)
+    double forceKeyframeSeconds = 0;  // tests ("capd record --force-keyframes"): request a keyframe this often
 };
 
 // Parses "master" / "track/<n>" into a shared-memory slot. "" and anything else give nullopt.

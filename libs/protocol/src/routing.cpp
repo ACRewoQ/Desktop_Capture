@@ -82,6 +82,15 @@ std::optional<RouteTarget> parseTarget(std::string_view s) {
     return t;
 }
 
+int lanStreamOf(const RouteTarget& t) {
+    if (t.kind != RouteTarget::Kind::Lan) return 0;
+    int n = 0;
+    auto [p, ec] = std::from_chars(t.id.data(), t.id.data() + t.id.size(), n);
+    if (ec != std::errc() || p != t.id.data() + t.id.size() || n < 1 || n > kMaxLanStreams) return 0;
+    if (t.id[0] == '0') return 0;
+    return n;
+}
+
 std::optional<std::vector<int>> findRoutingCycle(const ParamTree& tree) {
     const auto g = buildGraph(tree);
     std::map<int, int> state; // 0 = unvisited, 1 = on stack, 2 = done
@@ -156,6 +165,8 @@ ValidationError validateRouting(const ParamTree& tree) {
         if (!s) continue;
         const auto t = parseTarget(*s);
         if (!t) return {ErrorCode::OutOfRange, path + ": invalid target \"" + *s + "\""};
+        if (t->kind == RouteTarget::Kind::Lan && lanStreamOf(*t) == 0)
+            return {ErrorCode::OutOfRange, path + ": LAN target must be lan/1 .. lan/" + std::to_string(kMaxLanStreams)};
 
         if (isMasterOut) {
             if (t->kind == RouteTarget::Kind::Master || t->kind == RouteTarget::Kind::Track)

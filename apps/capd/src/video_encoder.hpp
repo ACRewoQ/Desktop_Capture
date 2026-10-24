@@ -4,8 +4,9 @@
 //   One texture per surface: some drivers refuse NV12 render-target arrays (RTX 5090, driver 616.56).
 // - Encoding runs on its own thread. NVENC is opened with delay=0 (about 5 ms at 1080p instead of 34 ms), which
 //   makes avcodec_send_frame wait for the GPU; the thread keeps that wait away from the video mix.
-// - openVideoEncoder() picks the encoder: "auto" tries NVENC, AMF, QSV and Media Foundation in that order and
-//   uses the first that opens.
+// - openVideoEncoder() picks the encoder: "auto" tries NVENC, AMF, QSV, Media Foundation and x264 in that order
+//   and uses the first that opens. x264 (software, H.264 only) gets the same GPU surfaces and downloads them on the
+//   encoding thread.
 #pragma once
 
 #include "d3d.hpp"
@@ -60,8 +61,9 @@ public:
     };
     Surface acquire();
 
-    // Queues the rendered surface for encoding (takes ownership). pts is in 1/fps units.
-    void submit(Surface s, std::int64_t pts);
+    // Queues the rendered surface for encoding (takes ownership). pts is in 1/fps units. keyframe forces an IDR
+    // (with SPS/PPS in front unless the context has a global header), e.g. when a preview receiver lost packets.
+    void submit(Surface s, std::int64_t pts, bool keyframe = false);
 
     // Encodes what is queued, flushes the codec and stops the thread.
     void finish();
@@ -78,6 +80,7 @@ private:
     VideoSettings settings_;
     std::string codecName_;
     std::string inputMode_;
+    bool software_ = false;  // libx264: surfaces are downloaded to system memory before encoding
     AVBufferRef* d3dDevice_ = nullptr;
     AVBufferRef* d3dFrames_ = nullptr;
     AVBufferRef* qsvDevice_ = nullptr;
@@ -103,7 +106,7 @@ private:
 std::unique_ptr<VideoEncoder> openVideoEncoder(const Device& dev, const VideoSettings& v, bool globalHeader,
                                                std::vector<std::string>* log);
 
-// Encoder names in this FFmpeg build that take D3D11 or QSV frames.
+// Encoder names in this FFmpeg build that take D3D11 or QSV frames (x264 is not listed: it is software).
 std::vector<std::string> availableHwEncoders();
 
 std::string ffmpegVersion();
