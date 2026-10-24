@@ -12,7 +12,7 @@ add_library(capd_core STATIC
     src/recorder.cpp
     src/engine_follower.cpp)
 target_include_directories(capd_core PUBLIC src)
-target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc_ffmpeg Threads::Threads)
+target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc::clocksync dc_ffmpeg Threads::Threads)
 if(WIN32)
     target_sources(capd_core PRIVATE
         src/d3d.cpp

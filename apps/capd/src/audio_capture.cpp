@@ -12,14 +12,21 @@ namespace dc::capd {
 namespace {
 
 constexpr std::uint32_t kChunk = 1024;
-// More drift than this between the engine's sample clock and QPC re-aligns the reader (a short skip or repeat).
-constexpr double kMaxDriftMs = 40.0;
+
+clocksync::DriftController::Config controllerConfig() {
+    clocksync::DriftController::Config c;
+    c.nominalRate = shm::kSampleRate;
+    return c;
+}
 
 }  // namespace
 
 AudioCapture::AudioCapture(std::vector<std::uint32_t> slots, std::string shmSuffix)
-    : slots_(std::move(slots)), shmSuffix_(std::move(shmSuffix)) {
+    : slots_(std::move(slots)), shmSuffix_(std::move(shmSuffix)), controller_(controllerConfig()) {
     freq_ = shm::qpcFrequency();
+    resamplers_.reserve(slots_.size());
+    for (std::size_t i = 0; i < slots_.size(); ++i)
+        resamplers_.emplace_back(2, clocksync::VariableResampler::Quality{}, std::size_t{kChunk} * 2);
     buffers_.assign(slots_.size(), std::vector<float>(kChunk * 2, 0.0f));
     views_.resize(slots_.size());
 }
@@ -35,7 +42,7 @@ void AudioCapture::begin(std::int64_t startQpc, Sink sink) {
     position_ = 0;
     needsSync_ = true;
     nextAttachQpc_ = 0;
-    nextDriftCheckQpc_ = startQpc + freq_;
+    controller_.reset();
 }
 
 void AudioCapture::start(std::int64_t startQpc, Sink sink) {
@@ -105,8 +112,9 @@ bool AudioCapture::ensureAttached(std::int64_t nowQpc) {
     return true;
 }
 
-// Chooses offset_ so that output frame position_ maps to the engine frame recorded at the same QPC time.
-void AudioCapture::sync(std::int64_t nowQpc) {
+// Finds the engine frame recorded at the QPC time of output frame position_. Returns it (negative when that time is
+// before the engine's first frame); readFrame_ is set to it when it is not negative.
+std::int64_t AudioCapture::sync(std::int64_t nowQpc) {
     const std::uint64_t written = reader_->header()->framesWritten.load(std::memory_order_acquire);
     const std::int64_t wantQpc =
         startQpc_ + static_cast<std::int64_t>(static_cast<double>(position_) * double(freq_) / shm::kSampleRate);
@@ -121,27 +129,29 @@ void AudioCapture::sync(std::int64_t nowQpc) {
             engineFrame = static_cast<std::int64_t>(written) - static_cast<std::int64_t>(std::llround(back));
         }
     }
-    offset_ = engineFrame - static_cast<std::int64_t>(position_);
+    if (engineFrame < 0) return engineFrame;
+    readFrame_ = static_cast<std::uint64_t>(engineFrame);
+    // The resamplers restart with silence in front, so their next output frame is exactly readFrame_. The learned
+    // clock difference is kept: it belongs to the engine's device, which a stall does not change.
+    for (auto& r : resamplers_) r.reset();
+    controller_.reset(true);
     needsSync_ = false;
+    needsPrime_ = true;
     std::lock_guard lock(statsMutex_);
     ++stats_.resyncs;
+    return engineFrame;
 }
 
-void AudioCapture::checkDrift(std::int64_t nowQpc) {
-    if (nowQpc < nextDriftCheckQpc_ || position_ == 0) return;
-    nextDriftCheckQpc_ = nowQpc + freq_;
-    const std::int64_t engineFrame = offset_ + static_cast<std::int64_t>(position_) - 1;
-    if (engineFrame < 0) return;
-    const auto q = reader_->qpcForFrame(static_cast<std::uint64_t>(engineFrame));
-    if (!q) return;
-    const std::int64_t wantQpc = startQpc_ + static_cast<std::int64_t>(static_cast<double>(position_ - 1) *
-                                                                       double(freq_) / shm::kSampleRate);
-    const double driftMs = static_cast<double>(*q - wantQpc) * 1000.0 / double(freq_);
-    {
-        std::lock_guard lock(statsMutex_);
-        stats_.driftMs = driftMs;
-    }
-    if (std::fabs(driftMs) > kMaxDriftMs) needsSync_ = true;
+std::optional<double> AudioCapture::alignmentError() const {
+    // Engine position (fractional) of the next output frame: the resamplers trail the frames handed to them.
+    const double pos = double(readFrame_) - resamplers_.front().bufferedFrames();
+    if (pos < 0) return std::nullopt;
+    const auto whole = static_cast<std::uint64_t>(pos);
+    const auto q = reader_->qpcForFrame(whole);
+    if (!q) return std::nullopt;
+    const double engineQpc = double(*q) + (pos - double(whole)) * double(freq_) / shm::kSampleRate;
+    const double wantQpc = double(startQpc_) + double(position_) * double(freq_) / shm::kSampleRate;
+    return (wantQpc - engineQpc) * shm::kSampleRate / double(freq_);
 }
 
 void AudioCapture::emit(std::uint32_t frames) {
@@ -179,30 +189,87 @@ std::uint64_t AudioCapture::pump(std::int64_t nowQpc, std::uint32_t lagFrames) {
             break;
         }
         connected = true;
-        if (needsSync_) sync(nowQpc);
+        bool justSynced = false;
+        if (needsSync_) {
+            const std::int64_t at = sync(nowQpc);
+            if (at < 0) {
+                // The recording is ahead of the engine's first frame: silence until it starts.
+                emitSilence(std::min<std::uint64_t>(static_cast<std::uint64_t>(-at), want));
+                continue;
+            }
+            justSynced = true;
+        }
 
         const std::uint64_t written = reader_->header()->framesWritten.load(std::memory_order_acquire);
-        std::int64_t engineFrame = offset_ + static_cast<std::int64_t>(position_);
-        if (engineFrame < 0 || engineFrame > static_cast<std::int64_t>(written) + std::int64_t{shm::kSampleRate}) {
+        const auto engineFrame = static_cast<std::int64_t>(readFrame_);
+        if (engineFrame > static_cast<std::int64_t>(written) + std::int64_t{shm::kSampleRate}) {
             // Nonsense mapping (anchors from a previous engine run): re-align on the next pass.
             needsSync_ = true;
             emitSilence(std::min<std::uint64_t>(want, kChunk));
             continue;
         }
         if (engineFrame < static_cast<std::int64_t>(written) - std::int64_t{shm::kCapacityFrames / 2}) {
-            // Older than the ring still holds safely (startup far in the past, or a long stall): skip with silence.
+            // Older than the ring still holds safely (startup far in the past, or a long stall): skip with silence
+            // and re-align at the new position.
             const auto skip = static_cast<std::uint64_t>(written - shm::kCapacityFrames / 2 - engineFrame);
             emitSilence(std::min<std::uint64_t>(skip, want));
+            needsSync_ = true;
             continue;
         }
 
-        reader_->seek(static_cast<std::uint64_t>(engineFrame));
-        const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>({want, reader_->available(), kChunk}));
-        if (n == 0) break;  // the engine is alive but has not committed this far yet
+        if (needsPrime_) {
+            // Fill the resamplers' history with the audio before readFrame_ instead of the silence they restart
+            // with, so a re-alignment does not ring: hand them halfTaps frames before and after it and throw away
+            // the first halfTaps outputs (ratio 1). Their next output is then readFrame_ again.
+            const std::size_t h = static_cast<std::size_t>(resamplers_.front().halfTaps());
+            if (readFrame_ >= h && engineFrame - static_cast<std::int64_t>(h) >=
+                                       static_cast<std::int64_t>(written) - std::int64_t{shm::kCapacityFrames / 2}) {
+                reader_->seek(readFrame_ - h);
+                if (reader_->available() < 2 * h) break;  // not committed yet
+                bool ok = true;
+                for (std::size_t i = 0; i < slots_.size() && ok; ++i) {
+                    float* in = resamplers_[i].inputWritePointer(2 * h);
+                    const auto info = reader_->read(slots_[i], std::span<float>(in, 4 * h), static_cast<std::uint32_t>(2 * h), false);
+                    ok = info.status == shm::AudioRingReader::Status::Ok && info.frames == 2 * h;
+                    if (ok && reader_->slotChannels(slots_[i]) == 1)
+                        for (std::size_t k = 0; k < 2 * h; ++k) in[k * 2 + 1] = in[k * 2];
+                }
+                if (!ok) {
+                    needsSync_ = true;
+                    continue;
+                }
+                for (std::size_t i = 0; i < slots_.size(); ++i) {
+                    resamplers_[i].commitInput(2 * h);
+                    resamplers_[i].produce(buffers_[i].data(), h, 1.0);
+                }
+                readFrame_ += h;
+            }
+            needsPrime_ = false;
+        }
+
+        // Clock correction: the alignment error drives the resampling ratio; a jump re-aligns instead.
+        const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(want, kChunk));
+        double ratio = controller_.ratio();
+        if (const auto err = alignmentError()) {
+            const double errMs = *err * 1000.0 / shm::kSampleRate;
+            {
+                std::lock_guard lock(statsMutex_);
+                stats_.driftMs = -errMs;
+            }
+            if (std::fabs(errMs) > kMaxDriftMs && !justSynced) {
+                needsSync_ = true;
+                continue;
+            }
+            if (std::fabs(errMs) <= kMaxDriftMs) ratio = controller_.update(*err, double(n) / shm::kSampleRate);
+        }
+        const std::size_t need = resamplers_.front().inputFramesRequired(n, ratio);
+        reader_->seek(readFrame_);
+        if (reader_->available() < need) break;  // the engine is alive but has not committed this far yet
 
         bool retry = false;
-        for (std::size_t i = 0; i < slots_.size() && !retry; ++i) {
-            auto info = reader_->read(slots_[i], buffers_[i], n, false);
+        for (std::size_t i = 0; i < slots_.size() && !retry && need > 0; ++i) {
+            float* in = resamplers_[i].inputWritePointer(need);
+            auto info = reader_->read(slots_[i], std::span<float>(in, need * 2), static_cast<std::uint32_t>(need), false);
             if (info.status == shm::AudioRingReader::Status::WriterRestarted) {
                 needsSync_ = true;
                 retry = true;
@@ -212,17 +279,25 @@ std::uint64_t AudioCapture::pump(std::int64_t nowQpc, std::uint32_t lagFrames) {
                     ++stats_.overruns;
                 }
                 emitSilence(std::min<std::uint64_t>(info.skippedFrames, want));
+                needsSync_ = true;
                 retry = true;
-            } else if (info.frames != n) {
-                retry = true;  // raced with the writer; read again
+            } else if (info.frames != need) {
+                retry = true;  // raced with the writer; read again (nothing was committed yet)
             } else if (reader_->slotChannels(slots_[i]) == 1) {
-                auto& b = buffers_[i];
-                for (std::uint32_t k = 0; k < n; ++k) b[k * 2 + 1] = b[k * 2];
+                for (std::size_t k = 0; k < need; ++k) in[k * 2 + 1] = in[k * 2];
             }
         }
         if (retry) continue;
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            resamplers_[i].commitInput(need);
+            resamplers_[i].produce(buffers_[i].data(), n, ratio);
+        }
+        readFrame_ += need;
+        {
+            std::lock_guard lock(statsMutex_);
+            stats_.ratio = ratio;
+        }
         emit(n);
-        checkDrift(nowQpc);
     }
 
     std::lock_guard lock(statsMutex_);
