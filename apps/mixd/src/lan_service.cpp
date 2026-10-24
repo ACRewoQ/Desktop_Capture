@@ -524,6 +524,7 @@ void LanService::onDatagram(std::span<const std::uint8_t> d, const lan::UdpTrans
 }
 
 void LanService::pumpLoop() {
+    lan::raiseThreadPriority();
     double nextReport = 0;
     while (pumpRunning_) {
         {
