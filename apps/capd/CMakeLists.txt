@@ -10,7 +10,8 @@ add_library(capd_core STATIC
     src/audio_encoder.cpp
     src/muxer.cpp
     src/recorder.cpp
-    src/engine_follower.cpp)
+    src/engine_follower.cpp
+    src/avsync.cpp)
 target_include_directories(capd_core PUBLIC src)
 target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc_ffmpeg Threads::Threads)
 if(WIN32)

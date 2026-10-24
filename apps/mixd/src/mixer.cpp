@@ -121,7 +121,8 @@ void Mixer::writeShm(shm::AudioRingWriter* shm, int slot, const float* const* x,
                static_cast<std::uint32_t>(channels));
 }
 
-void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm) {
+void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm,
+                    double qpcTime) {
     frames = std::clamp(frames, 0, kMaxBlockFrames);
     if (plan.generation != generation_) adopt(plan);
 
@@ -135,7 +136,20 @@ void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs,
 
     for (const auto& t : plan.tracks) processStrip(t, frames, inputs, plan, shm);
 
-    if (plan.testToneGain > 0) {
+    if (plan.testToneGain > 0 && plan.testPulseSeconds > 0) {
+        // Bursts tied to QPC time, so that the recording can be compared with a screen flash.
+        constexpr double kBurst = 0.05, kRamp = 0.0005;
+        for (int i = 0; i < frames; ++i) {
+            const double t = qpcTime + i / kSampleRate;
+            const double inBurst = std::fmod(t, plan.testPulseSeconds);
+            if (inBurst >= kBurst) continue;
+            const double env = std::min({1.0, inBurst / kRamp, (kBurst - inBurst) / kRamp});
+            const double cycles = std::fmod(t * plan.testToneHz, 1.0);
+            const float v = plan.testToneGain * static_cast<float>(env * std::sin(2 * kPi * cycles));
+            (*acc_)[0][0][i] += v;
+            (*acc_)[0][1][i] += v;
+        }
+    } else if (plan.testToneGain > 0) {
         const double step = 2 * kPi * plan.testToneHz / kSampleRate;
         for (int i = 0; i < frames; ++i) {
             const float v = plan.testToneGain * static_cast<float>(std::sin(tonePhase_));
