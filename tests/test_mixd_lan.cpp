@@ -10,6 +10,7 @@
 #include "lan_store.hpp"
 
 #include "dc/control/client.hpp"
+#include "dc/protocol/lan.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -204,6 +205,11 @@ TEST_CASE("two engines: a bus sent as a LAN stream plays on the other engine's t
                t.getAs<std::int64_t>("/lan/stream/1/stream_id").value_or(0) != 0 && t.contains("/lan/sub/1/stream");
     }));
     CHECK(str(ca->tree(), "/lan/sub/1/stream") == "audio/1");
+    const auto subs = proto::lanSubscriptions(ca->tree(), "audio/1");
+    REQUIRE(subs.size() == 1);
+    CHECK(subs[0].host == "127.0.0.1");
+    CHECK(subs[0].port == b.lan->mediaPort());
+    CHECK(proto::lanSubscriptions(ca->tree(), "video/preview").empty());
     CHECK(waitFor(*cb, [](const proto::ParamTree& t) { return str(t, "/track/1/input/state") == "ok"; }));
     CHECK(waitFor(*cb, [](const proto::ParamTree& t) {
         return t.getAs<double>("/track/1/input/lan_delay_ms").value_or(0) > 0;

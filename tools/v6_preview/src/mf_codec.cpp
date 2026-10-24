@@ -230,6 +230,10 @@ ComPtr<IMFSample> H264Encoder::makeInput(const std::uint8_t* nv12, std::uint64_t
 }
 
 void H264Encoder::encode(const std::uint8_t* nv12, std::uint64_t id) {
+    if (forceKey_.exchange(false)) {
+        ComPtr<ICodecAPI> api;
+        if (SUCCEEDED(mft_.As(&api))) setCodecValue(api.Get(), CODECAPI_AVEncVideoForceKeyFrame, 1, "force keyframe");
+    }
     auto sample = makeInput(nv12, id);
     if (async_) {
         {
