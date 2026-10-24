@@ -180,6 +180,7 @@ int main(int argc, char** argv) {
 
     dc::control::ControlClient client(opt);
     if (cmd == "watch") {
+        std::cout << std::unitbuf; // write through also when the output goes to a file (scripts poll it)
         client.onDelta = [](const Delta& d) {
             std::cout << "delta rev " << d.rev;
             if (!d.originClient.empty()) std::cout << " by " << d.originClient;

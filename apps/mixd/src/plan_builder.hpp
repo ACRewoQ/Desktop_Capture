@@ -82,6 +82,9 @@ struct RematchResult {
 };
 RematchResult rematchDevices(const proto::ParamTree& tree, const std::vector<DeviceInfo>& devices,
                              const std::map<std::string, KnownDevice>& known);
+// The name without the number Windows puts in front when it registers a device again:
+// "Line (2- Steinberg UR22)" -> "Line (Steinberg UR22)", "2- USB Speaker" -> "USB Speaker".
+std::string deviceBaseName(const std::string& name);
 
 // Track numbers in screen order (by /track/N/position).
 std::vector<int> tracksByPosition(const proto::ParamTree& tree);
