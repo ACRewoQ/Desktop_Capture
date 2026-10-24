@@ -1,5 +1,5 @@
 // capd's normal mode: connected to the engine as a service client, it runs the video mixer from the engine's tree
-// (/video/*, protocol.md 4.4) and records when the engine says so and reports back (docs/spec/protocol.md 5.4.1). The engine owns the settings and the state; capd only follows
+// (/video/*, protocol.md 4.5) and records when the engine says so and reports back (docs/spec/protocol.md 5.4.1). The engine owns the settings and the state; capd only follows
 // /capture/state: "starting" -> record and report "recording", "stopping" -> finish and report "idle", a failure
 // -> report "error". The connection is retried every second; losing it stops a running recording (the engine marks
 // the recording as failed on its side).

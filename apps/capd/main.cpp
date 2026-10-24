@@ -7,8 +7,10 @@
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd mixtest [--out DIR] [--media FILE]   video mixer self-test (Windows)
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
+//   capd avsync FILE [options]    A/V offset from dc-av-flash flashes and mixd --test-pulse bursts (G2)
 //
 
+#include "src/avsync.hpp"
 #include "src/engine_follower.hpp"
 #include "src/recorder.hpp"
 #include "src/settings.hpp"
@@ -45,6 +47,7 @@ extern "C" {
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -67,6 +70,7 @@ usage:
   capd record [options]
   capd probe FILE
   capd mixtest [--out DIR] [--media FILE]   video mixer self-test: pixels of scenes, transitions, sources
+  capd avsync FILE [--region X,Y,W,H] [--audio-stream N] [--csv FILE]
 
 record options:
   --seconds S             stop after S seconds (default: run until Ctrl+C)
@@ -379,6 +383,50 @@ int cmdRecord(const std::vector<std::string>& args) {
     return error.empty() ? 0 : 3;
 }
 
+// A/V offset of a recording made while dc-av-flash and mixd --test-pulse ran (docs/capd.md).
+int cmdAvSync(const std::vector<std::string>& args) {
+    AvSyncOptions o;
+    std::string file, csv;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error(a + " needs a value");
+            return args[++i];
+        };
+        if (a == "--region") {
+            const std::string v = next();
+            if (std::sscanf(v.c_str(), "%lf,%lf,%lf,%lf", &o.regionX, &o.regionY, &o.regionW, &o.regionH) != 4)
+                throw std::runtime_error("--region X,Y,W,H (fractions of the frame)");
+        } else if (a == "--audio-stream") o.audioStream = std::stoi(next());
+        else if (a == "--csv") csv = next();
+        else if (file.empty()) file = a;
+        else throw std::runtime_error("unknown option " + a);
+    }
+    const AvSyncReport r = analyzeAvSync(file, o);
+    if (!r.error.empty()) {
+        std::cerr << "avsync: " << r.error << "\n";
+        return 3;
+    }
+    if (!csv.empty()) {
+        FILE* f = std::fopen(csv.c_str(), "w");
+        if (!f) throw std::runtime_error("cannot write " + csv);
+        std::fprintf(f, "video_s,audio_s,offset_ms\n");
+        for (const auto& p : r.pairs) std::fprintf(f, "%.4f,%.4f,%.2f\n", p.videoSec, p.audioSec, p.offsetMs());
+        std::fclose(f);
+    }
+    const auto& s = r.stats;
+    std::printf("%s: %.1f s, %d video frames, %zu flashes, %zu bursts, %d pairs\n", file.c_str(), r.durationSec,
+                r.videoFrames, r.flashes.size(), r.pulses.size(), s.pairs);
+    if (s.pairs > 0)
+        std::printf("audio - picture: mean %+.1f ms, median %+.1f ms, min %+.1f ms, max %+.1f ms, drift %+.1f ms\n",
+                    s.meanMs, s.medianMs, s.minMs, s.maxMs, s.driftMs);
+    std::printf("RESULT flashes=%zu pulses=%zu pairs=%d mean_ms=%.2f median_ms=%.2f min_ms=%.2f max_ms=%.2f "
+                "drift_ms=%.2f duration_s=%.1f\n",
+                r.flashes.size(), r.pulses.size(), s.pairs, s.meanMs, s.medianMs, s.minMs, s.maxMs, s.driftMs,
+                r.durationSec);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -413,6 +461,7 @@ int main(int argc, char** argv) {
 #endif
         if (cmd == "serve") return cmdServe(args);
         if (cmd == "probe" && args.size() == 1) return cmdProbe(args[0]);
+        if (cmd == "avsync" && !args.empty()) return cmdAvSync(args);
         usage();
         return 1;
     } catch (const std::exception& e) {

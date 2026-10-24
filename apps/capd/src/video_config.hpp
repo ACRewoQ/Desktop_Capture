@@ -1,5 +1,5 @@
 // The video mixer settings as capd uses them (sources, scenes with layers, mixes), read from the engine's tree
-// (/video/source/#, /video/scene/#, /video/mix/#; docs/spec/protocol.md 4.4), and the parts of mixing that need no
+// (/video/source/#, /video/scene/#, /video/mix/#; docs/spec/protocol.md 4.5), and the parts of mixing that need no
 // GPU: where a layer lands on the canvas, the state of a scene transition, which sources a mix needs.
 // Portable: no Windows types, tested on Linux.
 #pragma once

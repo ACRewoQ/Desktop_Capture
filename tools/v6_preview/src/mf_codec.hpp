@@ -58,6 +58,8 @@ public:
 
     // nv12 = tightly packed width*height*3/2 bytes. Called from one thread.
     void encode(const std::uint8_t* nv12, std::uint64_t id);
+    // Any thread: the next frame given to encode() becomes a keyframe (a LAN viewer lost data).
+    void requestKeyframe() { forceKey_.store(true); }
 
     const std::string& name() const { return name_; }
     bool hardware() const { return hardware_; }
@@ -86,6 +88,7 @@ private:
     std::condition_variable cv_;
     std::deque<ComPtr<IMFSample>> pending_;
     std::atomic<bool> stop_{false};
+    std::atomic<bool> forceKey_{false};
 };
 
 // Information about the decoder's current output type.

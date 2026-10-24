@@ -18,7 +18,7 @@ namespace dc::capd {
 enum class AlphaMode { Opaque, Straight, Premultiplied };
 
 struct SourceStatus {
-    std::string state = "disconnected";  // ok | disconnected | error  (protocol.md 4.4)
+    std::string state = "disconnected";  // ok | disconnected | error  (protocol.md 4.5)
     std::string error;
     int width = 0, height = 0;
     bool operator==(const SourceStatus&) const = default;

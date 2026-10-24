@@ -6,6 +6,9 @@
 #include "dc/lanmedia/net_sim.hpp"
 #include "dc/lanmedia/packet.hpp"
 #include "dc/lanmedia/udp_transport.hpp"
+#include "dc/lanmedia/video.hpp"
+#include "dc/lanmedia/video_link.hpp"
+#include "dc/lanmedia/video_sim.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -13,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <vector>
@@ -326,6 +330,178 @@ TEST_CASE("lanmedia: network simulation scenarios (shortened)", "[lanmedia][sim]
     }
 }
 
+namespace {
+
+// One access unit of `bytes` bytes whose content identifies frame n.
+Datagram accessUnit(std::uint64_t n, std::size_t bytes) {
+    Datagram au(bytes);
+    for (std::size_t i = 0; i < bytes; ++i) au[i] = std::uint8_t((n * 31 + i) & 0xFF);
+    return au;
+}
+
+struct VideoCapture {
+    std::vector<std::uint64_t> numbers;
+    std::vector<bool> keys;
+    bool contentOk = true;
+    VideoReceiver::FrameHandler handler() {
+        return [this](const VideoReceiver::Frame& f) {
+            numbers.push_back(f.number);
+            keys.push_back(f.keyframe);
+            const auto want = accessUnit(f.number, f.data.size());
+            if (!std::equal(want.begin(), want.end(), f.data.begin())) contentOk = false;
+        };
+    }
+};
+
+// Frames of a stream as datagram lists, frame i a keyframe when key(i).
+std::vector<std::vector<Datagram>> videoStream(VideoSender& sender, int frames, std::size_t bytes,
+                                               const std::function<bool(int)>& key) {
+    std::vector<std::vector<Datagram>> out;
+    for (int i = 0; i < frames; ++i) {
+        std::vector<Datagram> d;
+        sender.send(accessUnit(std::uint64_t(i), bytes), key(i), i / 30.0, i / 30.0,
+                    [&](std::span<const std::uint8_t> x) { d.emplace_back(x.begin(), x.end()); });
+        out.push_back(std::move(d));
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("lanmedia: video header round trip and fragment bounds", "[lanmedia][video]") {
+    std::uint8_t buf[kMaxDatagramBytes]{};
+    MediaHeader h;
+    h.kind = MediaKind::Video;
+    h.flags = kFlagKeyframe;
+    h.streamId = 77;
+    h.position = 12;
+    h.fragIndex = 1;
+    h.fragCount = 3;
+    writeMediaHeader(buf, h);
+    writeVideoHeader(buf + kMediaHeaderBytes, {VideoCodec::H264, 3000, 1352});
+    const std::size_t n = kMediaHeaderBytes + kVideoHeaderBytes + 1352;
+    const auto m = parseMedia({buf, n});
+    REQUIRE(m);
+    CHECK(m->header == h);
+    const auto v = parseVideo(m->payload);
+    REQUIRE(v);
+    CHECK(v->header.frameBytes == 3000);
+    CHECK(v->header.offset == 1352);
+    CHECK(v->data.size() == 1352);
+    // a fragment reaching past the end of the frame is rejected
+    writeVideoHeader(buf + kMediaHeaderBytes, {VideoCodec::H264, 2000, 1352});
+    CHECK_FALSE(parseVideo(parseMedia({buf, n})->payload));
+}
+
+TEST_CASE("lanmedia: video frames are fragmented and reassembled in order", "[lanmedia][video]") {
+    VideoSender sender;
+    auto frames = videoStream(sender, 10, 5000, [](int i) { return i == 0; });
+    CHECK(frames[0].size() == 4); // 5000 B / 1352 B per fragment
+    for (const auto& d : frames[0]) CHECK(d.size() <= kMaxDatagramBytes);
+
+    VideoReceiver rx;
+    VideoCapture cap;
+    // fragments of each frame arrive in reverse, frames in order
+    double t = 0;
+    for (auto& f : frames) {
+        for (auto it = f.rbegin(); it != f.rend(); ++it) rx.onPacket(*it, t, cap.handler());
+        t += 1 / 30.0;
+        rx.poll(t, cap.handler());
+    }
+    CHECK(cap.numbers == std::vector<std::uint64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+    CHECK(cap.contentOk);
+    CHECK(cap.keys[0]);
+    CHECK(rx.stats().droppedFrames == 0);
+    CHECK(rx.stats().keyframeRequests == 0);
+}
+
+TEST_CASE("lanmedia: a lost fragment drops frames until a keyframe and asks for one", "[lanmedia][video]") {
+    VideoSender sender;
+    auto frames = videoStream(sender, 12, 3000, [](int i) { return i == 0 || i == 8; });
+    VideoReceiver rx;
+    VideoCapture cap;
+    bool asked = false;
+    double t = 0;
+    for (int i = 0; i < 12; ++i) {
+        for (std::size_t k = 0; k < frames[std::size_t(i)].size(); ++k)
+            if (!(i == 3 && k == 1)) rx.onPacket(frames[std::size_t(i)][k], t, cap.handler());
+        for (int p = 0; p < 16; ++p) {
+            t += 1 / 30.0 / 16;
+            if (auto r = rx.poll(t, cap.handler()); r && (r->flags & kReportKeyframeRequest)) {
+                asked = true;
+                sender.onReport(*r, t);
+            }
+        }
+    }
+    CHECK(asked);
+    CHECK(sender.stats().keyframeRequests >= 1);
+    // 0..2 decodable, 3 broken, 4..7 depend on it, 8 is the next keyframe
+    CHECK(cap.numbers == std::vector<std::uint64_t>{0, 1, 2, 8, 9, 10, 11});
+    CHECK(cap.contentOk);
+    CHECK(rx.stats().droppedFrames == 5);
+}
+
+TEST_CASE("lanmedia: a viewer joining mid-GOP gets a keyframe first", "[lanmedia][video]") {
+    VideoSender sender;
+    auto frames = videoStream(sender, 20, 2000, [](int i) { return i == 0 || i == 15; });
+    VideoReceiver rx;
+    VideoCapture cap;
+    double t = 0;
+    bool asked = false;
+    for (int i = 5; i < 20; ++i) {
+        for (const auto& d : frames[std::size_t(i)]) rx.onPacket(d, t, cap.handler());
+        t += 1 / 30.0;
+        if (auto r = rx.poll(t, cap.handler()); r && (r->flags & kReportKeyframeRequest)) asked = true;
+    }
+    CHECK(asked);
+    REQUIRE_FALSE(cap.numbers.empty());
+    CHECK(cap.numbers.front() == 15);
+    CHECK(cap.keys.front());
+}
+
+TEST_CASE("lanmedia: video receiver follows a restarted sender", "[lanmedia][video]") {
+    VideoSender sender;
+    auto a = videoStream(sender, 3, 2000, [](int i) { return i == 0; });
+    sender.restart();
+    auto b = videoStream(sender, 3, 2000, [](int i) { return i == 0; });
+    VideoReceiver rx;
+    VideoCapture cap;
+    for (auto* s : {&a, &b})
+        for (auto& f : *s)
+            for (auto& d : f) rx.onPacket(d, 0, cap.handler());
+    CHECK(cap.numbers == std::vector<std::uint64_t>{0, 1, 2, 0, 1, 2});
+    CHECK(rx.stats().streamChanges == 1);
+}
+
+TEST_CASE("lanmedia: video sender holds a keyframe request it just answered", "[lanmedia][video]") {
+    VideoSender sender;
+    Report r;
+    r.streamId = sender.streamId();
+    r.flags = kReportKeyframeRequest;
+    sender.send(accessUnit(0, 100), true, 0, 10.0, [](auto) {});
+    sender.onReport(r, 10.02); // the keyframe left 20 ms ago
+    CHECK_FALSE(sender.keyframeWanted());
+    sender.onReport(r, 10.2);
+    CHECK(sender.keyframeWanted());
+    sender.send(accessUnit(1, 100), true, 0, 10.25, [](auto) {});
+    CHECK_FALSE(sender.keyframeWanted());
+    r.streamId = 1234; // other streams are ignored
+    sender.onReport(r, 11);
+    CHECK_FALSE(sender.keyframeWanted());
+}
+
+TEST_CASE("lanmedia: video network simulation scenarios (shortened)", "[lanmedia][sim][video]") {
+    for (auto s : standardVideoScenarios()) {
+        INFO(s.name);
+        s.seconds = 30;
+        for (auto& e : s.events) e.atSec = std::min(e.atSec, 12.0);
+        const auto r = runVideoSimulation(s);
+        INFO(r.verdict());
+        CHECK(r.passed());
+        CHECK(r.undecodable == 0);
+    }
+}
+
 TEST_CASE("lanmedia: audio over real UDP sockets on loopback", "[lanmedia][udp]") {
     UdpTransport::Options o;
     o.bindAddress = "127.0.0.1";
@@ -356,4 +532,49 @@ TEST_CASE("lanmedia: audio over real UDP sockets on loopback", "[lanmedia][udp]"
     CHECK(s.lost == 0);
     CHECK(s.rejected == 0);
     CHECK(s.streamId == sender.streamId());
+}
+
+TEST_CASE("lanmedia: video output and input over real UDP sockets, with a keyframe request", "[lanmedia][udp][video]") {
+    VideoOutput::Options oo;
+    oo.bindAddress = "127.0.0.1";
+    oo.port = 0;
+    VideoOutput out(oo);
+
+    std::mutex m;
+    std::vector<std::pair<std::uint64_t, bool>> got; // frame number, keyframe
+    std::size_t bytes = 0;
+    VideoInput::Options io;
+    io.bindAddress = "127.0.0.1";
+    VideoInput in(io, [&](const VideoReceiver::Frame& f) {
+        std::lock_guard lock(m);
+        got.emplace_back(f.number, f.keyframe);
+        bytes += f.data.size();
+    });
+    CHECK_FALSE(out.hasDestinations());
+    out.setDestinations({UdpTransport::Endpoint(asio::ip::make_address("127.0.0.1"), in.localPort())});
+    CHECK(out.hasDestinations());
+
+    // the viewer joins in the middle of a GOP: it asks for a keyframe, the encoder answers with one
+    std::vector<std::uint8_t> au(20000);
+    int sentKey = -1;
+    for (int f = 0; f < 60; ++f) {
+        for (std::size_t i = 0; i < au.size(); ++i) au[i] = static_cast<std::uint8_t>(f + i);
+        const bool key = out.keyframeWanted();
+        if (key && sentKey < 0) sentKey = f;
+        out.send(au, key, nowSeconds());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(sentKey > 0);
+    std::lock_guard lock(m);
+    REQUIRE_FALSE(got.empty());
+    CHECK(got.front().first == std::uint64_t(sentKey));
+    CHECK(got.front().second);
+    CHECK(got.size() == std::size_t(60 - sentKey));
+    CHECK(bytes == got.size() * au.size());
+    for (std::size_t i = 1; i < got.size(); ++i) CHECK(got[i].first == got[i - 1].first + 1);
+    const auto s = out.stats();
+    CHECK(s.keyframeRequests >= 1);
+    CHECK(s.haveReport); // reports reach the output's socket
+    CHECK(in.stats().lostDatagrams == 0);
 }

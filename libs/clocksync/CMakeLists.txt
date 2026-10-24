@@ -3,6 +3,7 @@ add_library(dc_clocksync
     src/clock_bridge.cpp
     src/drift_controller.cpp
     src/drift_sim.cpp
+    src/rate_converter.cpp
     src/resampler.cpp
     src/time_dll.cpp
     src/tone_analyzer.cpp

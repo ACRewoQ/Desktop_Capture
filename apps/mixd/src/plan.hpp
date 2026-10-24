@@ -65,6 +65,9 @@ struct MixPlan {
     mutable std::vector<std::vector<float>> inputScratch;
     float testToneGain = 0; // diagnostics: a sine added to the master input (mixd --test-tone)
     double testToneHz = 1000;
+    // > 0: the test tone is a 50 ms burst starting at every multiple of this many seconds of QPC time
+    // (mixd --test-pulse; lines up with dc-av-flash for the A/V sync check of recordings)
+    double testPulseSeconds = 0;
 };
 
 } // namespace dc::mixd

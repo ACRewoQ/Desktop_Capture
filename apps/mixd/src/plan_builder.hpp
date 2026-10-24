@@ -4,6 +4,7 @@
 // what the rest of the engine derives from the same settings: which devices to open, per-track input
 // state, shared memory slots. Pure functions of their arguments.
 
+#include "device.hpp"
 #include "plan.hpp"
 
 #include "dc/protocol/param_tree.hpp"
@@ -17,13 +18,15 @@
 namespace dc::mixd {
 
 struct PortTable {
-    std::map<std::string, std::shared_ptr<InputPort>> inputs;   // open input streams by device id
+    // open input streams by device id, process captures by processPortKey()
+    std::map<std::string, std::shared_ptr<InputPort>> inputs;
     std::map<std::string, std::shared_ptr<OutputPort>> outputs; // open output streams by device id
 };
 
 // Devices the settings refer to, for the device manager.
 struct DeviceDemand {
     std::vector<std::string> inputs;  // sorted, unique
+    std::vector<std::string> processes; // executable names of process inputs, lower case, sorted, unique
     std::vector<std::string> outputs; // clock preference order: clock_device, master outputs, the rest
     std::string clockDevice;          // /system/clock_device ("" = automatic)
     std::string mode = "shared";      // /system/audio_mode
@@ -32,6 +35,11 @@ struct DeviceDemand {
 };
 
 DeviceDemand deviceDemand(const proto::ParamTree& tree);
+
+// "chrome.exe" / "Chrome.EXE" -> "chrome.exe": executable names compare case-insensitively.
+std::string lowerExe(const std::string& exe);
+// PortTable::inputs key of the capture of an application: "process:<lower case exe>".
+inline std::string processPortKey(const std::string& exe) { return "process:" + lowerExe(exe); }
 
 struct BuildResult {
     std::unique_ptr<MixPlan> plan;
@@ -44,10 +52,28 @@ struct BuildResult {
 struct BuildOptions {
     float testToneGain = 0;
     double testToneHz = 1000;
+    double testPulseSeconds = 0; // > 0: the tone only sounds 50 ms at each multiple of this QPC time
 };
 
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,
                       const BuildOptions& options = {});
+
+// Devices whose ID changed (Windows re-registers a device after a sample rate change or on another
+// USB port): settings that point at an ID that is gone are moved to the one connected device of the
+// same direction and name that nothing else uses yet (protocol.md 4.4).
+struct KnownDevice {
+    std::string name;
+    bool input = false;
+};
+struct Rematch {
+    std::string oldId, newId, name;
+};
+struct RematchResult {
+    std::vector<proto::Change> changes; // the settings rewritten to the new IDs
+    std::vector<Rematch> moved;
+};
+RematchResult rematchDevices(const proto::ParamTree& tree, const std::vector<DeviceInfo>& devices,
+                             const std::map<std::string, KnownDevice>& known);
 
 // Track numbers in screen order (by /track/N/position).
 std::vector<int> tracksByPosition(const proto::ParamTree& tree);
