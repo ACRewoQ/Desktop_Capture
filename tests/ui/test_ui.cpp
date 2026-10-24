@@ -3,6 +3,7 @@
 #include "connection.hpp"
 #include "param_hub.hpp"
 #include "recorder.hpp"
+#include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
 
@@ -196,6 +197,53 @@ private slots:
         QVERIFY(added > 0);
         QCOMPARE(c.tree().getAs<std::int64_t>("/track/" + std::to_string(added) + "/channels").value_or(0), std::int64_t{1});
         other.disconnect();
+    }
+
+    void routeAndInputChoices() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::StripModel tracks(c, ui::StripModel::Kind::Tracks);
+        ui::RouteChoices routes(c);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        auto values = [](const QVariantList& list) {
+            QStringList v;
+            for (const auto& e : list)
+                if (e.toMap().contains("value")) v << e.toMap().value("value").toString();
+            return v;
+        };
+        const QStringList out = values(routes.targetChoices("out", 1));
+        QVERIFY(out.contains("master"));
+        QVERIFY(out.contains("track/2"));
+        QVERIFY(!out.contains("track/1")); // not itself
+        QVERIFY(out.contains("device/out-spk"));
+        QVERIFY(out.contains("lan/8"));
+        QVERIFY(!values(routes.targetChoices("send", 1)).contains("master"));
+        const QStringList cue = values(routes.targetChoices("cue"));
+        QVERIFY(cue.contains("device/out-spk"));
+        QVERIFY(!cue.contains("lan/1"));
+        QCOMPARE(routes.targetText("master"), QStringLiteral("マスター"));
+        QCOMPARE(routes.targetText("device/out-spk"), QStringLiteral("Mock Speakers"));
+        QCOMPARE(routes.targetText("track/1"), QStringLiteral("Mic"));
+        QCOMPARE(routes.targetText("lan/2"), QStringLiteral("LAN 2"));
+
+        // Inputs: devices, applications and the sampler; the current one is marked.
+        const QVariantList inputs = tracks.inputChoices(1); // "Game" plays game.exe
+        int selected = 0;
+        bool sampler = false;
+        for (const auto& e : inputs) {
+            const auto m = e.toMap();
+            if (m.value("selected").toBool()) {
+                ++selected;
+                QCOMPARE(m.value("kind").toString(), QStringLiteral("process"));
+                QCOMPARE(m.value("source").toString(), QStringLiteral("game.exe"));
+            }
+            sampler |= m.value("kind").toString() == QLatin1String("sampler") && m.value("source").toString() == "3";
+        }
+        QCOMPARE(selected, 1);
+        QVERIFY(sampler);
+        tracks.setInput(1, "sampler", "3", 1);
+        QVERIFY(ui::waitUntil([&] { return tracks.inputTextAt(1) == QStringLiteral("サンプラー B3"); }, 2000));
     }
 
     void reconnectsAfterEngineRestart() {

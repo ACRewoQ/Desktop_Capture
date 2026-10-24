@@ -24,6 +24,8 @@ add_library(dc_ui_core STATIC
     src/param_hub.hpp
     src/recorder.cpp
     src/recorder.hpp
+    src/route_choices.cpp
+    src/route_choices.hpp
     src/selftest.cpp
     src/selftest.hpp
     src/strip_model.cpp
@@ -56,7 +58,9 @@ set(DC_UI_QML
     FilterButton.qml
     ToggleButton.qml
     AddTrackTile.qml
-    StripMenu.qml
+    TrackPanel.qml
+    MasterPanel.qml
+    TargetList.qml
     SourcePicker.qml
     # shared parts
     MenuButton.qml

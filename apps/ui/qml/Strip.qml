@@ -23,6 +23,8 @@ Rectangle {
     required property real levelL
     required property real levelR
     required property bool clip
+    required property bool cue
+    required property bool recordArmed
 
     property QtObject model          // tracks or master (StripModel)
     property Item scroller: null     // the scrolling list, paused while the pan is dragged
@@ -137,7 +139,7 @@ Rectangle {
     Rectangle {
         id: value
         objectName: "volumeText_" + (strip.isMaster ? "master" : strip.index)
-        anchors { bottom: buttons.top; bottomMargin: 2; horizontalCenter: parent.horizontalCenter }
+        anchors { bottom: extras.top; bottomMargin: 2; horizontalCenter: parent.horizontalCenter }
         width: strip.width - 16
         height: 30
         radius: Theme.radius
@@ -153,6 +155,34 @@ Rectangle {
             onLongPressed: Sheets.number.open({ title: strip.name + " の音量", value: Math.max(-60, strip.volumeDb),
                                                 unit: "dB", min: -144, max: 12, decimals: 1 },
                                               v => strip.model.setVolumeDb(strip.index, v))
+        }
+    }
+
+    // Cue (headphones) and per-track recording.
+    Row {
+        id: extras
+        anchors { bottom: buttons.top; bottomMargin: 4; horizontalCenter: parent.horizontalCenter }
+        spacing: 4
+        ToggleButton {
+            objectName: "cue_" + strip.index
+            visible: !strip.isMaster
+            width: (strip.width - 20) / 2
+            height: 36
+            label: "CUE"
+            fontSize: 12
+            on: strip.cue
+            onColor: Theme.cue
+            onTapped: strip.model.toggleCue(strip.index)
+        }
+        ToggleButton {
+            objectName: "rec_" + (strip.isMaster ? "master" : strip.index)
+            width: strip.isMaster ? strip.width - 16 : (strip.width - 20) / 2
+            height: 36
+            label: "● REC"
+            fontSize: 12
+            on: strip.recordArmed
+            onColor: Theme.record
+            onTapped: strip.model.toggleRecord(strip.index)
         }
     }
 

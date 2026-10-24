@@ -9,6 +9,7 @@
 #include "exercise.hpp"
 #include "param_hub.hpp"
 #include "recorder.hpp"
+#include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
 
@@ -105,6 +106,7 @@ int main(int argc, char** argv) {
     dc::ui::StripModel master(connection, dc::ui::StripModel::Kind::Master);
     dc::ui::Recorder recorder(connection);
     dc::ui::ParamHub params(connection);
+    dc::ui::RouteChoices routes(connection);
     qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
     qmlRegisterType<dc::ui::ParamList>("DcUi.Params", 1, 0, "ParamList");
 
@@ -114,6 +116,7 @@ int main(int argc, char** argv) {
     engine.rootContext()->setContextProperty(QStringLiteral("master"), &master);
     engine.rootContext()->setContextProperty(QStringLiteral("recorder"), &recorder);
     engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
+    engine.rootContext()->setContextProperty(QStringLiteral("routes"), &routes);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
     engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));
     engine.rootContext()->setContextProperty(QStringLiteral("startDemo"), cli.value("demo"));

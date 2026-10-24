@@ -78,6 +78,43 @@ Item {
                 }
             }
 
+            SettingSection { text: "デバイス" }
+            Repeater {
+                model: [{ prefix: "/devices/input", label: "入力" }, { prefix: "/devices/output", label: "出力" }]
+                delegate: Column {
+                    id: group
+                    required property var modelData
+                    width: column.width
+                    ParamList { id: devices; prefix: group.modelData.prefix }
+                    Repeater {
+                        model: devices
+                        delegate: InfoRow {
+                            id: dev
+                            required property string base
+                            Param { id: devName; path: dev.base + "/name" }
+                            Param { id: devApi; path: dev.base + "/api" }
+                            Param { id: devRate; path: dev.base + "/sample_rate" }
+                            Param { id: devChannels; path: dev.base + "/channels" }
+                            Param { id: devConnected; path: dev.base + "/connected" }
+                            label: group.modelData.label + ": " + devName.value
+                            note: [devApi.value === "asio" ? "ASIO" : devApi.value === "vmic" ? "仮想ケーブル" : "WASAPI",
+                                   devChannels.value + " ch",
+                                   devRate.value > 0 ? (devRate.value / 1000) + " kHz" : ""].filter(x => x).join(" · ")
+                            value: devConnected.value ? "接続中" : "切断中"
+                            valueColor: devConnected.value ? Theme.ok : Theme.mute
+                        }
+                    }
+                }
+            }
+            Item { width: 1; height: 8 }
+            MenuButton {
+                objectName: "refreshDevices"
+                width: 220
+                height: Theme.touch
+                label: "一覧を更新"
+                onTapped: params.call("/devices/refresh")
+            }
+
             SettingSection { text: "状態" }
             InfoRow {
                 label: "使用中のクロック"
