@@ -60,7 +60,12 @@
 | `/track/#/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
 | `/track/#/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
 | `/track/#/fx/#/bypass` | bool | rw |  | `false` | バイパス |
-| `/track/#/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義 |
+| `/track/#/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1 |
+| `/track/#/fx/#/status` | string | ro | ok / loading / failed / missing | `"ok"` | 状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない） |
+| `/track/#/fx/#/error` | string | ro |  | `""` | 失敗の理由 |
+| `/track/#/fx/#/latency_samples` | int | ro | 0 〜 1e+06 | `0` | エフェクトが足す遅延（サンプル） |
+| `/track/#/fx/#/param_count` | int | ro | 0 〜 1e+06 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
+| `/track/#/fx/#/editor` | bool | rw |  | `false` | プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る） |
 | `/master/name` | string | rw |  | `"Master"` | 表示名 |
 | `/master/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
 | `/master/pan` | float | rw | -1 〜 1 | `0` | パン（-1 = 左、0 = 中央、1 = 右）。ステレオはバランス |
@@ -76,7 +81,12 @@
 | `/master/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
 | `/master/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
 | `/master/fx/#/bypass` | bool | rw |  | `false` | バイパス |
-| `/master/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。範囲はエフェクト種別ごとに P3 で定義 |
+| `/master/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1 |
+| `/master/fx/#/status` | string | ro | ok / loading / failed / missing | `"ok"` | 状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない） |
+| `/master/fx/#/error` | string | ro |  | `""` | 失敗の理由 |
+| `/master/fx/#/latency_samples` | int | ro | 0 〜 1e+06 | `0` | エフェクトが足す遅延（サンプル） |
+| `/master/fx/#/param_count` | int | ro | 0 〜 1e+06 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
+| `/master/fx/#/editor` | bool | rw |  | `false` | プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る） |
 | `/capture/state` | string | ro | idle / starting / recording / stopping / error | `"idle"` | 録画状態 |
 | `/capture/elapsed_ms` | int | ro | 0 〜 9.22337e+18 | `0` | 録画経過時間 ms |
 | `/capture/file` | string | ro |  | `""` | 録画中・直前のファイルパス |
@@ -130,6 +140,18 @@
 | `/video/preview/height` | int | rw | 90 〜 1080 | `540` | プレビュー解像度（高さ） |
 | `/video/preview/fps` | int | rw | 5 〜 60 | `30` | プレビューのフレームレート |
 | `/video/preview/bitrate_kbps` | int | rw | 500 〜 8000 | `3000` | プレビューのビットレート kbps |
+| `/plugins/extra_dirs` | string | rw |  | `""` | 標準以外の VST3 フォルダー（; 区切り） |
+| `/plugins/scan/state` | string | ro | idle / scanning | `"idle"` | プラグインのスキャン状態 |
+| `/plugins/scan/progress` | float | ro | 0 〜 1 | `0` | スキャンの進み具合 |
+| `/plugins/scan/current` | string | ro |  | `""` | スキャン中のファイル |
+| `/plugins/#/id` | string | ro |  | `""` | エフェクト種別として使う ID（vst3:<id>） |
+| `/plugins/#/name` | string | ro |  | `""` | プラグイン名 |
+| `/plugins/#/vendor` | string | ro |  | `""` | メーカー |
+| `/plugins/#/category` | string | ro |  | `""` | 分類（プラグインの申告、例 Fx|EQ） |
+| `/plugins/#/instrument` | bool | ro |  | `false` | 音源（MIDI で鳴らすもの） |
+| `/plugins/#/status` | string | ro | ok / failed / crashed / timeout / unsupported | `"ok"` | スキャン結果（unsupported = モノ・ステレオのメイン入出力がない） |
+| `/plugins/#/error` | string | ro |  | `""` | スキャンで失敗した理由 |
+| `/plugins/#/path` | string | ro |  | `""` | プラグインのファイル |
 | `/remote/clients` | int | ro | 0 〜 4 | `0` | 接続中のリモコン数 |
 | `/remote/pairing/active` | bool | ro |  | `false` | ペアリング受付中 |
 
@@ -152,6 +174,79 @@
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
 | `/master/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/master/fx/remove` | index:int | nil | P3 | エフェクト削除 |
+| `/master/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
+| `/track/#/fx/#/params` | offset:int?, count:int?, keys:string? | string（JSON 配列） | P3 | パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる |
+| `/master/fx/#/params` | offset:int?, count:int?, keys:string? | string（JSON 配列） | P3 | パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる |
+| `/plugins/scan` | rescan:bool? | nil | P3 | VST3 プラグインを探す（rescan = 前回の結果を使わずに全部） |
 | `/devices/refresh` | なし | nil | P2 | デバイス・プロセス一覧の更新 |
 | `/remote/pairing/start` | なし | string（6桁コード） | P4 | ペアリング受付開始 |
 | `/remote/pairing/stop` | なし | nil | P4 | ペアリング受付終了 |
+
+## エフェクトのパラメーター（内蔵）
+
+`/track/#/fx/#/param/<キー>`（マスターは `/master/fx/#/param/<キー>`）。値は単位そのまま（float）。対数は UI のスライダーを対数で動かすもの。
+
+### `eq4` 4バンドEQ
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `low_freq_hz` | Low 周波数 | Hz | 20 〜 1000 | 100 | 対数 |
+| `low_gain_db` | Low ゲイン | dB | -18 〜 18 | 0 |  |
+| `mid1_freq_hz` | Mid1 周波数 | Hz | 40 〜 10000 | 400 | 対数 |
+| `mid1_gain_db` | Mid1 ゲイン | dB | -18 〜 18 | 0 |  |
+| `mid1_q` | Mid1 Q |  | 0.1 〜 10 | 1 | 対数 |
+| `mid2_freq_hz` | Mid2 周波数 | Hz | 100 〜 16000 | 2500 | 対数 |
+| `mid2_gain_db` | Mid2 ゲイン | dB | -18 〜 18 | 0 |  |
+| `mid2_q` | Mid2 Q |  | 0.1 〜 10 | 1 | 対数 |
+| `high_freq_hz` | High 周波数 | Hz | 1000 〜 20000 | 8000 | 対数 |
+| `high_gain_db` | High ゲイン | dB | -18 〜 18 | 0 |  |
+| `output_db` | 出力 | dB | -18 〜 18 | 0 |  |
+
+### `comp` コンプレッサー
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `threshold_db` | スレッショルド | dB | -60 〜 0 | -18 |  |
+| `ratio` | レシオ | :1 | 1 〜 20 | 4 | 対数 |
+| `attack_ms` | アタック | ms | 0.1 〜 200 | 10 | 対数 |
+| `release_ms` | リリース | ms | 10 〜 2000 | 150 | 対数 |
+| `knee_db` | ニー | dB | 0 〜 24 | 6 |  |
+| `makeup_db` | メイクアップ | dB | 0 〜 24 | 0 |  |
+
+### `gate` ゲート
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `threshold_db` | スレッショルド | dB | -90 〜 0 | -50 |  |
+| `floor_db` | 閉じたときの音量 | dB | -90 〜 0 | -90 |  |
+| `attack_ms` | アタック | ms | 0.1 〜 50 | 0.5 | 対数 |
+| `hold_ms` | ホールド | ms | 0 〜 500 | 50 |  |
+| `release_ms` | リリース | ms | 5 〜 2000 | 150 | 対数 |
+
+### `reverb` リバーブ
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `size` | 広さ |  | 0 〜 1 | 0.5 |  |
+| `damping` | 高域の減衰 |  | 0 〜 1 | 0.5 |  |
+| `predelay_ms` | プリディレイ | ms | 0 〜 200 | 10 |  |
+| `width` | ステレオ幅 |  | 0 〜 1 | 1 |  |
+| `mix` | ミックス |  | 0 〜 1 | 0.25 |  |
+
+### `delay` ディレイ
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `time_ms` | ディレイタイム | ms | 1 〜 2000 | 300 | 対数 |
+| `feedback` | フィードバック |  | 0 〜 0.95 | 0.35 |  |
+| `highcut_hz` | フィードバックのハイカット | Hz | 1000 〜 20000 | 8000 | 対数 |
+| `ping_pong` | ピンポン |  | 0 / 1 | 0 | スイッチ |
+| `mix` | ミックス |  | 0 〜 1 | 0.25 |  |
+
+### `limiter` リミッター（遅延 48 サンプル）
+
+| キー | 名前 | 単位 | 範囲 | 既定値 | 備考 |
+|---|---|---|---|---|---|
+| `input_db` | 入力ゲイン | dB | 0 〜 24 | 0 |  |
+| `ceiling_db` | シーリング | dB | -24 〜 0 | -1 |  |
+| `release_ms` | リリース | ms | 1 〜 1000 | 50 | 対数 |

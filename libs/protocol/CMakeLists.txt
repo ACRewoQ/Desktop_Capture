@@ -1,6 +1,7 @@
 add_library(dc_protocol
     src/codec.cpp
     src/defaults.cpp
+    src/fx.cpp
     src/meter.cpp
     src/names.cpp
     src/param_store.cpp
