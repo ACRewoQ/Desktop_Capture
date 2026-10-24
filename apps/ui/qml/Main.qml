@@ -18,6 +18,8 @@ Window {
     readonly property var pages: [
         { key: "mixer", label: "ミキサー", file: "MixerPage.qml", keep: true },
         { key: "video", label: "映像", file: "VideoPage.qml", keep: false },
+        { key: "sampler", label: "サンプラー", file: "SamplerPage.qml", keep: false },
+        { key: "capture", label: "録画", file: "CapturePage.qml", keep: false },
         { key: "settings", label: "設定", file: "SettingsPage.qml", keep: false },
     ]
     readonly property var pageKeys: pages.map(p => p.key)

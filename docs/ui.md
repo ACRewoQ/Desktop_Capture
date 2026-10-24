@@ -42,6 +42,11 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 - キャンバス（`LayerCanvas`）：レイヤーの枠だけを描く（映像は capd が合成する）。タップで手前のレイヤーを選び、選んだレイヤーはドラッグで移動、右下のつまみで大きさを変える。端と中央に 10px で吸着。ダブルタップでレイヤーの設定。
 - 横幅 900px 未満では、キャンバス・シーン・レイヤーを縦に並べる。シーンのタブではキャンバスのドラッグと重ならないよう、横スワイプでのページ移動を止める。
 
+## サンプラーと録画のページ
+
+- サンプラー：8 バンク × 16 パッド。パッドは押した瞬間に鳴らし（`/sampler/trigger`）、「押す間」のパッドは離したときに止める（`/sampler/release`）。指ごとに別のパッドを押せる。「編集」を押している間は、タップでパッドの設定（ファイル・名前・色・押したときの動き・音量）を開く。
+- 録画：録画ファイルの形式・保存先・映像（エンコーダー、解像度、ビットレートなど）・音声ストリーム 1〜8 と、トラック別録音（開始・停止、録音するトラック、形式、保存先）。録画の設定は録画を始めた時点で capd が読むので、録画中に変えると次の録画から効く。
+
 ## タッチ操作の約束
 
 | 操作 | 動き |
@@ -60,5 +65,5 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 |---|---|
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`） |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`、サンプラーの `pad`・`edit`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)） |

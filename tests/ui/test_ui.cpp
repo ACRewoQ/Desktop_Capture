@@ -322,6 +322,37 @@ private slots:
         QVERIFY(ui::waitUntil([&] { return layers.count() == 1; }, 2000));
     }
 
+    void samplerAndRecorder() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::ParamHub hub(c);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+
+        // A pad press as the sampler page sends it; the pad's playing flag follows.
+        ui::ParamValue playing;
+        playing.setPath(QStringLiteral("/sampler/bank/1/pad/1/playing"));
+        QVERIFY(ui::waitUntil([&] { return hub.value(QStringLiteral("/sampler/bank/1/pad/1/state")).toString() == QStringLiteral("ready"); }, 2000));
+        hub.call(QStringLiteral("/sampler/trigger"), {{QStringLiteral("pad"), 1}, {QStringLiteral("bank"), 1}});
+        QVERIFY(ui::waitUntil([&] { return playing.value().toBool(); }, 2000));
+        hub.call(QStringLiteral("/sampler/stop"));
+        QVERIFY(ui::waitUntil([&] { return !playing.value().toBool(); }, 2000));
+
+        // Per-track recording: arm one track, start and stop from the capture page's button.
+        hub.set(QStringLiteral("/track/1/record/enabled"), true);
+        ui::ParamValue state;
+        state.setPath(QStringLiteral("/recorder/state"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<bool>("/track/1/record/enabled").value_or(false); }, 2000));
+        hub.call(QStringLiteral("/recorder/start"));
+        QVERIFY(ui::waitUntil([&] { return state.value().toString() == QStringLiteral("recording"); }, 2000));
+        hub.call(QStringLiteral("/recorder/stop"));
+        QVERIFY(ui::waitUntil([&] { return state.value().toString() == QStringLiteral("idle"); }, 2000));
+
+        // A recording audio stream takes a track.
+        hub.set(QStringLiteral("/capture/audio/4/source"), QStringLiteral("track/2"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/capture/audio/4/source").value_or("") == "track/2"; }, 2000));
+    }
+
     void reconnectsAfterEngineRestart() {
         std::uint16_t port = 0;
         auto h = std::make_unique<Harness>();

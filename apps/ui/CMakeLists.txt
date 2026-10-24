@@ -51,6 +51,8 @@ set(DC_UI_QML
     MixerPage.qml
     SettingsPage.qml
     VideoPage.qml
+    CapturePage.qml
+    SamplerPage.qml
     # mixer
     Strip.qml
     Fader.qml
@@ -73,6 +75,8 @@ set(DC_UI_QML
     LayerCanvas.qml
     LayerSheet.qml
     SourceSheet.qml
+    # sampler
+    PadSheet.qml
     # shared parts
     MenuButton.qml
     Toast.qml
