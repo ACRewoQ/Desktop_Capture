@@ -191,9 +191,9 @@ Schema buildV1() {
                  "閉じたあとにつなぎ直す条件（title = 実行ファイル名とタイトル、exe = 実行ファイル名だけ）"));
         sc.add(s(src + "/camera/id", "", "カメラ ID（/video/devices/camera/#/id）"));
         sc.add(s(src + "/camera/name", "", "カメラ名（ID が変わったときの照合用）"));
-        sc.add(i(src + "/camera/width", 0, 7680, 0, "取り込み解像度の幅（0 = カメラの既定）"));
-        sc.add(i(src + "/camera/height", 0, 4320, 0, "取り込み解像度の高さ（0 = カメラの既定）"));
-        sc.add(i(src + "/camera/fps", 0, 240, 0, "取り込みフレームレート（0 = カメラの既定）"));
+        sc.add(i(src + "/camera/width", 0, 7680, 0, "取り込み解像度の幅（0 = 自動：1920×1080 以下で最大のもの）"));
+        sc.add(i(src + "/camera/height", 0, 4320, 0, "取り込み解像度の高さ（0 = 自動）"));
+        sc.add(i(src + "/camera/fps", 0, 240, 0, "取り込みフレームレート（0 = 自動：60 以下で最大）"));
         sc.add(s(src + "/file", "", "ファイルのパス（image / media）"));
         sc.add(b(src + "/media/loop", true, "動画を繰り返す"));
         sc.add(s(src + "/text/content", "", "表示する文字（改行可）"));

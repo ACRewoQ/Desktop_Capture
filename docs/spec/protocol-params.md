@@ -142,9 +142,9 @@
 | `/video/source/#/window/match` | string | rw | title / exe | `"title"` | 閉じたあとにつなぎ直す条件（title = 実行ファイル名とタイトル、exe = 実行ファイル名だけ） |
 | `/video/source/#/camera/id` | string | rw |  | `""` | カメラ ID（/video/devices/camera/#/id） |
 | `/video/source/#/camera/name` | string | rw |  | `""` | カメラ名（ID が変わったときの照合用） |
-| `/video/source/#/camera/width` | int | rw | 0 〜 7680 | `0` | 取り込み解像度の幅（0 = カメラの既定） |
-| `/video/source/#/camera/height` | int | rw | 0 〜 4320 | `0` | 取り込み解像度の高さ（0 = カメラの既定） |
-| `/video/source/#/camera/fps` | int | rw | 0 〜 240 | `0` | 取り込みフレームレート（0 = カメラの既定） |
+| `/video/source/#/camera/width` | int | rw | 0 〜 7680 | `0` | 取り込み解像度の幅（0 = 自動：1920×1080 以下で最大のもの） |
+| `/video/source/#/camera/height` | int | rw | 0 〜 4320 | `0` | 取り込み解像度の高さ（0 = 自動） |
+| `/video/source/#/camera/fps` | int | rw | 0 〜 240 | `0` | 取り込みフレームレート（0 = 自動：60 以下で最大） |
 | `/video/source/#/file` | string | rw |  | `""` | ファイルのパス（image / media） |
 | `/video/source/#/media/loop` | bool | rw |  | `true` | 動画を繰り返す |
 | `/video/source/#/text/content` | string | rw |  | `""` | 表示する文字（改行可） |
