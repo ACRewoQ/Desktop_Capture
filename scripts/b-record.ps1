@@ -56,6 +56,8 @@ $cases = @(
     @{ name = 'nvenc-lowlat-keyframes'; engine = $true; args = @('--low-latency', '--gop', '600', '--force-keyframes', '0.5') },
     @{ name = 'x264-lowlat-keyframes';  engine = $true; args = @('--encoder', 'x264', '--low-latency', '--gop', '600', '--force-keyframes', '0.5') }
 )
+# "powershell -File" passes "x264,keyframes" as one string: split it here too
+$Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($Only.Count) { $cases = @($cases | Where-Object { $n = $_.name; @($Only | Where-Object { $n -like "*$_*" }).Count }) }
 
 "# capd recording check ($(Get-Date -Format 'yyyy-MM-dd HH:mm'), $Seconds s each, $Config)`n" | Set-Content $summary -Encoding utf8
