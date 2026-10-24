@@ -15,8 +15,8 @@ add_library(dc_mixd_core STATIC
     src/timer_clock.cpp
 )
 if(WIN32)
-    target_sources(dc_mixd_core PRIVATE src/wasapi_backend.cpp)
-    target_link_libraries(dc_mixd_core PUBLIC ole32 avrt winmm dnsapi ws2_32)
+    target_sources(dc_mixd_core PRIVATE src/wasapi_backend.cpp src/asio_backend.cpp)
+    target_link_libraries(dc_mixd_core PUBLIC ole32 avrt winmm mmdevapi dnsapi ws2_32)
 endif()
 target_include_directories(dc_mixd_core PUBLIC src)
 target_link_libraries(dc_mixd_core PUBLIC dc::protocol dc::control dc::shmaudio dc::clocksync dc::lanmedia dc_version)

@@ -1,6 +1,7 @@
 #include "dc/clocksync/audio_fifo.hpp"
 #include "dc/clocksync/clock_bridge.hpp"
 #include "dc/clocksync/drift_sim.hpp"
+#include "dc/clocksync/rate_converter.hpp"
 #include "dc/clocksync/resampler.hpp"
 #include "dc/clocksync/time_dll.hpp"
 #include "dc/clocksync/tone_analyzer.hpp"
@@ -203,4 +204,82 @@ TEST_CASE("simulated devices stay locked without glitches", "[clocksync][sim]") 
     CHECK(r.passed());
     CHECK(r.estimatedPpm == Catch::Approx(r.truePpm).margin(2));
     CHECK(r.latencyDriftMs < 0.1);
+}
+
+TEST_CASE("rate converter: 44.1 kHz capture to 48 kHz in irregular packets", "[clocksync]") {
+    const auto in = sine(44100 * 3, 1000, 0.5, 44100);
+    RateConverter c(1, 44100, 48000, 2048);
+    std::mt19937 rng(3);
+    std::uniform_int_distribution<std::size_t> len(1, 1500);
+    std::vector<float> out;
+    std::vector<double> stamps;
+    std::size_t used = 0;
+    double t = 10.0;
+    while (used < in.size()) {
+        const auto n = std::min(len(rng), in.size() - used);
+        c.push(in.data() + used, n, t, [&](const float* p, std::size_t k, double time) {
+            // the time of output frame j is time + j / 48000; it must match the input's own clock
+            stamps.push_back(time - double(out.size()) / 48000);
+            out.insert(out.end(), p, p + k);
+        });
+        used += n;
+        t += double(n) / 44100;
+    }
+    CHECK(static_cast<double>(out.size()) == Catch::Approx(static_cast<double>(in.size()) * 48000 / 44100).margin(80));
+    ToneAnalyzer a({48000, 1000, 4800, 60, 0.01, 10});
+    a.feed(out.data() + 4800, out.size() - 9600, 1);
+    REQUIRE(a.summary().blocks >= 20);
+    CHECK(a.summary().glitchBlocks == 0);
+    CHECK(a.summary().minSinadDb > 85);
+    // every block's stamp describes the same timeline (within a frame)
+    for (double s : stamps) CHECK(s == Catch::Approx(stamps.front()).margin(1.0 / 44100));
+}
+
+TEST_CASE("rate converter: 48 kHz engine to a 44.1 kHz device, pulled in device periods", "[clocksync]") {
+    const auto in = sine(48000 * 3, 1000);
+    RateConverter c(2, 48000, 44100, 1024);
+    std::size_t used = 0;
+    std::vector<float> out, block(441 * 2 * 4);
+    std::mt19937 rng(5);
+    std::uniform_int_distribution<std::size_t> len(64, 441 * 4);
+    while (true) {
+        const auto n = len(rng);
+        bool ran_out = false;
+        c.pull(block.data(), n, [&](float* dst, std::size_t k) {
+            for (std::size_t i = 0; i < k; ++i) {
+                const float v = used < in.size() ? in[used] : 0.0f;
+                ran_out = ran_out || used >= in.size();
+                dst[2 * i] = v;
+                dst[2 * i + 1] = -v;
+                ++used;
+            }
+        });
+        if (ran_out) break;
+        out.insert(out.end(), block.begin(), block.begin() + std::ptrdiff_t(2 * n));
+    }
+    std::vector<float> left(out.size() / 2), right(out.size() / 2);
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        left[i] = out[2 * i];
+        right[i] = out[2 * i + 1];
+    }
+    CHECK(double(left.size()) == Catch::Approx(double(used) * 44100 / 48000).margin(1500));
+    ToneAnalyzer a({44100, 1000, 4410, 60, 0.01, 10});
+    a.feed(left.data() + 4410, left.size() - 4410, 1);
+    REQUIRE(a.summary().blocks >= 20);
+    CHECK(a.summary().glitchBlocks == 0);
+    CHECK(a.summary().minSinadDb > 85);
+    CHECK(right[20000] == Catch::Approx(-left[20000]).margin(1e-6));
+}
+
+TEST_CASE("rate converter: going down in rate filters what would fold back", "[clocksync]") {
+    const auto in = sine(48000, 23000); // above the 22.05 kHz Nyquist of 44.1 kHz
+    RateConverter c(1, 48000, 44100, 1024);
+    std::size_t used = 0;
+    std::vector<float> out(44100 / 2);
+    c.pull(out.data(), out.size(), [&](float* dst, std::size_t k) {
+        for (std::size_t i = 0; i < k; ++i) dst[i] = in[used++];
+    });
+    float peak = 0;
+    for (std::size_t i = 2000; i < out.size(); ++i) peak = std::max(peak, std::fabs(out[i]));
+    CHECK(peak < 0.5f * 0.001f); // below -60 dB of the tone
 }

@@ -5,7 +5,7 @@
 //
 //   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
 //        [--media-port N] [--lan-store FILE] [--no-discovery]
-//        [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]
+//        [--bridge-ms MS] [--test-tone HZ] [--no-asio] [--quiet] [--list-devices] [--version]
 
 #include "src/controller.hpp"
 #include "src/device_manager.hpp"
@@ -38,7 +38,7 @@ namespace {
 int usage() {
     std::cerr << "usage: mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices]\n"
                  "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
-                 "            [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]\n"
+                 "            [--bridge-ms MS] [--test-tone HZ] [--no-asio] [--quiet] [--list-devices] [--version]\n"
                  "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
                  "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
                  "  --allow-remote  accept LAN clients without pairing (development only)\n"
@@ -46,7 +46,9 @@ int usage() {
                  "  --lan-store     file with the server id and pairings (default %APPDATA%\\DesktopCapture\\mixd-lan.txt)\n"
                  "  --fake-devices  in-process test devices instead of WASAPI (always on outside Windows)\n"
                  "  --bridge-ms     minimum latency of the clock bridge to non-clock devices (default: automatic)\n"
-                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n";
+                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n"
+                 "  --no-asio       do not list or open ASIO drivers\n"
+                 "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
 
@@ -63,7 +65,7 @@ int main(int argc, char** argv) {
     mixd::Controller::Options ctlOpt;
     mixd::LanService::Options lanOpt;
     lanOpt.storePath = mixd::LanStore::defaultPath();
-    bool fake = false, useShm = true, quiet = false, list = false, localOnly = false;
+    bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, asioDrivers = true;
     std::string shmSuffix;
 
     for (int i = 1; i < argc; ++i) {
@@ -94,6 +96,7 @@ int main(int argc, char** argv) {
             ctlOpt.build.testToneGain = 0.1f;
         } else if (a == "--quiet") quiet = true;
         else if (a == "--list-devices") list = true;
+        else if (a == "--no-asio") asioDrivers = false;
         else return usage();
     }
     if (localOnly) opt.bindAddress = "127.0.0.1";
@@ -103,14 +106,19 @@ int main(int argc, char** argv) {
     try {
         std::unique_ptr<mixd::DeviceBackend> backend;
 #ifdef _WIN32
-        if (!fake) backend = mixd::makeWasapiBackend();
+        if (!fake) backend = mixd::makeWasapiBackend(asioDrivers);
+#else
+        (void)asioDrivers;
 #endif
         if (!backend) backend = std::make_unique<mixd::FakeBackend>();
 
         if (list) {
             for (const auto& d : backend->enumerate())
                 std::cout << (d.input ? "in  " : "out ") << (d.connected ? "ok   " : "gone ") << (d.isDefault ? "* " : "  ")
-                          << d.channels << "ch  " << d.name << "  [" << d.id << "]\n";
+                          << d.channels << "ch " << (d.sampleRate ? std::to_string(d.sampleRate) + "Hz  " : std::string("  "))
+                          << (d.asio ? "asio " : d.virtualCable ? "vmic " : "") << d.name << "  [" << d.id << "]\n";
+            for (const auto& p : backend->enumerateProcesses())
+                std::cout << "app " << p.exe << "  pid " << p.pid << (p.title.empty() ? "" : "  \"" + p.title + "\"") << "\n";
             return 0;
         }
 

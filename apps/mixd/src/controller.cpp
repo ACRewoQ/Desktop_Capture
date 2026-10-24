@@ -49,7 +49,7 @@ std::optional<std::int64_t> intArg(const Args& args, const char* key) {
 
 std::string trackBase(int n) { return "/track/" + std::to_string(n); }
 
-std::string apiOf(const DeviceInfo& d) { return d.virtualCable ? "vmic" : "wasapi"; }
+std::string apiOf(const DeviceInfo& d) { return d.asio ? "asio" : d.virtualCable ? "vmic" : "wasapi"; }
 
 bool samePorts(const PortTable& a, const PortTable& b) { return a.inputs == b.inputs && a.outputs == b.outputs; }
 
@@ -88,6 +88,7 @@ std::vector<Change> Controller::deviceChanges(const std::vector<DeviceInfo>& dev
         c.push_back({base + "/channels", std::int64_t{std::clamp(d.channels, 0, 64)}});
         c.push_back({base + "/connected", d.connected});
         c.push_back({base + "/api", apiOf(d)});
+        c.push_back({base + "/sample_rate", std::int64_t{std::clamp(d.sampleRate, 0, 384000)}});
     }
     return c;
 }
@@ -107,6 +108,7 @@ void Controller::seed(const std::vector<DeviceInfo>& devices) {
 
     for (const auto& x : deviceChanges(devices)) c.push_back(x);
     deviceList_ = devices;
+    for (const auto& d : devices) known_[d.id] = {d.name, d.input};
 
     for (const auto& m : masterDefaults()) c.push_back(m);
     for (const auto& d : devices)
@@ -206,7 +208,16 @@ void Controller::onDeviceState(const DeviceManager::State& state) {
 }
 
 void Controller::applyDeviceState(const DeviceManager::State& state) {
-    if (state.devices != deviceList_) publishDevices(state.devices);
+    if (state.devices != deviceList_) {
+        publishDevices(state.devices);
+        rematch();
+    }
+    if (state.processes != processList_) publishProcesses(state.processes);
+    for (const auto& e : state.events) {
+        if (options_.verbose)
+            std::cout << clockStamp() << e.name << ": " << e.kind << " " << e.label << " [" << e.id << "]" << std::endl;
+        server_.broadcastEventNow({e.name, {{"id", e.id}, {"name", e.label}, {"kind", e.kind}}});
+    }
     server_.publishNow({{"/system/clock_active", state.clockActive},
                         {"/system/latency_ms", std::round(state.latencyMs * 100.0) / 100.0}});
     if (state.errors != lastErrors_) {
@@ -230,8 +241,35 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
     }
 }
 
+void Controller::rematch() {
+    const auto r = rematchDevices(server_.store().tree(), deviceList_, known_);
+    if (r.changes.empty()) return;
+    server_.publishNow(r.changes);
+    for (const auto& m : r.moved) {
+        if (options_.verbose)
+            std::cout << clockStamp() << "device rematched by name: " << m.name << " [" << m.oldId << "] -> [" << m.newId << "]"
+                      << std::endl;
+        server_.broadcastEventNow({"device.rematched", {{"old_id", m.oldId}, {"id", m.newId}, {"name", m.name}}});
+    }
+    scheduleRebuild();
+}
+
+void Controller::publishProcesses(const std::vector<ProcessInfo>& processes) {
+    processList_ = processes;
+    std::vector<Change> c;
+    int n = 0;
+    for (const auto& p : processes) {
+        const std::string base = "/devices/process/" + std::to_string(++n);
+        c.push_back({base + "/exe", p.exe});
+        c.push_back({base + "/pid", static_cast<std::int64_t>(p.pid)});
+        c.push_back({base + "/title", p.title});
+    }
+    server_.publishNow(c, {"/devices/process"});
+}
+
 void Controller::publishDevices(const std::vector<DeviceInfo>& devices) {
     deviceList_ = devices;
+    for (const auto& d : devices) known_[d.id] = {d.name, d.input};
     server_.publishNow(deviceChanges(devices), {"/devices/input", "/devices/output"});
     if (options_.verbose) {
         std::cout << "devices:" << std::endl;
