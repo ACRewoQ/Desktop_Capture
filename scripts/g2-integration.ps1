@@ -165,7 +165,7 @@ try {
     $file = $uiRes['file']
     $uiPassed = (Get-Content $uiLog -Encoding UTF8 -Raw) -match 'EXERCISE PASSED'
     Add-Check 'UI: input, recording, controls' $uiPassed ("input `"$($uiRes['input'])`", $($uiRes['steps']) steps in $($uiRes['seconds']) s, refused $($uiRes['errors'])")
-    Add-Check 'Engine: no dropouts while the UI was busy' ($x1 -eq $x0) ("xruns +$($x1 - $x0), cpu max $cpuMax, latency $($info.latency_ms) ms")
+    Add-Check 'Engine: no dropouts while the UI was busy' ($x1 -eq $x0) ("xruns +$($x1 - $x0) (since mixd started: $x1), cpu max $cpuMax, latency $($info.latency_ms) ms")
 } catch {
     Add-Check 'Run' $false $_.Exception.Message
 } finally {
@@ -208,6 +208,7 @@ $flashRes = Get-Result $flashLog
 $md = @("# G2 integration check ($stamp)", '',
         "mixd + capd + dc-ui, $Minutes min, $Mode, block $Block, test pulse every $Period s.",
         "Clock: $($info.clock). Master out: $($info.master_out). Input: $InputDevice (ch $InputChannel).",
+        "Device notes from mixd: $((Get-Content $mixdLog -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'device note' }) -join ' / ')",
         "File: $file",
         "dc-av-flash: $($flashRes['flashes']) flashes, painted $($flashRes['paint_late_ms_median']) ms (median) / $($flashRes['paint_late_ms_max']) ms (max) after the instant.", '',
         '| check | result | detail |', '|---|---|---|')
