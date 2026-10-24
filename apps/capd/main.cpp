@@ -6,8 +6,10 @@
 //   capd list                     monitors and the hardware encoders that open on this PC (Windows)
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
+//   capd avsync FILE [options]    A/V offset from dc-av-flash flashes and mixd --test-pulse bursts (G2)
 //
 
+#include "src/avsync.hpp"
 #include "src/engine_follower.hpp"
 #include "src/recorder.hpp"
 #include "src/settings.hpp"
@@ -38,6 +40,7 @@ extern "C" {
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,19 +62,23 @@ usage:
   capd list
   capd record [options]
   capd probe FILE
+  capd avsync FILE [--region X,Y,W,H] [--audio-stream N] [--csv FILE]
 
 record options:
   --seconds S             stop after S seconds (default: run until Ctrl+C)
   --output FILE           file to write (default: <dir>/<date_time>.<container>)
   --dir DIR               folder (default: the Videos folder)
   --container mkv|mp4     default mkv
-  --encoder auto|nvenc|amf|qsv|mf   default auto (NVENC, AMF, QSV, Media Foundation: first that opens)
+  --encoder auto|nvenc|amf|qsv|mf|x264   default auto (NVENC, AMF, QSV, Media Foundation, x264: first that opens)
   --codec h264|hevc|av1   default h264 (above 2560x1440 H.264 is recorded as HEVC)
   --size WxH              recorded size (default 1920x1080)
   --fps N                 recorded frame rate (default 60)
   --rc cbr|vbr|cqp        rate control (default vbr)
   --bitrate KBPS          default 20000
   --quality Q             cqp quality 0-51 (default 23)
+  --gop N                 frames between keyframes (default: 2 seconds)
+  --low-latency           the encoder's low-latency tuning (as the preview stream uses it)
+  --force-keyframes S     request a keyframe every S seconds (tests the preview's keyframe request)
   --mix-size WxH          video mix (canvas) size (default: the recorded size)
   --mix-fps N             video mix frame rate (default: the recorded rate)
   --source wgc|dda        capture API (default wgc; dda = Desktop Duplication, avoids the Win10 yellow border)
@@ -106,9 +113,11 @@ int cmdList() {
                   << (m.desktop.bottom - m.desktop.top) << " at (" << m.desktop.left << "," << m.desktop.top << ")"
                   << (m.primary ? "  primary" : "") << "  on " << m.adapterName << "\n";
     }
-    std::cout << "\nhardware encoders (opened at 1280x720 on the primary monitor's GPU):\n";
+    std::cout << "\nencoders (opened at 1280x720 on the primary monitor's GPU):\n";
     const Device dev = createDevice(pickMonitor(monitors, -1).adapter.Get());
-    for (const auto& name : availableHwEncoders()) {
+    auto names = availableHwEncoders();
+    names.emplace_back("libx264");
+    for (const auto& name : names) {
         VideoSettings v;
         v.width = 1280;
         v.height = 720;
@@ -229,6 +238,9 @@ int cmdRecord(const std::vector<std::string>& args) {
         else if (a == "--rc") s.video.rateControl = next();
         else if (a == "--bitrate") s.video.bitrateKbps = std::atoi(next().c_str());
         else if (a == "--quality") s.video.quality = std::atoi(next().c_str());
+        else if (a == "--gop") s.video.gopFrames = std::atoi(next().c_str());
+        else if (a == "--low-latency") s.video.lowLatency = true;
+        else if (a == "--force-keyframes") s.forceKeyframeSeconds = std::atof(next().c_str());
         else if (a == "--mix-size") {
             if (!parseSize(next(), s.mix.width, s.mix.height)) throw std::runtime_error("bad --mix-size");
             mixSizeSet = true;
@@ -339,6 +351,50 @@ int cmdRecord(const std::vector<std::string>& args) {
     return error.empty() ? 0 : 3;
 }
 
+// A/V offset of a recording made while dc-av-flash and mixd --test-pulse ran (docs/capd.md).
+int cmdAvSync(const std::vector<std::string>& args) {
+    AvSyncOptions o;
+    std::string file, csv;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error(a + " needs a value");
+            return args[++i];
+        };
+        if (a == "--region") {
+            const std::string v = next();
+            if (std::sscanf(v.c_str(), "%lf,%lf,%lf,%lf", &o.regionX, &o.regionY, &o.regionW, &o.regionH) != 4)
+                throw std::runtime_error("--region X,Y,W,H (fractions of the frame)");
+        } else if (a == "--audio-stream") o.audioStream = std::stoi(next());
+        else if (a == "--csv") csv = next();
+        else if (file.empty()) file = a;
+        else throw std::runtime_error("unknown option " + a);
+    }
+    const AvSyncReport r = analyzeAvSync(file, o);
+    if (!r.error.empty()) {
+        std::cerr << "avsync: " << r.error << "\n";
+        return 3;
+    }
+    if (!csv.empty()) {
+        FILE* f = std::fopen(csv.c_str(), "w");
+        if (!f) throw std::runtime_error("cannot write " + csv);
+        std::fprintf(f, "video_s,audio_s,offset_ms\n");
+        for (const auto& p : r.pairs) std::fprintf(f, "%.4f,%.4f,%.2f\n", p.videoSec, p.audioSec, p.offsetMs());
+        std::fclose(f);
+    }
+    const auto& s = r.stats;
+    std::printf("%s: %.1f s, %d video frames, %zu flashes, %zu bursts, %d pairs\n", file.c_str(), r.durationSec,
+                r.videoFrames, r.flashes.size(), r.pulses.size(), s.pairs);
+    if (s.pairs > 0)
+        std::printf("audio - picture: mean %+.1f ms, median %+.1f ms, min %+.1f ms, max %+.1f ms, drift %+.1f ms\n",
+                    s.meanMs, s.medianMs, s.minMs, s.maxMs, s.driftMs);
+    std::printf("RESULT flashes=%zu pulses=%zu pairs=%d mean_ms=%.2f median_ms=%.2f min_ms=%.2f max_ms=%.2f "
+                "drift_ms=%.2f duration_s=%.1f\n",
+                r.flashes.size(), r.pulses.size(), s.pairs, s.meanMs, s.medianMs, s.minMs, s.maxMs, s.driftMs,
+                r.durationSec);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -370,6 +426,7 @@ int main(int argc, char** argv) {
         if (cmd == "record") return cmdRecord(args);
         if (cmd == "serve") return cmdServe(args);
         if (cmd == "probe" && args.size() == 1) return cmdProbe(args[0]);
+        if (cmd == "avsync" && !args.empty()) return cmdAvSync(args);
         usage();
         return 1;
     } catch (const std::exception& e) {

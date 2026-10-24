@@ -81,6 +81,16 @@ public:
     Q_INVOKABLE void setHighcutHz(int row, double hz);
     Q_INVOKABLE void clearClip(int row);
 
+    // What the input (tracks) or output (master) can be set to, for the picker: a list of
+    // {label, detail, kind, source, channel, selected} (tracks) or {label, detail, target, selected}
+    // (master), from /devices/. Multi-channel devices are offered per channel (mono track) or per
+    // pair (stereo track).
+    Q_INVOKABLE QVariantList inputChoices(int row) const;
+    Q_INVOKABLE QVariantList outputChoices() const;
+    // Kind, source and channel go in one Set, so that the engine never opens a half-changed input.
+    Q_INVOKABLE void setInput(int row, const QString& kind, const QString& source, int channel);
+    Q_INVOKABLE void setOutput(const QString& target); // master output 1
+
     // Tracks only.
     Q_INVOKABLE void addTrack(int channels);
     Q_INVOKABLE void removeTrack(int row);
@@ -106,6 +116,7 @@ private:
     QString inputText(int row) const;
 
     void edit(int row, const char* leaf, proto::Value v);
+    void editTogether(int row, std::vector<std::pair<const char*, proto::Value>> leaves);
     void flush();
     void sendCall(std::string method, proto::Args args, std::function<void(const proto::Result&)> then = {});
 

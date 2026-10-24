@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <set>
 
 namespace dc::ui {
@@ -217,6 +218,31 @@ void StripModel::flush() {
     }
 }
 
+void StripModel::editTogether(int row, std::vector<std::pair<const char*, Value>> leaves) {
+    if (row < 0 || row >= count()) return;
+    std::vector<Change> changes;
+    for (auto& [leaf, v] : leaves) {
+        const std::string path = base(row) + "/" + leaf;
+        overrides_[path] = v;
+        outgoing_.erase(path); // this Set carries the newest value
+        changes.push_back({path, std::move(v)});
+    }
+    emit dataChanged(index(row), index(row));
+    auto paths = std::make_shared<std::vector<std::string>>();
+    for (const auto& c : changes) paths->push_back(c.path);
+    const std::uint64_t id = connection_.set(std::move(changes), [this, paths](const Result& r) {
+        for (const auto& path : *paths) {
+            auto it = inFlight_.find(path);
+            if (it == inFlight_.end() || it->second != r.id) continue;
+            inFlight_.erase(it);
+            if (!outgoing_.count(path)) overrides_.erase(path);
+            emitPathChanged(path);
+        }
+        if (r.code != ErrorCode::Ok) emit failed(Connection::describe(r));
+    });
+    for (const auto& path : *paths) inFlight_[path] = id;
+}
+
 void StripModel::setFader(int row, double fader) { setVolumeDb(row, faderToDb(fader)); }
 
 void StripModel::setVolumeDb(int row, double db) {
@@ -251,6 +277,79 @@ void StripModel::clearClip(int row) {
     if (row < 0 || row >= count()) return;
     meters_[static_cast<std::size_t>(row)].clip = false;
     emit dataChanged(index(row), index(row), {ClipRole});
+}
+
+QVariantList StripModel::inputChoices(int row) const {
+    QVariantList out;
+    if (kind_ != Kind::Tracks || row < 0 || row >= count()) return out;
+    const auto& tree = connection_.tree();
+    const QString curKind = text(row, "input/kind");
+    const QString curSource = text(row, "input/source");
+    const int curChannel = static_cast<int>(number(row, "input/channel", 1));
+    const int trackChannels = static_cast<int>(number(row, "channels", 2));
+    auto entry = [&](const QString& label, const QString& detail, const QString& kind, const QString& source,
+                     int channel) {
+        const bool selected = curKind == kind && (kind == QLatin1String("none") ||
+                                                  (curSource == source && curChannel == channel));
+        out.push_back(QVariantMap{{"label", label},   {"detail", detail},   {"kind", kind},
+                                  {"source", source}, {"channel", channel}, {"selected", selected}});
+    };
+    entry(QStringLiteral("入力なし"), QString(), QStringLiteral("none"), QString(), 1);
+    for (int i = 1;; ++i) {
+        const std::string devBase = "/devices/input/" + std::to_string(i);
+        const auto id = tree.getAs<std::string>(devBase + "/id");
+        if (!id) break;
+        const QString source = QString::fromStdString(*id);
+        const QString name = QString::fromStdString(tree.getAs<std::string>(devBase + "/name").value_or(*id));
+        const int channels = static_cast<int>(tree.getAs<std::int64_t>(devBase + "/channels").value_or(2));
+        const QString gone = tree.getAs<bool>(devBase + "/connected").value_or(true) ? QString() : QStringLiteral("切断中");
+        if (channels <= trackChannels) {
+            entry(name, gone, QStringLiteral("device"), source, 1);
+            continue;
+        }
+        for (int ch = 1; ch + trackChannels - 1 <= channels; ch += trackChannels) {
+            const QString chText = trackChannels == 1 ? QStringLiteral("ch %1").arg(ch)
+                                                      : QStringLiteral("ch %1-%2").arg(ch).arg(ch + 1);
+            entry(name, gone.isEmpty() ? chText : chText + QStringLiteral(" · ") + gone, QStringLiteral("device"),
+                  source, ch);
+        }
+    }
+    return out;
+}
+
+QVariantList StripModel::outputChoices() const {
+    QVariantList out;
+    if (kind_ != Kind::Master || count() == 0) return out;
+    const auto& tree = connection_.tree();
+    const QString current = text(0, "out/1/target");
+    auto entry = [&](const QString& label, const QString& detail, const QString& target) {
+        out.push_back(QVariantMap{{"label", label}, {"detail", detail}, {"target", target}, {"selected", current == target}});
+    };
+    entry(QStringLiteral("出力なし"), QString(), QString());
+    for (int i = 1;; ++i) {
+        const std::string devBase = "/devices/output/" + std::to_string(i);
+        const auto id = tree.getAs<std::string>(devBase + "/id");
+        if (!id) break;
+        const bool vmic = tree.getAs<std::string>(devBase + "/api").value_or("") == "vmic";
+        const QString target = QString::fromStdString((vmic ? "vmic/" : "device/") + *id);
+        QString detail = vmic ? QStringLiteral("仮想マイク") : QString();
+        if (!tree.getAs<bool>(devBase + "/connected").value_or(true))
+            detail = detail.isEmpty() ? QStringLiteral("切断中") : detail + QStringLiteral(" · 切断中");
+        entry(QString::fromStdString(tree.getAs<std::string>(devBase + "/name").value_or(*id)), detail, target);
+    }
+    return out;
+}
+
+void StripModel::setInput(int row, const QString& kind, const QString& source, int channel) {
+    if (kind_ != Kind::Tracks) return;
+    editTogether(row, {{"input/kind", kind.toStdString()},
+                       {"input/source", kind == QLatin1String("none") ? std::string() : source.toStdString()},
+                       {"input/channel", std::int64_t{std::max(1, channel)}}});
+}
+
+void StripModel::setOutput(const QString& target) {
+    if (kind_ != Kind::Master) return;
+    edit(0, "out/1/target", target.toStdString());
 }
 
 void StripModel::sendCall(std::string method, Args args, std::function<void(const Result&)> then) {

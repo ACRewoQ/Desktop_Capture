@@ -78,9 +78,10 @@ struct BodyPacker {
     Packer& pk;
 
     void operator()(const Hello& m) {
-        pk.pack_map(6);
+        pk.pack_map(7);
         packKey(pk, "proto"); pk.pack_uint32(m.proto);
         packKey(pk, "client"); packStr(pk, m.clientName);
+        packKey(pk, "client_id"); packStr(pk, m.clientId);
         packKey(pk, "role"); pk.pack_uint8(static_cast<std::uint8_t>(m.role));
         packKey(pk, "meter_port"); pk.pack_uint16(m.meterPort);
         packKey(pk, "pair_code"); packStr(pk, m.pairCode);
@@ -239,12 +240,13 @@ Message decodeBody(MsgType type, const msgpack::object& body) {
             else if (k == "client") m.clientName = toStr(v);
             else if (k == "role") {
                 const auto r = toUnsigned<std::uint8_t>(v);
-                if (r > static_cast<std::uint8_t>(ClientRole::Service)) throw DecodeError("unknown role");
+                if (r > static_cast<std::uint8_t>(ClientRole::Peer)) throw DecodeError("unknown role");
                 m.role = static_cast<ClientRole>(r);
             }
             else if (k == "meter_port") m.meterPort = toUnsigned<std::uint16_t>(v);
             else if (k == "pair_code") m.pairCode = toStr(v);
             else if (k == "token") m.token = toStr(v);
+            else if (k == "client_id") m.clientId = toStr(v);
         });
         return m;
     }

@@ -73,6 +73,9 @@ struct MixPlan {
     std::shared_ptr<const SamplerTable> sampler; // pads (null = sampler unused)
     float testToneGain = 0; // diagnostics: a sine added to the master input (mixd --test-tone)
     double testToneHz = 1000;
+    // > 0: the test tone is a 50 ms burst starting at every multiple of this many seconds of QPC time
+    // (mixd --test-pulse; lines up with dc-av-flash for the A/V sync check of recordings)
+    double testPulseSeconds = 0;
 };
 
 } // namespace dc::mixd

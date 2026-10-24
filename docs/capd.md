@@ -7,7 +7,9 @@
 - 映像ミックス 1 つ・シーン 1 つ・レイヤー 1 枚（モニター全体をキャンバスに収める）
 - 取得：Windows.Graphics.Capture（既定）、Desktop Duplication（`--source dda`、Win10 の黄色枠を避けたいとき）
 - 合成：D3D11 シェーダーで BGRA キャンバスに描く → ID3D11VideoProcessor で録画解像度の NV12 へ。画素は CPU を通りません
-- エンコーダー自動選択：`auto` は NVENC → AMF → QSV → Media Foundation の順に開いて、最初に開けたものを使う。2560×1440 を超える H.264 は HEVC に切り替える（V3：4K H.264 は NVENC の 57% を使う）
+- エンコーダー自動選択：`auto` は NVENC → AMF → QSV → Media Foundation → x264 の順に開いて、最初に開けたものを使う。2560×1440 を超える H.264 は HEVC に切り替える（V3：4K H.264 は NVENC の 57% を使う）
+- x264（ソフトウェア、H.264 のみ、preset veryfast）：GPU の NV12 面までは同じで、エンコードスレッドが `av_hwframe_transfer_data` で CPU に下ろしてから渡す。vcpkg の FFmpeg は `gpl` と `x264` を有効にしている（個人用なので GPL で問題ない）
+- エンコーダーの共通オプション（プレビュー配信用）：`VideoSettings::gopFrames`（キーフレーム間隔、0 = 2 秒）、`lowLatency`（NVENC tune=ull、AMF ultralowlatency、QSV async_depth=1、x264 zerolatency）、`submit(..., keyframe=true)` でそのフレームを IDR にする（NVENC・QSV・x264 は forced-idr）
 - NVENC は `delay=0`（遅延 34ms → 約 5ms）。そのぶん呼び出しが GPU 待ちになるので、エンコードは専用スレッドで行う
 - 音声：エンジンの共有メモリ（`docs/spec/shm-audio.md`）から最大 8 ストリーム（マスター / トラック n）、AAC・Opus・PCM 24bit
 - 保存：MKV（既定、途中で止まっても再生できる）または MP4。書き込みは専用スレッド
@@ -38,18 +40,18 @@ mixd ができるまでは `dc-mock-server --capd` がエンジンの代わり�
 
 エンジンの代わりに `dc-shm-tone write` を動かすと、マスター 440Hz・トラック N = 220×(N+1)Hz の音が入ります。
 
+録画の音ズレは `capd avsync <ファイル>` で測ります。`dc-av-flash`（主モニターの左上 1/4 を QPC 時刻の一定間隔で白くする）と `mixd --test-pulse`（同じ瞬間にマスターへ 50ms のビープ）を動かしたまま録画したファイルから、白くなったフレームとビープの頭の時刻を拾って組にし、「音 − 映像」の平均・中央値・最小・最大と、最初の 1 割と最後の 1 割の差（ずれの変化）を出します。`--csv` で組ごとの値、`--region X,Y,W,H` で見る場所（画面に対する割合、既定 0.06,0.06,0.10,0.10）を変えられます。mixd・capd・dc-ui をまとめて動かす G2 の試験は `scripts/g2-integration.ps1`。
+
 実機での確認は `scripts/b-record.ps1`（7 ケースを録って `capd probe` で読み直し、`build\b-record\<日時>\summary.md` に表を作る）。
 
 ## まだないこと
 
 | 項目 | 予定 |
 |---|---|
-| mixd 本体との接続試験 | G2（mixd 側の record start/stop と `/capture/report` の実装後） |
 | ソース（モニター番号、WGC / DDA）の設定 | スキーマにまだないので既定（主モニター、WGC）。P3（B1）のシーン設定で入る |
 | シーン・複数レイヤー・ウィンドウ / カメラのソース | P3（B1） |
 | GPU リセット時に新しいファイルで続ける | P3。P2 はエラーで録画を止める |
 | プレビュー配信・仮想カメラ・全画面出力 | P3 / P4（ミックスの「出力先」として足す） |
-| x264（ソフトウェア） | vcpkg の FFmpeg に x264 を入れていないため未対応。`auto` はハードウェアだけを試す |
 
 ## 構成
 

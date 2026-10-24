@@ -3,9 +3,10 @@
 // during development, over the control protocol.
 //
 //   dc-ui [--connect HOST[:PORT]] [--remote] [--fullscreen] [--backend default|d3d11|software]
-//         [--selftest]
+//         [--selftest] [--exercise MINUTES [--input ID|first] [--input-channel N] [--record]]
 
 #include "connection.hpp"
+#include "exercise.hpp"
 #include "recorder.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
@@ -69,6 +70,11 @@ int main(int argc, char** argv) {
         {"backend", "Scene graph backend: default (D3D11 on Windows), d3d11 or software.", "name", "default"},
         {"selftest", "Run the scripted check against the engine, print the result and exit (changes its state)."},
         {"no-meters", "With --selftest: do not expect meter packets."},
+        {"exercise", "G2 run: keep moving the track controls for MINUTES with the screen up, print the result and exit.",
+         "minutes"},
+        {"input", "With --exercise: input device of the first track (an id from /devices/input, or \"first\").", "id"},
+        {"input-channel", "With --exercise: first channel of that device to use.", "n", "1"},
+        {"record", "With --exercise: record from start to end through the record button's logic."},
     });
     cli.process(app);
 
@@ -77,7 +83,8 @@ int main(int argc, char** argv) {
     else if (backend == QLatin1String("d3d11")) QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
 
     const bool selfTest = cli.isSet("selftest");
-    if (selfTest) g_previousHandler = qInstallMessageHandler(messageHandler);
+    const bool exercise = cli.isSet("exercise");
+    if (selfTest || exercise) g_previousHandler = qInstallMessageHandler(messageHandler);
 
     dc::ui::Connection::Options opt;
     const QStringList hostPort = cli.value("connect").split(QLatin1Char(':'));
@@ -103,6 +110,28 @@ int main(int argc, char** argv) {
     if (!window) return 1;
 
     connection.start();
+    if (exercise) {
+        int frames = 0;
+        QObject::connect(window, &QQuickWindow::frameSwapped, [&] { ++frames; });
+        QTimer::singleShot(0, [&] {
+            dc::ui::ExerciseOptions eo;
+            eo.minutes = cli.value("exercise").toDouble();
+            eo.input = cli.value("input");
+            eo.inputChannel = cli.value("input-channel").toInt();
+            eo.record = cli.isSet("record");
+            print(QStringLiteral("dc-ui exercise against %1 for %2 min").arg(connection.address()).arg(eo.minutes));
+            int failures = dc::ui::runExercise(connection, tracks, recorder, print, eo);
+            print(QStringLiteral("%1 screen drew %2 frames, QML warnings %3")
+                      .arg(frames > 0 && g_qmlWarnings == 0 ? "  OK  " : "  FAIL")
+                      .arg(frames)
+                      .arg(g_qmlWarnings));
+            if (frames == 0 || g_qmlWarnings) ++failures;
+            print(failures ? QStringLiteral("EXERCISE FAILED (%1)").arg(failures) : QStringLiteral("EXERCISE PASSED"));
+            connection.stop();
+            QGuiApplication::exit(failures ? 1 : 0);
+        });
+        return QGuiApplication::exec();
+    }
     if (!selfTest) return QGuiApplication::exec();
 
     int frames = 0;

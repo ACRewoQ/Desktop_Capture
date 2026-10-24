@@ -40,6 +40,7 @@ int listSize(const std::string& segment) {
     if (segment == "out") return kMaxTrackOutputs;
     if (segment == "send") return kMaxTrackSends;
     if (segment == "audio") return kMaxCaptureAudioStreams;
+    if (segment == "stream") return kMaxLanStreams; // /lan/stream/#
     if (segment == "bank") return kSamplerBanks;
     if (segment == "pad") return kSamplerPads;
     if (segment == "mix") return 1; // one video mix by default; more are added by lane B1

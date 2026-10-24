@@ -47,8 +47,10 @@ public:
 
     // Mixes frames (<= kMaxBlockFrames) with plan. inputs[i] holds frames interleaved samples of
     // plan.inputs[i] (its channel count), or nullptr for silence. Strips with a shared memory tap are
-    // written to shm (when not null); the caller commits the block.
-    void process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm);
+    // written to shm (when not null); the caller commits the block. qpcTime is the QPC time (seconds)
+    // the block is stamped with in shared memory (only the test pulse uses it).
+    void process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm,
+                 double qpcTime = 0);
 
     // Output of bus i of the last processed plan, one channel (0 = left, 1 = right).
     const float* bus(int index, int channel) const { return buses_[index][channel].data(); }
