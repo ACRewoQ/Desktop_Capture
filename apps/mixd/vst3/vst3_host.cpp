@@ -101,6 +101,7 @@ public:
     Instance(std::unique_ptr<AudioPluginInstance> plugin, int mainChannels)
         : plugin_(std::move(plugin)), main_(mainChannels) {
         name_ = str(plugin_->getName());
+        hasEditor_ = plugin_->hasEditor(); // asks the plugin for a view: message thread only
         auto* bypass = plugin_->getBypassParameter();
         const auto& all = plugin_->getParameters();
         for (int i = 0; i < all.size(); ++i) {
@@ -204,7 +205,7 @@ public:
 
     int latencySamples() const override { return plugin_->getLatencySamples(); }
 
-    bool hasEditor() const override { return plugin_->hasEditor(); }
+    bool hasEditor() const override { return hasEditor_; }
 
     void setEditorOpen(bool open) override {
         std::weak_ptr<Instance> weak = shared_from_this();
@@ -282,6 +283,7 @@ private:
     int main_ = 2;  // channels of the plugin's main bus
     int total_ = 2; // channels of the buffer handed to processBlock
     std::string name_;
+    bool hasEditor_ = false;
     std::vector<Param> params_;
     std::unordered_map<std::string, std::size_t> byKey_;
     std::unordered_map<int, std::size_t> byIndex_;
