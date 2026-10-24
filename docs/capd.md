@@ -7,7 +7,9 @@
 - 映像ミックス 1 つ・シーン 1 つ・レイヤー 1 枚（モニター全体をキャンバスに収める）
 - 取得：Windows.Graphics.Capture（既定）、Desktop Duplication（`--source dda`、Win10 の黄色枠を避けたいとき）
 - 合成：D3D11 シェーダーで BGRA キャンバスに描く → ID3D11VideoProcessor で録画解像度の NV12 へ。画素は CPU を通りません
-- エンコーダー自動選択：`auto` は NVENC → AMF → QSV → Media Foundation の順に開いて、最初に開けたものを使う。2560×1440 を超える H.264 は HEVC に切り替える（V3：4K H.264 は NVENC の 57% を使う）
+- エンコーダー自動選択：`auto` は NVENC → AMF → QSV → Media Foundation → x264 の順に開いて、最初に開けたものを使う。2560×1440 を超える H.264 は HEVC に切り替える（V3：4K H.264 は NVENC の 57% を使う）
+- x264（ソフトウェア、H.264 のみ、preset veryfast）：GPU の NV12 面までは同じで、エンコードスレッドが `av_hwframe_transfer_data` で CPU に下ろしてから渡す。vcpkg の FFmpeg は `gpl` と `x264` を有効にしている（個人用なので GPL で問題ない）
+- エンコーダーの共通オプション（プレビュー配信用）：`VideoSettings::gopFrames`（キーフレーム間隔、0 = 2 秒）、`lowLatency`（NVENC tune=ull、AMF ultralowlatency、QSV async_depth=1、x264 zerolatency）、`submit(..., keyframe=true)` でそのフレームを IDR にする（NVENC・QSV・x264 は forced-idr）
 - NVENC は `delay=0`（遅延 34ms → 約 5ms）。そのぶん呼び出しが GPU 待ちになるので、エンコードは専用スレッドで行う
 - 音声：エンジンの共有メモリ（`docs/spec/shm-audio.md`）から最大 8 ストリーム（マスター / トラック n）、AAC・Opus・PCM 24bit
 - 保存：MKV（既定、途中で止まっても再生できる）または MP4。書き込みは専用スレッド
@@ -50,7 +52,6 @@ mixd ができるまでは `dc-mock-server --capd` がエンジンの代わり�
 | シーン・複数レイヤー・ウィンドウ / カメラのソース | P3（B1） |
 | GPU リセット時に新しいファイルで続ける | P3。P2 はエラーで録画を止める |
 | プレビュー配信・仮想カメラ・全画面出力 | P3 / P4（ミックスの「出力先」として足す） |
-| x264（ソフトウェア） | vcpkg の FFmpeg に x264 を入れていないため未対応。`auto` はハードウェアだけを試す |
 
 ## 構成
 

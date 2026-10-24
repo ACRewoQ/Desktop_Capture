@@ -116,7 +116,7 @@ $info = [ordered]@{}
 $file = ''
 try {
     Write-Host "`n=== mixd ($Mode, block $Block, pulse every $Period s) ===" -ForegroundColor Cyan
-    $procs += Start-Hidden $mixd @('--port', $port, '--test-pulse', $Period) $mixdLog
+    $procs += Start-Hidden $mixd @('--port', $port, '--local-only', '--test-pulse', $Period) $mixdLog
     Start-Sleep -Milliseconds 1500
     if ($Device) {
         Set-Param '/master/out/1/target' "device/$Device"

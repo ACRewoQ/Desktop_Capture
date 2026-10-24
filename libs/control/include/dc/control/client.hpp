@@ -34,6 +34,7 @@ public:
         std::uint16_t meterPort = 0;
         std::string token;
         std::string pairCode;
+        std::string clientId;
         std::chrono::milliseconds pingInterval{5000};
     };
 
