@@ -220,6 +220,7 @@ TEST_CASE("plan builder: routing, solo, input state, shared memory, device deman
     t.set("/track/2/input/kind", std::string("device"));
     t.set("/track/2/input/source", std::string("gone"));
     t.set("/track/3/input/kind", std::string("process"));
+    t.set("/track/3/input/source", std::string("Game.EXE")); // not running: no capture port
     t.set("/track/2/out/1/target", std::string("track/1"));
     t.set("/track/4/out/2/target", std::string("device/hp"));
     t.set("/master/out/1/target", std::string("device/spk"));
@@ -261,6 +262,11 @@ TEST_CASE("plan builder: routing, solo, input state, shared memory, device deman
     auto d = deviceDemand(t);
     CHECK(d.inputs == std::vector<std::string>{"gone", "mic"});
     CHECK(d.outputs == std::vector<std::string>{"usb", "spk", "hp"});
+    CHECK(d.processes == std::vector<std::string>{"game.exe"});
+
+    // the application runs: its capture port is found by the lower case name
+    ports.inputs[processPortKey("game.exe")] = port(processPortKey("game.exe"), 2);
+    CHECK(buildPlan(t, ports, 9).inputState.at(3) == "ok");
 
     SECTION("solo keeps the soloed track, what feeds it and what it feeds") {
         t.set("/track/1/solo", true);

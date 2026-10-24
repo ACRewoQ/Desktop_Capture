@@ -6,6 +6,10 @@
 //
 // Clock rules (design doc "デバイス切断時の動作（音声）"): /system/clock_device if set and usable,
 // otherwise the first usable master output, otherwise any output in use, otherwise the internal timer.
+//
+// Process inputs: one capture per application (executable name), whichever tracks use it. When the
+// application exits the capture fails and is closed; the manager looks for the name again every few
+// seconds and reconnects when the application runs again.
 
 #include "device.hpp"
 #include "engine.hpp"
@@ -28,13 +32,25 @@ public:
         double bridgeMinMs = 0; // lower bound of the bridge latency target (ms), --bridge-ms
     };
 
+    // A device or application that the settings use went away or came back (device.lost /
+    // device.restored).
+    struct Event {
+        std::string name;  // "device.lost" / "device.restored"
+        std::string id;    // device id, or the executable name for processes
+        std::string label; // device name / executable name
+        std::string kind;  // input / output / process
+        bool operator==(const Event&) const = default;
+    };
+
     struct State {
         std::vector<DeviceInfo> devices;
+        std::vector<ProcessInfo> processes; // applications with audio, for /devices/process
         PortTable ports;
         std::string clockActive; // "device/<id>" or "timer"
         double latencyMs = 0;
         std::vector<std::string> errors; // devices that could not be opened this round, with the reason
         std::vector<std::string> notes;  // open streams running differently from what was asked
+        std::vector<Event> events;       // what changed since the previous State (each event once)
     };
 
     DeviceManager(DeviceBackend& backend, Engine& engine, Options options);
@@ -62,6 +78,7 @@ private:
         std::shared_ptr<InputPort> input;
         std::shared_ptr<OutputPort> output;
         bool clock = false;
+        bool process = false; // device.name is the executable name (lower case)
     };
 
     void run();
@@ -69,7 +86,10 @@ private:
     void closeStream(const std::string& key);
     bool openInput(const DeviceInfo& d, std::string* error);
     bool openOutput(const DeviceInfo& d, bool asClock, std::string* error);
-    clocksync::ClockBridge::Config bridgeConfig(int channels, int devicePeriod) const;
+    bool openProcess(const ProcessInfo& p, std::string* error);
+    void reconcileProcesses(const DeviceDemand& demand, std::vector<std::string>& errors);
+    void trackAvailability(const DeviceDemand& demand, std::vector<Event>& events);
+    clocksync::ClockBridge::Config bridgeConfig(int channels, int devicePeriod, bool virtualDevice = false) const;
     int clockPeriod() const;
     StreamConfig configFor(const std::string& key) const;
     bool retryAllowed(const std::string& key);
@@ -91,7 +111,11 @@ private:
 
     // manager thread only
     std::vector<DeviceInfo> devices_;
-    std::map<std::string, OpenStream> streams_; // key "in:<id>" / "out:<id>"
+    std::vector<ProcessInfo> processes_;
+    double processScan_ = -1e9; // time of the last process list scan
+    std::map<std::string, OpenStream> streams_; // key "in:<id>" / "out:<id>" / "proc:<exe>"
+    std::map<std::string, bool> available_;     // demanded keys -> present at the last reconcile
+    std::map<std::string, std::string> names_;  // device id -> name, every device seen so far
     std::unique_ptr<Stream> timer_;
     std::string clockKey_; // key of the clock stream, "" = timer
     StreamConfig config_;
