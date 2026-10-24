@@ -663,9 +663,11 @@ private:
                 if (hr == AUDCLNT_S_BUFFER_EMPTY || frames == 0) break;
                 const double pos = static_cast<double>(devPos) * toStream;
                 // a packet the device hands out again (G2: the Realtek mic in exclusive mode, about
-                // 1.5x the real rate): drop what was delivered already, judged by its position
+                // 1.5x the real rate): drop what was delivered already, judged by its position. Not for
+                // process loopback: its packets carry no usable device position (A2 test: every packet
+                // was dropped)
                 UINT32 skip = 0;
-                if (!first && posScale_ == 1.0 && pos + 0.5 < expectedPos) {
+                if (!first && !process_ && posScale_ == 1.0 && pos + 0.5 < expectedPos) {
                     skip = static_cast<UINT32>(std::min<double>(frames, expectedPos - pos + 0.5));
                     duplicates_.fetch_add(skip);
                 }

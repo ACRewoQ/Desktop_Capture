@@ -36,10 +36,10 @@ param(
     [switch]$NoBuild
 )
 
-$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# 'Stop' only after the build: with output redirected, CMake's warnings on stderr would stop the script
 if (-not $NoBuild) {
     if (-not $env:VCPKG_ROOT) { throw 'VCPKG_ROOT is not set. See docs/build-and-test.md (section 1).' }
     cmake --preset windows
@@ -47,6 +47,8 @@ if (-not $NoBuild) {
     cmake --build --preset windows-release --target mixd dc-cli dc-engine-check dc-loopback-probe
     if ($LASTEXITCODE) { throw "build failed ($LASTEXITCODE)" }
 }
+
+$ErrorActionPreference = 'Stop'
 
 $bin = Join-Path $root 'build/windows'
 $mixd = Join-Path $bin 'apps/mixd/Release/mixd.exe'
