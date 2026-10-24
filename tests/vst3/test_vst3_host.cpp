@@ -37,6 +37,7 @@ std::unique_ptr<PluginHost> makeTestHost(const std::string& cache) {
     o.scannerExe = g_self;
     o.scanTimeoutSeconds = 30;
     o.verbose = false;
+    o.standardDirs = false; // only the fixture: the PC's own plugins take a minute to scan
     return vst3::makeHost(o);
 }
 
@@ -120,7 +121,7 @@ TEST_CASE("scan finds the fixture in a child process and caches it", "[vst3]") {
 
 TEST_CASE("the fixture loads, lists its parameters and processes audio", "[vst3]") {
     auto host = makeTestHost(tempCache("dc-vst3-test-cache2.json"));
-    scanAndWait(*host);
+    scanAndWait(*host); // once per section (Catch2 reruns the case), quick with only the fixture
     const auto info = findTestGain(host->plugins());
     REQUIRE(info.has_value());
 

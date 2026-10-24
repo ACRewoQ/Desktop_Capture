@@ -494,7 +494,7 @@ private:
 
     void runScan(bool rescan, const std::vector<std::string>& extraDirs, const std::function<void(ScanProgress)>& progress) {
         VST3PluginFormat format;
-        auto path = format.getDefaultLocationsToSearch();
+        auto path = options_.standardDirs ? format.getDefaultLocationsToSearch() : FileSearchPath();
         for (const auto& d : extraDirs) path.add(File(String::fromUTF8(d.c_str())));
         auto bundles = format.searchPathsForPlugins(path, true, false);
         bundles.sort(true);

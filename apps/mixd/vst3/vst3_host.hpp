@@ -18,6 +18,7 @@ struct HostOptions {
     std::string cacheFile;  // scan results; "" = %APPDATA%\DesktopCapture\vst3-cache.json
     std::string scannerExe; // program run as "<exe> --scan-plugin <file> --out <json>"; "" = this executable
     int scanTimeoutSeconds = 60;
+    bool standardDirs = true; // also search the standard VST3 folders (tests search only their own)
     bool verbose = true;
 };
 
