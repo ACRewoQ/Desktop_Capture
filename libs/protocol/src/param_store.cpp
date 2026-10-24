@@ -1,11 +1,13 @@
 #include "dc/protocol/param_store.hpp"
 #include "dc/protocol/routing.hpp"
+#include "dc/protocol/video.hpp"
 
 #include <stdexcept>
 
 namespace dc::proto {
 
 ValidationError defaultSemanticValidator(const ParamTree& after, const std::vector<Change>& changes) {
+    if (auto err = validateVideo(after, changes)) return err;
     for (const auto& c : changes) {
         if (c.path.size() > 7 && c.path.compare(c.path.size() - 7, 7, "/target") == 0) return validateRouting(after);
     }
