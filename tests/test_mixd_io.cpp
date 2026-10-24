@@ -93,6 +93,22 @@ TEST_CASE("rematch: settings follow a device whose ID changed, by its name", "[m
         t3.set("/master/out/1/target", std::string("device/old-out"));
         CHECK(rematchDevices(t3, still, known).changes.empty());
     }
+    SECTION("a device Windows registered again with a number in its name (another USB port)") {
+        CHECK(deviceBaseName("Line (2- Steinberg UR22)") == "Line (Steinberg UR22)");
+        CHECK(deviceBaseName("12- USB Speaker") == "USB Speaker");
+        CHECK(deviceBaseName("Mic (Model 2-X)") == "Mic (Model 2-X)");
+        std::map<std::string, KnownDevice> k2{{"old-line", {"Line (Steinberg UR22)", true}}};
+        auto t5 = defaultTree(1);
+        t5.set("/track/1/input/kind", std::string("device"));
+        t5.set("/track/1/input/source", std::string("old-line"));
+        auto r5 = rematchDevices(t5, {dev("port2-line", "Line (2- Steinberg UR22)", true)}, k2);
+        REQUIRE(r5.changes.size() == 1);
+        CHECK(std::get<std::string>(r5.changes[0].value) == "port2-line");
+        // an exact name wins over a numbered one
+        auto r6 = rematchDevices(t5, {dev("port2-line", "Line (2- Steinberg UR22)", true), dev("same", "Line (Steinberg UR22)", true)}, k2);
+        REQUIRE(r6.changes.size() == 1);
+        CHECK(std::get<std::string>(r6.changes[0].value) == "same");
+    }
     SECTION("inputs and outputs never match each other") {
         auto t4 = defaultTree(1);
         t4.set("/master/out/1/target", std::string("device/old-in"));

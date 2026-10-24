@@ -97,6 +97,24 @@ DeviceDemand deviceDemand(const ParamTree& tree) {
     return d;
 }
 
+std::string deviceBaseName(const std::string& name) {
+    // "N- " right after the start or an opening parenthesis
+    std::string out;
+    out.reserve(name.size());
+    for (std::size_t i = 0; i < name.size();) {
+        if (i == 0 || name[i - 1] == '(') {
+            std::size_t j = i;
+            while (j < name.size() && name[j] >= '0' && name[j] <= '9') ++j;
+            if (j > i && j + 1 < name.size() && name[j] == '-' && name[j + 1] == ' ') {
+                i = j + 2;
+                continue;
+            }
+        }
+        out += name[i++];
+    }
+    return out;
+}
+
 RematchResult rematchDevices(const ParamTree& tree, const std::vector<DeviceInfo>& devices,
                              const std::map<std::string, KnownDevice>& known) {
     // every setting that names a device: (path, id, input, prefix kept in front of the id)
@@ -136,18 +154,24 @@ RematchResult rematchDevices(const ParamTree& tree, const std::vector<DeviceInfo
         if (moved.count(key) || connected(r.id, r.input) || r.id.rfind("asio:", 0) == 0) continue;
         const auto k = known.find(r.id);
         if (k == known.end() || k->second.input != r.input || k->second.name.empty()) continue;
+        // the same name, else the same name without the number Windows adds to a device it registers
+        // again ("Line (2- Steinberg UR22)" on another USB port)
         const DeviceInfo* candidate = nullptr;
         int count = 0;
-        for (const auto& d : devices)
-            if (d.connected && d.input == r.input && d.name == k->second.name) {
-                ++count;
-                candidate = &d;
-            }
+        for (const bool loose : {false, true}) {
+            const auto want = loose ? deviceBaseName(k->second.name) : k->second.name;
+            for (const auto& d : devices)
+                if (d.connected && d.input == r.input && (loose ? deviceBaseName(d.name) : d.name) == want) {
+                    ++count;
+                    candidate = &d;
+                }
+            if (count > 0) break;
+        }
         // exactly one device of that name, and not one the settings use already
         if (count != 1 || used.count({candidate->id, r.input})) continue;
         moved[key] = candidate->id;
         used.insert({candidate->id, r.input});
-        out.moved.push_back({r.id, candidate->id, k->second.name});
+        out.moved.push_back({r.id, candidate->id, candidate->name});
     }
     for (const auto& r : refs)
         if (auto m = moved.find({r.id, r.input}); m != moved.end()) out.changes.push_back({r.path, r.prefix + m->second});
