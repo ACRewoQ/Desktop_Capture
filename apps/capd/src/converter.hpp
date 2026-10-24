@@ -1,4 +1,5 @@
 // BGRA -> NV12 conversion and scaling on the GPU with ID3D11VideoProcessor (fixed-function, no shaders, no CPU copy).
+// It can also output BGRA (scaling only), for the Windows 10 virtual camera, which takes RGB.
 #pragma once
 
 #include "d3d.hpp"
@@ -12,10 +13,10 @@ namespace dc::capd {
 
 class Converter {
 public:
-    Converter(const Device& dev, UINT outWidth, UINT outHeight, UINT fps);
+    Converter(const Device& dev, UINT outWidth, UINT outHeight, UINT fps, DXGI_FORMAT outFormat = DXGI_FORMAT_NV12);
 
-    // Converts the whole of src into slice `arrayIndex` of the NV12 texture dst (scaled to the output size,
-    // aspect ratio kept with black bars). BT.709 limited range.
+    // Converts the whole of src into slice `arrayIndex` of the texture dst (NV12 or the format given above), scaled
+    // to the output size, aspect ratio kept with black bars. NV12 is BT.709 limited range.
     void convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, UINT arrayIndex);
 
 private:
@@ -29,6 +30,7 @@ private:
     ComPtr<ID3D11VideoProcessorEnumerator> enumerator_;
     ComPtr<ID3D11VideoProcessor> processor_;
     UINT outWidth_, outHeight_, fps_;
+    DXGI_FORMAT outFormat_;
     UINT inWidth_ = 0, inHeight_ = 0;
     ID3D11Texture2D* inputFor_ = nullptr;
     ComPtr<ID3D11VideoProcessorInputView> inputView_;

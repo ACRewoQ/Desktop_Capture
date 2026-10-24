@@ -6,6 +6,7 @@
 //   capd list                     monitors and the hardware encoders that open on this PC (Windows)
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
+//   capd vcam [options]           feed the virtual camera from a monitor (or a stamped test pattern)
 //
 
 #include "src/engine_follower.hpp"
@@ -13,11 +14,16 @@
 #include "src/settings.hpp"
 
 #ifdef _WIN32
+#include "src/vcam_output.hpp"
 #include "src/video_encoder.hpp"
 #include "src/video_mix.hpp"
+
+#include "dc/vcam/pattern.hpp"
+#include "dc/vcam/sender.hpp"
 #endif
 
 #include "dc/protocol/constants.hpp"
+#include "dc/shmaudio/clock.hpp"
 #include "dc/shmaudio/layout.hpp"
 #include "dc/version.hpp"
 
@@ -59,6 +65,7 @@ usage:
   capd list
   capd record [options]
   capd probe FILE
+  capd vcam [--seconds S] [--resolution 1080p|720p] [--source wgc|dda] [--monitor N] [--test-pattern]
 
 record options:
   --seconds S             stop after S seconds (default: run until Ctrl+C)
@@ -127,6 +134,96 @@ int cmdList() {
         std::cout << "  " << name << "  " << status << "\n";
     }
     return 0;
+}
+#endif
+
+#ifdef _WIN32
+// Feeds the virtual camera for a while: from a monitor through the same path as the engine-driven output, or with
+// --test-pattern a CPU-drawn picture carrying the stamp dc-vcam-probe reads (fps, drops, latency).
+int cmdVcam(const std::vector<std::string>& args) {
+    double seconds = 0;
+    std::string resolution = "1080p";
+    bool pattern = false;
+    MixSettings ms;
+    ms.fps = 60;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error("missing value for " + a);
+            return args[++i];
+        };
+        if (a == "--seconds") seconds = std::atof(next().c_str());
+        else if (a == "--resolution") resolution = next();
+        else if (a == "--source") ms.source = next();
+        else if (a == "--monitor") ms.monitor = std::atoi(next().c_str());
+        else if (a == "--test-pattern") pattern = true;
+        else throw std::runtime_error("unknown option " + a);
+    }
+    const auto kind = dc::vcam::systemCameraKind();
+    std::cout << "virtual camera: " << (kind == dc::vcam::CameraKind::MediaFoundation ? "Media Foundation (Windows 11)"
+                                                                                     : "DirectShow (Windows 10)")
+              << (seconds > 0 ? "" : ", Ctrl+C to stop") << "\n"
+              << std::flush;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto done = [&] {
+        return g_stop || (seconds > 0 && std::chrono::steady_clock::now() - t0 >= std::chrono::duration<double>(seconds));
+    };
+
+    if (pattern) {
+        dc::vcam::Sender sender(kind);
+        const int w = 1920, h = 1080;
+        std::vector<std::uint8_t> frame(std::size_t(w) * h * 4);
+        const std::int64_t freq = dc::shm::qpcFrequency();
+        std::uint32_t index = 0;
+        std::int64_t next = dc::shm::nowQpc();
+        auto nextPrint = t0 + std::chrono::seconds(1);
+        while (!done()) {
+            const std::int64_t now = dc::shm::nowQpc();
+            dc::vcam::draw_test_pattern_bgra(frame.data(), w, h, w * 4, {now, index++});
+            sender.sendBgra(frame.data(), w * 4, w, h, now);
+            if (std::chrono::steady_clock::now() >= nextPrint) {
+                nextPrint += std::chrono::seconds(1);
+                const auto st = sender.status();
+                std::cout << "frame " << index << " | " << (st.attached ? "attached" : "waiting for a camera app")
+                          << (st.consumer ? ", app reading" : "") << (st.error.empty() ? "" : " | " + st.error) << "\n"
+                          << std::flush;
+            }
+            next += freq / VcamOutput::kFps;
+            const std::int64_t wait = next - dc::shm::nowQpc();
+            if (wait > 0) std::this_thread::sleep_for(std::chrono::microseconds(wait * 1'000'000 / freq));
+            else if (wait < -freq / VcamOutput::kFps) next = dc::shm::nowQpc();
+        }
+        sender.detach();
+        std::cout << "RESULT vcam pattern frames=" << index << "\n";
+        return 0;
+    }
+
+    VideoMix mix(ms);
+    VcamOutput out(resolution);
+    std::cout << "source: " << mix.sourceDescription() << ", camera " << out.width() << "x" << out.height() << "\n";
+    mix.addConsumer([&](ID3D11Texture2D* canvas, std::int64_t, std::int64_t qpc) {
+        out.onFrame(canvas, mix.device(), 0, qpc);
+    });
+    mix.start();
+    auto nextPrint = t0 + std::chrono::seconds(1);
+    std::string error;
+    while (!done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!mix.error().empty()) {
+            error = mix.error();
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= nextPrint) {
+            nextPrint += std::chrono::seconds(1);
+            const auto st = out.stats();
+            std::cout << "frames " << st.frames << ", skipped " << st.skipped << " | " << st.state << "\n" << std::flush;
+        }
+    }
+    mix.stop();
+    out.detach();
+    const auto st = out.stats();
+    std::cout << "RESULT vcam frames=" << st.frames << " skipped=" << st.skipped << " error=\"" << error << "\"\n";
+    return error.empty() ? 0 : 3;
 }
 #endif
 
@@ -374,6 +471,7 @@ int main(int argc, char** argv) {
         args.erase(args.begin());
 #ifdef _WIN32
         if (cmd == "list") return cmdList();
+        if (cmd == "vcam") return cmdVcam(args);
 #endif
         if (cmd == "record") return cmdRecord(args);
         if (cmd == "serve") return cmdServe(args);

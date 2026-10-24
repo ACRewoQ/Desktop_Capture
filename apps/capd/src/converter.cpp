@@ -4,8 +4,8 @@
 
 namespace dc::capd {
 
-Converter::Converter(const Device& dev, UINT outWidth, UINT outHeight, UINT fps)
-    : dev_(dev), outWidth_(outWidth), outHeight_(outHeight), fps_(fps) {
+Converter::Converter(const Device& dev, UINT outWidth, UINT outHeight, UINT fps, DXGI_FORMAT outFormat)
+    : dev_(dev), outWidth_(outWidth), outHeight_(outHeight), fps_(fps), outFormat_(outFormat) {
     DC_HR(dev_.device.As(&videoDevice_));
     DC_HR(dev_.context.As(&videoContext_));
 }
@@ -25,9 +25,11 @@ void Converter::setup(UINT inWidth, UINT inHeight) {
     DC_HR(videoDevice_->CreateVideoProcessorEnumerator(&desc, &enumerator_));
 
     UINT support = 0;
-    DC_HR(enumerator_->CheckVideoProcessorFormat(DXGI_FORMAT_NV12, &support));
+    DC_HR(enumerator_->CheckVideoProcessorFormat(outFormat_, &support));
     if (!(support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT))
-        throw std::runtime_error("the GPU's video processor cannot output NV12");
+        throw std::runtime_error(outFormat_ == DXGI_FORMAT_NV12 ? "the GPU's video processor cannot output NV12"
+                                                                : "the GPU's video processor cannot output this format");
+    const bool yuv = outFormat_ == DXGI_FORMAT_NV12;
 
     DC_HR(videoDevice_->CreateVideoProcessor(enumerator_.Get(), 0, &processor_));
     inWidth_ = inWidth;
@@ -40,7 +42,8 @@ void Converter::setup(UINT inWidth, UINT inHeight) {
     ComPtr<ID3D11VideoContext1> vc1;
     if (SUCCEEDED(videoContext_.As(&vc1))) {
         vc1->VideoProcessorSetStreamColorSpace1(processor_.Get(), 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-        vc1->VideoProcessorSetOutputColorSpace1(processor_.Get(), DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+        vc1->VideoProcessorSetOutputColorSpace1(
+            processor_.Get(), yuv ? DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
     } else {
         D3D11_VIDEO_PROCESSOR_COLOR_SPACE in{};
         in.RGB_Range = 0;  // full range RGB
@@ -48,7 +51,7 @@ void Converter::setup(UINT inWidth, UINT inHeight) {
         vc->VideoProcessorSetStreamColorSpace(processor_.Get(), 0, &in);
         D3D11_VIDEO_PROCESSOR_COLOR_SPACE out{};
         out.YCbCr_Matrix = 1;  // BT.709
-        out.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
+        out.Nominal_Range = yuv ? D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235 : D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
         vc->VideoProcessorSetOutputColorSpace(processor_.Get(), &out);
     }
 
@@ -66,8 +69,9 @@ void Converter::setup(UINT inWidth, UINT inHeight) {
     vc->VideoProcessorSetStreamDestRect(processor_.Get(), 0, TRUE, &dst);
     vc->VideoProcessorSetOutputTargetRect(processor_.Get(), TRUE, &target);
     D3D11_VIDEO_COLOR black{};
-    black.YCbCr = {0.0625f, 0.5f, 0.5f, 1.0f};
-    vc->VideoProcessorSetOutputBackgroundColor(processor_.Get(), TRUE, &black);
+    if (yuv) black.YCbCr = {0.0625f, 0.5f, 0.5f, 1.0f};
+    else black.RGBA = {0.0f, 0.0f, 0.0f, 1.0f};
+    vc->VideoProcessorSetOutputBackgroundColor(processor_.Get(), yuv ? TRUE : FALSE, &black);
     // No auto-processing (denoise, edge enhancement...) that drivers may switch on by default.
     vc->VideoProcessorSetStreamAutoProcessingMode(processor_.Get(), 0, FALSE);
 }
