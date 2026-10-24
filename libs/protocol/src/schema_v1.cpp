@@ -160,6 +160,8 @@ Schema buildV1() {
     sc.add(e("/lan/stream/#/codec", {"pcm16", "pcm24", "opus"}, "pcm24", "コーデック（pcm = 無圧縮・低遅延、opus = 無線向け）"));
     sc.add(ic("/lan/stream/#/opus_frames", {120, 240, 480, 960}, 480, "Opus のパケット長（フレーム数、480 = 10 ms）"));
     sc.add(i("/lan/stream/#/bitrate_kbps", 32, 512, 128, "Opus のビットレート kbps"));
+    sc.add(i("/lan/stream/#/stream_id", 0, 4294967295LL, 0,
+             "今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない）", RO));
     sc.add(i("/lan/stream/#/subscribers", 0, kMaxLanSubscriptions, 0, "受信している相手の数", RO));
     sc.add(b("/lan/stream/#/active", false, "何かが出力していて、受信者がいて送信中", RO));
     sc.add(s("/lan/sub/#/stream", "", "購読しているストリーム（audio/<n> / video/preview / video/lan）", RO));

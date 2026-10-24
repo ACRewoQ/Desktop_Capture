@@ -123,6 +123,7 @@
 | `/lan/stream/#/codec` | string | rw | pcm16 / pcm24 / opus | `"pcm24"` | コーデック（pcm = 無圧縮・低遅延、opus = 無線向け） |
 | `/lan/stream/#/opus_frames` | int | rw | 120 / 240 / 480 / 960 | `480` | Opus のパケット長（フレーム数、480 = 10 ms） |
 | `/lan/stream/#/bitrate_kbps` | int | rw | 32 〜 512 | `128` | Opus のビットレート kbps |
+| `/lan/stream/#/stream_id` | int | ro | 0 〜 4.29497e+09 | `0` | 今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない） |
 | `/lan/stream/#/subscribers` | int | ro | 0 〜 32 | `0` | 受信している相手の数 |
 | `/lan/stream/#/active` | bool | ro |  | `false` | 何かが出力していて、受信者がいて送信中 |
 | `/lan/sub/#/stream` | string | ro |  | `""` | 購読しているストリーム（audio/<n> / video/preview / video/lan） |
