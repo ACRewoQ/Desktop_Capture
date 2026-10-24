@@ -1,0 +1,6 @@
+add_executable(dc-lan-tone main.cpp)
+target_link_libraries(dc-lan-tone PRIVATE dc::lanmedia)
+dc_apply_options(dc-lan-tone)
+if(WIN32)
+    target_link_libraries(dc-lan-tone PRIVATE winmm)
+endif()

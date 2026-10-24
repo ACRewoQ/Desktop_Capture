@@ -17,6 +17,9 @@ public:
     struct Options {
         bool meters = true;
         std::chrono::milliseconds meterInterval{33};
+        // Leave recording to a connected capd (protocol.md 5.4.1: starting/stopping + /capture/report)
+        // instead of pretending to record at once.
+        bool delegateCapture = false;
     };
 
     MockEngine(asio::io_context& io, control::ControlServer& server, Options options);
@@ -37,6 +40,7 @@ private:
     proto::Result moveTrack(control::CallContext& ctx);
     proto::Result startRecording(control::CallContext& ctx);
     proto::Result stopRecording(control::CallContext& ctx);
+    proto::Result captureReport(control::CallContext& ctx);
 
     asio::io_context& io_;
     control::ControlServer& server_;

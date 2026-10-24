@@ -37,10 +37,10 @@ cd C:\dev\Desktop_Capture
 
 | 段階 | 内容 |
 |---|---|
-| Configure | `cmake --preset windows`。初回は vcpkg が asio・msgpack・Catch2 を取得・ビルドします（数分） |
+| Configure | `cmake --preset windows`。初回は vcpkg が asio・msgpack・Catch2・Opus などを取得・ビルドします（数分） |
 | Build | 全ターゲットをビルド（既定は Debug。`-Config Release` も可） |
-| ctest | 単体テストと結合テスト（47 件）。モックサーバーと複数クライアントの TCP 通信、共有メモリのリングを含む |
-| Smoke | 別プロセス同士の確認：3 プロセスの起動、モックサーバー ⇔ dc-cli、dc-shm-tone の書き手 ⇔ 読み手 |
+| ctest | 単体テストと結合テスト。モックサーバーと複数クライアントの TCP 通信、共有メモリのリング、LAN メディア伝送（ネットワーク模擬と UDP ループバック）を含む |
+| Smoke | 別プロセス同士の確認：3 プロセスの起動、モックサーバー ⇔ dc-cli、dc-shm-tone の書き手 ⇔ 読み手、dc-lan-tone の送信 ⇔ 受信（UDP） |
 
 ## 3. 手で動かす場合
 
@@ -59,11 +59,13 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | 実行ファイル | 内容 |
 |---|---|
 | `apps\mixd\Debug\mixd.exe` | 音声エンジン（P0 では起動して待つだけ） |
-| `apps\capd\Debug\capd.exe` | キャプチャー（P0 では起動して待つだけ） |
-| `apps\ui\Debug\dc-ui.exe` | UI（P0 では Qt なしの仮の実行ファイル） |
+| `apps\capd\Debug\capd.exe` | キャプチャー（P2 骨格：`capd list`、`capd record`。[capd.md](capd.md)） |
+| `apps\ui\Debug\dc-ui.exe` | UI（Qt 6 Quick。Qt が見つからないときは仮の実行ファイル） |
 | `tools\mock_server\Debug\dc-mock-server.exe` | モックサーバー（偽エンジン） |
 | `tools\dc_cli\Debug\dc-cli.exe` | テスト用クライアント |
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
+| `tools\lan_sim\Debug\dc-lan-sim.exe` | LAN 音声伝送のネットワーク模擬シミュレーター |
+| `tools\lan_tone\Debug\dc-lan-tone.exe` | LAN 音声伝送の送受信テスト（実 UDP、PC 間でも使える） |
 | `tests\Debug\dc_tests.exe` | テスト本体 |
 
 ### モックサーバーで遊ぶ
@@ -86,6 +88,30 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 ```
 
 `watch` を開いたまま別のターミナルから `set` すると、差分がすぐ届くのを確認できます。
+
+### UI をモックサーバーで動かす
+
+`dc-ui` は Qt の DLL を `DC_QT_DIR\bin` から読みます（`scripts\test.ps1` は自動で PATH に足します）。
+
+```powershell
+$env:PATH = "$env:DC_QT_DIR\bin;$env:PATH"
+.\build\windows\tools\mock_server\Debug\dc-mock-server.exe          # 1つ目
+.\build\windows\apps\ui\Debug\dc-ui.exe                             # 2つ目（既定は 127.0.0.1:47800）
+.\build\windows\apps\ui\Debug\dc-ui.exe --connect 192.168.1.10 --remote --fullscreen   # リモコンとして
+```
+
+| 操作 | 方法 |
+|---|---|
+| フェーダー | 縦にドラッグ（指を置いた位置から相対）。ダブルタップで 0 dB |
+| パン | 横にドラッグ。ダブルタップで中央 |
+| LC / HC（ローカット・ハイカット） | タップで入切、縦ドラッグで周波数 |
+| M / S | ミュート / ソロ |
+| トラックの追加 | 一番右の「+ ステレオ」「+ モノ」（最大 64） |
+| 移動・削除 | トラック名をタップしてメニュー（削除は 2 回押し） |
+| 録画 | 右上の「録画」ボタン。録画中は経過時間を表示し、もう一度押すと停止 |
+| クリップ表示 | メーター上の赤い印をタップで消す |
+
+`dc-ui --selftest --connect 127.0.0.1:<port>` は、つないだ先でトラックの追加・編集・削除、録画の開始・停止、メーター受信、画面の描画を自動で確かめて終了します（つないだ先の状態を変えるので、モックサーバー相手に使います）。
 
 ### 共有メモリ音声を試す
 
@@ -110,7 +136,7 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 プロトコル・モックサーバー・共有メモリのライブラリは Windows API に依存しないので、Linux でもビルドとテストができます（Claude のクラウド環境での確認用）。Windows 専用の機能（WASAPI、WGC など）が入るフェーズ 2 以降は Windows が正です。
 
 ```bash
-sudo apt install cmake ninja-build g++ libasio-dev libmsgpack-cxx-dev catch2
+sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev
 cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 ```
 

@@ -121,6 +121,7 @@
 | `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
+| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
 | `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
