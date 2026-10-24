@@ -50,6 +50,14 @@ JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台�
 - shared：48kHz float で開き、Windows がデバイスのミックス形式に変換する（44.1kHz のデバイスもそのまま使える）。周期はデバイスの既定（通常 10ms）で、`/system/block_size` はエンジン内部の処理単位になる。
 - exclusive：48kHz で開ける PCM 形式（float32 / int32 / int24 / int16）を探し、周期を `/system/block_size` に合わせる（デバイスの最小周期が下限）。ドライバーが別のレート（44.1kHz など）に固定していて排他の 48kHz 形式がないデバイスは、そのデバイスだけ共有モードで開き（Windows がレート変換する）、ログに `device note` を出す。他のアプリが排他で使っているデバイスは開けず、`device.error` イベントで理由を知らせる。
 
+排他モードで頼んだ周期どおりに動かないデバイスもある（Steinberg UR22 のドライバーは 128/256 を受け付けるが 10ms ごとにしか起こさない）。各ストリームは最初の 1 秒で起こされる間隔と入力のデータ欠落を測り、合わなければ実際の周期（デバイスの既定周期に近ければその値）で開き直す。それでも駄目なら共有で開く。どちらもログに `device note` を出す。
+
+機器の注意（G2 で分かったこと）：
+
+- 44.1kHz で動いているデバイスを共有モードで使うと、Windows の変換で数分に 1 回データ欠落（DATA_DISCONTINUITY）が出ることがある（UR22 で確認）。デバイスを 48kHz にすると消える。ドライバー側（UR22 は Yamaha Steinberg USB Driver）と Windows のサウンド設定の「既定の形式」の両方を 48kHz にする。レートを変えると Windows はデバイスを別 ID で登録し直す。
+- 共有モードの入力は 100ms のバッファで開く（遅延は増えない）。10ms では読み遅れでなくても欠落が出た。
+- デバイスの位置（GetBuffer の devicePosition）は、共有モードで変換されるデバイスではデバイス側のレートで数える。
+
 ## 録画の開始・停止
 
 docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/state` など）を持ち、実際の録画は capd（role = サービス、名前 `capd`）が行う。`/capture/record/start` で `starting`、capd の `/capture/report state=recording` で `recording`（`elapsed_ms` はエンジンが 250ms ごとに更新）、`stop` で `stopping`、`report idle` で `idle`。録画中に capd が切断すると `error`。
@@ -58,4 +66,4 @@ docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/sta
 
 - `ctest`：`[mixd]` のテストがフィルター、パン、ミキサー（ルーティング、センド、キュー、ミュート）、共有メモリ、計画（ソロ、入力状態、デバイス要求）、仮想デバイスでのクロック切り替え、制御サーバー越しの結合を確かめる。
 - `mixd --fake-devices`：音声ハードウェアなしで UI などから接続できる。
-- G2「バッファ128〜256で音切れなし」：`scripts\g2-engine.ps1`。1kHz のテストトーンをマスターに流し、共有モードはループバックの正弦波フィットで音切れを数え、両モードで `/system/xruns`（デバイスの欠落、周期の取りこぼし、ブリッジのアンダーラン）と `/system/cpu_load` を記録する。
+- G2「バッファ128〜256で音切れなし」：`scripts\g2-engine.ps1`（`-Device` で出力、`-WithInput -InputDevice` で入力を選ぶ）。xrun のログ行には時刻、ストリームごとの実測レート、ブリッジの比率、入力欠落の様子が出る。1kHz のテストトーンをマスターに流し、共有モードはループバックの正弦波フィットで音切れを数え、両モードで `/system/xruns`（デバイスの欠落、周期の取りこぼし、ブリッジのアンダーラン）と `/system/cpu_load` を記録する。
