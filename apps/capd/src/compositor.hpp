@@ -1,50 +1,61 @@
-// GPU compositor: draws the layers of one scene into the mix's BGRA canvas with a small D3D11 shader. Nothing
-// is copied to the CPU. P2 has one scene with one layer (a monitor fitted into the canvas); scenes, transitions
-// and the layer editing of the design doc are added in P3 (lane B1) on top of this.
+// GPU compositor of one video mix: draws the layers of a scene into the mix's canvas with a small D3D11 shader
+// (crop through texture coordinates, opacity, chroma key, single colours), and the fade between two scenes.
+// Nothing is copied to the CPU. The canvas holds premultiplied BGRA.
 #pragma once
 
 #include "d3d.hpp"
+#include "video_config.hpp"
 
-#include <map>
 #include <vector>
 
 namespace dc::capd {
 
 struct LayerDraw {
-    ID3D11Texture2D* texture = nullptr;  // BGRA source image; null = layer is transparent (source lost)
-    // Destination rectangle in canvas pixels.
+    ID3D11ShaderResourceView* view = nullptr;  // null and !solid = nothing to draw
+    bool solid = false;                        // fill with `color` instead of a texture
+    Rgba color;                                // solid colour (straight alpha)
+    int alpha = 0;                             // 0 = opaque source, 1 = straight alpha, 2 = premultiplied
+    // Destination rectangle in canvas pixels and the shown part of the texture.
     float x = 0, y = 0, width = 0, height = 0;
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
     float opacity = 1.0f;
+    bool chroma = false;
+    std::uint32_t chromaColor = 0x00FF00;
+    float similarity = 0.4f, smoothness = 0.08f, spill = 0.1f;
 };
 
 class Compositor {
 public:
     Compositor(const Device& dev, UINT width, UINT height);
 
-    // Clears the canvas to black and draws the layers in order (back to front).
-    void render(const std::vector<LayerDraw>& layers);
+    enum class Target { Canvas, Scratch };
+
+    // Clears the target to the background colour and draws the layers in order (back to front).
+    void render(Target target, Rgba background, const std::vector<LayerDraw>& layers);
+    // Draws the scratch picture over the canvas with the given opacity (the fade).
+    void blendScratchOverCanvas(float opacity);
+    // Keeps a copy of the canvas / puts the copy back (a transition interrupted by another one).
+    void freeze();
+    void restoreFrozen();
 
     ID3D11Texture2D* canvas() const { return canvas_.Get(); }
     UINT width() const { return width_; }
     UINT height() const { return height_; }
 
-    // Destination rectangle that fits a source of srcW x srcH into the canvas, keeping the aspect ratio.
-    LayerDraw fit(ID3D11Texture2D* texture, UINT srcW, UINT srcH) const;
-
 private:
-    ID3D11ShaderResourceView* viewFor(ID3D11Texture2D* texture);
+    void draw(const LayerDraw& l);
 
     Device dev_;
     UINT width_, height_;
-    ComPtr<ID3D11Texture2D> canvas_;
-    ComPtr<ID3D11RenderTargetView> rtv_;
+    ComPtr<ID3D11Texture2D> canvas_, scratch_, frozen_;
+    ComPtr<ID3D11RenderTargetView> canvasRtv_, scratchRtv_;
+    ComPtr<ID3D11ShaderResourceView> scratchSrv_;
     ComPtr<ID3D11VertexShader> vs_;
     ComPtr<ID3D11PixelShader> ps_;
     ComPtr<ID3D11Buffer> constants_;
     ComPtr<ID3D11SamplerState> sampler_;
     ComPtr<ID3D11BlendState> blend_;
     ComPtr<ID3D11RasterizerState> raster_;
-    std::map<ID3D11Texture2D*, ComPtr<ID3D11ShaderResourceView>> views_;
 };
 
 }  // namespace dc::capd
