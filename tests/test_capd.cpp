@@ -3,6 +3,7 @@
 #include "audio_capture.hpp"
 #include "engine_follower.hpp"
 #include "mock_engine.hpp"
+#include "recorder.hpp"
 #include "settings.hpp"
 
 #include "dc/control/client.hpp"
@@ -13,6 +14,11 @@
 #include "dc/shmaudio/shared_memory.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+extern "C" {
+#include <libavformat/avformat.h>
+}
 
 #include <algorithm>
 #include <atomic>
@@ -378,5 +384,60 @@ TEST_CASE("capd records when the engine says so and reports back", "[capd]") {
     work.reset();
     asio::post(io, [&] { io.stop(); });
     ioThread.join();
+    std::filesystem::remove_all(dir);
+}
+
+// --- disk space (design doc "保存先のディスク": stop safely while the file can still be finalized) ---
+
+TEST_CASE("the disk reserve covers 30 seconds of the recording, at least 256 MB", "[capd]") {
+    RecordSettings s;
+    s.audio.push_back({0, "master", "aac", 192});
+    s.video.bitrateKbps = 100000;  // VBR peaks at 150 Mbit/s: 30 s = 563 MB plus the audio
+    CHECK(diskReserveBytes(s) == (150000ull + 192) * 1000 / 8 * 30);
+    s.video.bitrateKbps = 8000;
+    CHECK(diskReserveBytes(s) == 256ull << 20);
+    s.withVideo = false;
+    CHECK(diskReserveBytes(s) == 256ull << 20);
+}
+
+TEST_CASE("a recording refuses to start on a nearly full disk and stops before it fills up", "[capd]") {
+    const auto dir = std::filesystem::temp_directory_path() / ("capd-disk-" + std::to_string(testPid()));
+    std::filesystem::create_directories(dir);
+    RecordSettings s;
+    s.withVideo = false;
+    s.audio.push_back({0, "master", "aac", 192});
+    const std::string path = (dir / "rec.mp4").string();
+    s.container = "mp4";
+    const std::uint64_t reserve = diskReserveBytes(s);
+
+    {
+        Recorder rec(s, path, ".capd-disk-none");
+        rec.setFreeSpaceProbe([&](const std::string&) { return std::optional<std::uint64_t>(reserve); });
+        CHECK_THROWS_WITH(rec.start(), Catch::Matchers::ContainsSubstring("not enough free disk space"));
+    }
+
+    std::atomic<std::uint64_t> free{reserve * 4};
+    Recorder rec(s, path, ".capd-disk-none");
+    rec.setFreeSpaceProbe([&](const std::string&) { return std::optional<std::uint64_t>(free.load()); });
+    rec.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rec.status().error.empty());
+    CHECK(rec.status().diskFreeBytes == reserve * 4);
+    free = reserve - 1;
+    std::string error;
+    for (int i = 0; i < 40 && error.empty(); ++i) {  // checked once a second
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        error = rec.status().error;
+    }
+    CHECK_THAT(error, Catch::Matchers::ContainsSubstring("disk almost full"));
+    const auto fin = rec.stop();
+    CHECK_THAT(fin.error, Catch::Matchers::ContainsSubstring("disk almost full"));
+
+    // The MP4 was finalized (its index is at the end): it opens and has the audio stream.
+    AVFormatContext* fmt = nullptr;
+    REQUIRE(avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) == 0);
+    CHECK(avformat_find_stream_info(fmt, nullptr) >= 0);
+    CHECK(fmt->nb_streams == 1);
+    avformat_close_input(&fmt);
     std::filesystem::remove_all(dir);
 }

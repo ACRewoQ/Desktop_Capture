@@ -22,6 +22,21 @@ extern "C" {
 
 namespace dc::capd {
 
+namespace {
+
+std::optional<std::uint64_t> filesystemFreeSpace(const std::string& path) {
+    std::error_code ec;
+    auto p = std::filesystem::path(std::u8string(path.begin(), path.end())).parent_path();
+    if (p.empty()) p = ".";
+    const auto info = std::filesystem::space(p, ec);
+    if (ec) return std::nullopt;
+    return static_cast<std::uint64_t>(info.available);
+}
+
+std::string megabytes(std::uint64_t bytes) { return std::to_string(bytes >> 20) + " MB"; }
+
+}  // namespace
+
 #ifdef _WIN32
 Recorder::Recorder(const RecordSettings& s, VideoMix* mix, std::string path, std::string shmSuffix)
     : settings_(s), path_(std::move(path)), shmSuffix_(std::move(shmSuffix)), mix_(mix) {}
@@ -53,6 +68,13 @@ void Recorder::start() {
     if (ec) {
         const auto u8 = dir.u8string();
         throw std::runtime_error("cannot create folder " + std::string(u8.begin(), u8.end()) + ": " + ec.message());
+    }
+
+    if (!freeSpace_) freeSpace_ = filesystemFreeSpace;
+    reserveBytes_ = diskReserveBytes(settings_);
+    if (const auto free = freeSpace_(path_); free && *free < 2 * reserveBytes_) {
+        throw std::runtime_error("not enough free disk space for recording (" + megabytes(*free) + " free, " +
+                                 megabytes(2 * reserveBytes_) + " needed)");
     }
 
     muxer_ = std::make_unique<Muxer>(path_, settings_.container);
@@ -187,6 +209,20 @@ Recorder::Status Recorder::status() const {
     if (s.error.empty()) {
         std::lock_guard lock(audioErrorMutex_);
         s.error = audioError_;
+    }
+    {
+        std::lock_guard lock(diskMutex_);
+        const std::int64_t now = shm::nowQpc();
+        if (running_ && freeSpace_ && now >= nextDiskCheckQpc_) {
+            nextDiskCheckQpc_ = now + shm::qpcFrequency();
+            if (const auto free = freeSpace_(path_)) {
+                diskFree_ = *free;
+                if (*free < reserveBytes_ && diskError_.empty())
+                    diskError_ = "disk almost full (" + megabytes(*free) + " free): recording stopped";
+            }
+        }
+        s.diskFreeBytes = diskFree_;
+        if (s.error.empty()) s.error = diskError_;
     }
     return s;
 }

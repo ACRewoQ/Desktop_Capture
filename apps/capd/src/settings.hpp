@@ -65,6 +65,11 @@ std::string defaultVideoDirectory();
 // directory + strftime(pattern, time) + "." + container. Characters Windows forbids in file names are replaced.
 std::string recordingPath(const RecordSettings& s, std::time_t when);
 
+// Free space a recording keeps in reserve on its drive: 30 seconds at the recording's total bitrate, at least
+// 256 MB. Below it the recording stops on its own and finalizes the file (an MP4 is only playable once its
+// index is written at the end, so it must not run into a full disk). Starting needs twice the reserve.
+std::uint64_t diskReserveBytes(const RecordSettings& s);
+
 // The H.264 encoder on Reo's RTX 5090 uses 57% of NVENC at 4K60 (V3). Above 2560x1440, H.264 is switched to HEVC.
 // Returns the codec to use and sets *changed when it differs from the request.
 std::string effectiveCodec(const VideoSettings& v, bool* changed = nullptr);

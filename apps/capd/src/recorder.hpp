@@ -7,8 +7,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -36,8 +38,13 @@ public:
         std::uint64_t audioSilenceFrames = 0;
         bool engineConnected = false;
         double audioDriftMs = 0;
+        std::uint64_t diskFreeBytes = 0;  // on the recording's drive, checked once a second (0 = unknown)
         std::string error;  // non-empty: the recording failed and must be stopped
     };
+
+    // Free bytes on the drive holding a path; nullopt when it cannot be read. Replaceable for tests.
+    using FreeSpaceProbe = std::function<std::optional<std::uint64_t>(const std::string& path)>;
+    void setFreeSpaceProbe(FreeSpaceProbe probe) { freeSpace_ = std::move(probe); }
 
 #ifdef _WIN32
     // mix may be null for an audio-only recording.
@@ -49,11 +56,14 @@ public:
     Recorder(const Recorder&) = delete;
     Recorder& operator=(const Recorder&) = delete;
 
-    // Opens encoders and the file and starts capturing. Throws with a readable message on failure.
+    // Opens encoders and the file and starts capturing. Throws with a readable message on failure (also when the
+    // drive has less than twice diskReserveBytes() free).
     void start();
     // Stops and finalizes the file. Returns the final status (error set if finalizing failed).
     Status stop();
 
+    // Also checks the free disk space (once a second): below diskReserveBytes() it sets error, so the caller stops
+    // the recording while the file can still be finalized.
     Status status() const;
     // Lines describing the chosen encoders etc. (for the log).
     const std::vector<std::string>& log() const { return log_; }
@@ -82,6 +92,13 @@ private:
     std::int64_t lastPts_ = -1;
     std::atomic<std::uint64_t> videoFrames_{0};
 #endif
+
+    FreeSpaceProbe freeSpace_;
+    std::uint64_t reserveBytes_ = 0;
+    mutable std::mutex diskMutex_;
+    mutable std::int64_t nextDiskCheckQpc_ = 0;
+    mutable std::uint64_t diskFree_ = 0;
+    mutable std::string diskError_;
 
     std::int64_t startQpc_ = 0;
     std::int64_t stopQpc_ = 0;
