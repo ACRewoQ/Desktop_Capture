@@ -171,7 +171,7 @@ RematchResult rematchDevices(const ParamTree& tree, const std::vector<DeviceInfo
         if (count != 1 || used.count({candidate->id, r.input})) continue;
         moved[key] = candidate->id;
         used.insert({candidate->id, r.input});
-        out.moved.push_back({r.id, candidate->id, k->second.name});
+        out.moved.push_back({r.id, candidate->id, candidate->name});
     }
     for (const auto& r : refs)
         if (auto m = moved.find({r.id, r.input}); m != moved.end()) out.changes.push_back({r.path, r.prefix + m->second});
