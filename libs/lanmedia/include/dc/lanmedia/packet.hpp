@@ -17,11 +17,14 @@ inline constexpr std::uint8_t kMagic[4] = {'D', 'C', 'N', '1'};
 inline constexpr std::size_t kCommonHeaderBytes = 12;
 inline constexpr std::size_t kMediaHeaderBytes = 36;
 inline constexpr std::size_t kAudioHeaderBytes = 4;
+inline constexpr std::size_t kVideoHeaderBytes = 12;
 // Largest datagram we send. Stays below a 1500 byte Ethernet MTU with IPv4/IPv6 + UDP headers and
 // leaves room for a VPN or PPPoE encapsulation, so nothing is fragmented by IP.
 inline constexpr std::size_t kMaxDatagramBytes = 1400;
 inline constexpr std::size_t kMaxMediaPayloadBytes = kMaxDatagramBytes - kMediaHeaderBytes;
-inline constexpr std::uint16_t kDefaultMediaPort = 47810;
+inline constexpr std::size_t kMaxVideoFragmentBytes = kMaxMediaPayloadBytes - kVideoHeaderBytes;
+inline constexpr std::uint16_t kDefaultMediaPort = 47810; // mixd (audio streams)
+inline constexpr std::uint16_t kDefaultVideoPort = 47811; // capd (video streams)
 
 enum class PacketType : std::uint8_t { Media = 1, Report = 2 };
 enum class MediaKind : std::uint8_t { Audio = 1, Video = 2 };
@@ -57,6 +60,16 @@ struct AudioHeader {
     bool operator==(const AudioHeader&) const = default;
 };
 
+enum class VideoCodec : std::uint8_t { H264 = 1 };
+
+// In every fragment of a video frame (access unit), after the media header.
+struct VideoHeader {
+    VideoCodec codec = VideoCodec::H264;
+    std::uint32_t frameBytes = 0; // size of the whole access unit
+    std::uint32_t offset = 0;     // where this fragment's bytes go in the access unit
+    bool operator==(const VideoHeader&) const = default;
+};
+
 // Receiver -> sender, about once per second per stream. Cumulative counters since the stream started.
 struct Report {
     std::uint8_t flags = 0;
@@ -78,6 +91,7 @@ inline constexpr std::size_t kReportBytes = kCommonHeaderBytes + 40;
 // Writes common + media header into out[0..kMediaHeaderBytes).
 void writeMediaHeader(std::uint8_t* out, const MediaHeader& h);
 void writeAudioHeader(std::uint8_t* out, const AudioHeader& h);
+void writeVideoHeader(std::uint8_t* out, const VideoHeader& h);
 std::vector<std::uint8_t> encodeReport(const Report& r);
 
 // --- decoding -------------------------------------------------------------------------------------
@@ -95,6 +109,13 @@ struct AudioView {
     std::span<const std::uint8_t> data; // codec payload
 };
 std::optional<AudioView> parseAudio(std::span<const std::uint8_t> mediaPayload);
+
+struct VideoView {
+    VideoHeader header;
+    std::span<const std::uint8_t> data; // this fragment's bytes
+};
+// Checks that the fragment lies inside the frame.
+std::optional<VideoView> parseVideo(std::span<const std::uint8_t> mediaPayload);
 
 std::optional<Report> parseReport(std::span<const std::uint8_t> data);
 

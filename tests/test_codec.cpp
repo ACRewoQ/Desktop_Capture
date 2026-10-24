@@ -19,7 +19,8 @@ Message roundTrip(const Message& m) {
 
 TEST_CASE("every message type survives an encode/decode round trip", "[codec]") {
     const std::vector<Message> messages = {
-        Hello{1, "ui", ClientRole::Remote, 47801, "123456", "tok"},
+        Hello{1, "ui", ClientRole::Remote, 47801, "123456", "tok", "remote-7f3a"},
+        Hello{1, "mixd", ClientRole::Peer, 0, "", "tok2", "a1b2c3d4e5f60718"},
         Welcome{1, "mixd", "server-1", 0xFFFFFFFFFFull, "tok"},
         Snapshot{42, {{"/a", true}, {"/b", std::int64_t{-5}}, {"/c", 1.5}, {"/d", std::string("x")}, {"/e", {}}}},
         Delta{43, 7, "ui", {{"/track/1/volume_db", -6.0}}, {"/track/3"}},

@@ -37,9 +37,11 @@
 | `/track/#/position` | int | ro | 1 〜 64 | `1` | 画面上の並び順（1 始まり、連番） |
 | `/track/#/channels` | int | rw | 1 / 2 | `2` | 1 = モノ、2 = ステレオ |
 | `/track/#/input/kind` | string | rw | none / device / process / lan / sampler | `"none"` | 入力の種類 |
-| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN ストリーム ID。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
+| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN は <相手の id>/<n>。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
 | `/track/#/input/channel` | int | rw | 1 〜 64 | `1` | デバイスの何チャンネル目から使うか |
 | `/track/#/input/state` | string | ro | none / ok / disconnected | `"none"` | 入力の接続状態 |
+| `/track/#/input/lan_buffer_ms` | float | rw | 0 〜 200 | `0` | LAN 入力の受信バッファ目標 ms（0 = 自動） |
+| `/track/#/input/lan_delay_ms` | float | ro | 0 〜 1000 | `0` | LAN 入力の今の受信バッファ量 ms |
 | `/track/#/name` | string | rw |  | `""` | 表示名 |
 | `/track/#/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
 | `/track/#/pan` | float | rw | -1 〜 1 | `0` | パン（-1 = 左、0 = 中央、1 = 右）。ステレオはバランス |
@@ -53,8 +55,8 @@
 | `/track/#/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
 | `/track/#/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
 | `/track/#/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
-| `/track/#/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / master / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
-| `/track/#/send/#/target` | string | rw |  | `""` | センド先 1〜8。"" / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
+| `/track/#/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / master / track/<n> / device/<id> / vmic/<id> / lan/<n> |
+| `/track/#/send/#/target` | string | rw |  | `""` | センド先 1〜8。"" / track/<n> / device/<id> / vmic/<id> / lan/<n> |
 | `/track/#/send/#/level_db` | float | rw | -144 〜 12 | `0` | センド量 dB |
 | `/track/#/send/#/pre_fader` | bool | rw |  | `false` | フェーダー前から送る |
 | `/track/#/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
@@ -77,7 +79,7 @@
 | `/master/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
 | `/master/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
 | `/master/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
-| `/master/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / device/<id> / vmic/<id> / lan/<stream> |
+| `/master/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / device/<id> / vmic/<id> / lan/<n> |
 | `/master/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
 | `/master/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
 | `/master/fx/#/bypass` | bool | rw |  | `false` | バイパス |
@@ -135,11 +137,39 @@
 | `/video/vcam/resolution` | string | rw | 1080p / 720p | `"1080p"` | 仮想カメラの解像度 |
 | `/video/monitor/mix` | int | rw | 0 〜 4 | `0` | 全画面表示に出す映像ミックス（0 = なし） |
 | `/video/monitor/display` | string | rw |  | `""` | 全画面表示先のモニター ID |
+| `/video/vcam/state` | string | ro | off / waiting / active / unavailable | `"off"` | 仮想カメラの状態（waiting = カメラを開いたアプリがない、unavailable = 未登録など） |
+| `/video/vcam/detail` | string | ro |  | `""` | 仮想カメラの状態の説明（unavailable の理由など） |
+| `/video/monitor/state` | string | ro | off / active / no_display / error | `"off"` | 全画面表示の状態（no_display = モニターが見つからない。つながれば自動で戻る） |
+| `/video/monitor/detail` | string | ro |  | `""` | 全画面表示の状態の説明（error の内容など） |
 | `/video/preview/mix` | int | rw | 0 〜 4 | `1` | リモコンのプレビューに出す映像ミックス |
 | `/video/preview/width` | int | rw | 160 〜 1920 | `960` | プレビュー解像度（幅） |
 | `/video/preview/height` | int | rw | 90 〜 1080 | `540` | プレビュー解像度（高さ） |
 | `/video/preview/fps` | int | rw | 5 〜 60 | `30` | プレビューのフレームレート |
 | `/video/preview/bitrate_kbps` | int | rw | 500 〜 8000 | `3000` | プレビューのビットレート kbps |
+| `/video/lan/mix` | int | rw | 0 〜 4 | `0` | LAN 送信（映像）に出す映像ミックス（0 = なし） |
+| `/video/lan/width` | int | rw | 160 〜 3840 | `1920` | LAN 送信の解像度（幅） |
+| `/video/lan/height` | int | rw | 90 〜 2160 | `1080` | LAN 送信の解像度（高さ） |
+| `/video/lan/fps` | int | rw | 5 〜 60 | `30` | LAN 送信のフレームレート |
+| `/video/lan/bitrate_kbps` | int | rw | 500 〜 50000 | `8000` | LAN 送信のビットレート kbps |
+| `/lan/name` | string | rw |  | `""` | LAN で名乗る名前（"" = コンピューター名） |
+| `/lan/id` | string | ro |  | `""` | この PC のエンジンの id（Welcome.server_id と同じ。インストールごとに固定） |
+| `/lan/stream/#/name` | string | rw |  | `""` | LAN 送信ストリーム 1〜8 の表示名（"" = LAN <n>）。出力先 lan/<n> で使う |
+| `/lan/stream/#/codec` | string | rw | pcm16 / pcm24 / opus | `"pcm24"` | コーデック（pcm = 無圧縮・低遅延、opus = 無線向け） |
+| `/lan/stream/#/opus_frames` | int | rw | 120 / 240 / 480 / 960 | `480` | Opus のパケット長（フレーム数、480 = 10 ms） |
+| `/lan/stream/#/bitrate_kbps` | int | rw | 32 〜 512 | `128` | Opus のビットレート kbps |
+| `/lan/stream/#/stream_id` | int | ro | 0 〜 4.29497e+09 | `0` | 今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない） |
+| `/lan/stream/#/subscribers` | int | ro | 0 〜 32 | `0` | 受信している相手の数 |
+| `/lan/stream/#/active` | bool | ro |  | `false` | 何かが出力していて、受信者がいて送信中 |
+| `/lan/sub/#/stream` | string | ro |  | `""` | 購読しているストリーム（audio/<n> / video/preview / video/lan） |
+| `/lan/sub/#/address` | string | ro |  | `""` | 送り先の UDP アドレス（ip:port） |
+| `/lan/sub/#/client` | string | ro |  | `""` | 購読した接続の名前 |
+| `/lan/peers/#/id` | string | ro |  | `""` | LAN 内の別の PC のエンジンの id |
+| `/lan/peers/#/name` | string | ro |  | `""` | その PC の名前 |
+| `/lan/peers/#/address` | string | ro |  | `""` | 制御の接続先（ip:port） |
+| `/lan/peers/#/state` | string | ro | offline / unpaired / connecting / connected / refused | `"offline"` | 相手の状態（refused = ペアリングが取り消された） |
+| `/lan/peers/#/manual` | bool | ro |  | `false` | 手動で追加した相手（mDNS で見つからない場合） |
+| `/lan/peers/#/stream/#/name` | string | ro |  | `""` | 相手の LAN 送信ストリームの表示名（接続中だけ） |
+| `/lan/peers/#/stream/#/active` | bool | ro |  | `false` | 相手のストリームに何かが出力している |
 | `/plugins/extra_dirs` | string | rw |  | `""` | 標準以外の VST3 フォルダー（; 区切り） |
 | `/plugins/scan/state` | string | ro | idle / scanning | `"idle"` | プラグインのスキャン状態 |
 | `/plugins/scan/progress` | float | ro | 0 〜 1 | `0` | スキャンの進み具合 |
@@ -154,6 +184,10 @@
 | `/plugins/#/path` | string | ro |  | `""` | プラグインのファイル |
 | `/remote/clients` | int | ro | 0 〜 4 | `0` | 接続中のリモコン数 |
 | `/remote/pairing/active` | bool | ro |  | `false` | ペアリング受付中 |
+| `/remote/paired/#/id` | string | ro |  | `""` | ペアリング済みの相手の id（Hello.client_id） |
+| `/remote/paired/#/name` | string | ro |  | `""` | ペアリング済みの相手の名前 |
+| `/remote/paired/#/role` | string | ro | remote / peer | `"remote"` | 相手の種類（リモコン / 別の PC のエンジン） |
+| `/remote/paired/#/online` | bool | ro |  | `false` | 今つながっている |
 
 | メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |
 |---|---|---|---|---|
@@ -163,7 +197,7 @@
 | `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
-| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
+| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int?, reason:string? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ。reason は録画中のファイル切り替え） |
 | `/recorder/start` | なし | string（テイクのフォルダー） | P3 | トラック別録音を開始。録音対象がなければ conflict |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音を停止 |
 | `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
@@ -179,8 +213,15 @@
 | `/master/fx/#/params` | offset:int?, count:int?, keys:string? | string（JSON 配列） | P3 | パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる |
 | `/plugins/scan` | rescan:bool? | nil | P3 | VST3 プラグインを探す（rescan = 前回の結果を使わずに全部） |
 | `/devices/refresh` | なし | nil | P2 | デバイス・プロセス一覧の更新 |
-| `/remote/pairing/start` | なし | string（6桁コード） | P4 | ペアリング受付開始 |
-| `/remote/pairing/stop` | なし | nil | P4 | ペアリング受付終了 |
+| `/video/output/report` | output:string, state:string, detail:string? | nil | P3 | capd が出力（vcam / monitor）の状態をエンジンに知らせる（role = サービスの接続だけ） |
+| `/remote/pairing/start` | なし | string（6桁コード） | P3 | ペアリング受付開始（2 分、1 台つながるまで） |
+| `/remote/pairing/stop` | なし | nil | P3 | ペアリング受付終了 |
+| `/remote/unpair` | id:string | nil | P3 | ペアリングを取り消す（つながっていれば切断） |
+| `/lan/subscribe` | stream:string, port:int | int（購読番号） | P3 | ストリームを受け取る。送り先は接続元の IP の port。接続が切れると自動で解除 |
+| `/lan/unsubscribe` | id:int | nil | P3 | 購読をやめる |
+| `/lan/peers/pair` | id:string, code:string | nil | P3 | 相手の PC に表示された 6 桁コードでペアリングする |
+| `/lan/peers/forget` | id:string | nil | P3 | 相手のペアリング情報を消す（手動で追加した相手は一覧からも消す） |
+| `/lan/peers/add` | address:string | nil | P3 | 相手を IP アドレス（ip または ip:port）で手動追加 |
 
 ## エフェクトのパラメーター（内蔵）
 

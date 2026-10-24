@@ -8,7 +8,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
+
+namespace dc::lan {
+class AudioReceiver;
+class AudioSender;
+} // namespace dc::lan
 
 namespace dc::mixd {
 
@@ -21,6 +27,9 @@ struct InputPort {
     const int channels; // interleaved channels of the bridge (the device's channel count)
     clocksync::ClockBridge bridge;
     std::atomic<bool> streaming{false}; // a device stream is currently pushing into the bridge
+    // LAN input (key "lan:<peer>/<n>"): the engine pulls this receiver instead of the bridge. streaming
+    // then means "the stream is playing".
+    std::shared_ptr<lan::AudioReceiver> lan;
 };
 
 // Audio the engine sends to an output device. The device that clocks the engine is written directly
@@ -31,6 +40,8 @@ struct OutputPort {
     const std::string id;
     clocksync::ClockBridge bridge;      // stereo, engine -> device
     std::atomic<bool> streaming{false}; // a device stream pulls from the bridge (not the clock device)
+    // LAN send stream (key "lan:<n>"): the engine pushes the bus into this sender instead of the bridge.
+    std::shared_ptr<lan::AudioSender> lan;
 };
 
 } // namespace dc::mixd

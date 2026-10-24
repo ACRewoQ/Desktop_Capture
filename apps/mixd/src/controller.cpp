@@ -1,4 +1,5 @@
 #include "controller.hpp"
+#include "lan_service.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/protocol/defaults.hpp"
@@ -137,6 +138,7 @@ void Controller::registerMethods() {
 }
 
 void Controller::onDelta(const Delta& delta) {
+    if (options_.lan) options_.lan->onDelta(delta); // first, so new LAN ports are there for the plan
     fx_.onDelta(delta);
     // values the engine itself reports (load, counters, device lists, derived states) do not change
     // the mix; everything else might. Effect slots reach the mix through FxManager.
@@ -145,10 +147,13 @@ void Controller::onDelta(const Delta& delta) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
-                                                "/capture/error"};
+                                                "/capture/error", "/lan/", "/remote/"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
-        return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
+        auto endsWith = [&](std::string_view tail) {
+            return path.size() > tail.size() && path.compare(path.size() - tail.size(), tail.size(), tail) == 0;
+        };
+        return endsWith("/input/state") || endsWith("/input/lan_delay_ms");
     };
     bool relevant = !delta.removed.empty() && std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) {
                         return !FxManager::handlesPath(r) && !reportOnly(r + "/");
@@ -170,7 +175,9 @@ void Controller::scheduleRebuild() {
 void Controller::rebuild() {
     const auto& tree = server_.store().tree();
     devices_.setDemand(deviceDemand(tree));
-    auto result = buildPlan(tree, ports_, ++generation_, options_.build, &fx_.rack());
+    PortTable ports = ports_;
+    if (options_.lan) options_.lan->addPorts(ports);
+    auto result = buildPlan(tree, ports, ++generation_, options_.build, &fx_.rack());
     engine_.setPlan(std::move(result.plan));
     engine_.collectRetired();
 
@@ -273,6 +280,7 @@ void Controller::scheduleStats() {
     statsTimer_.async_wait([this](asio::error_code ec) {
         if (ec || stopped_) return;
         engine_.collectRetired();
+        if (options_.lan) options_.lan->tick();
         const auto glitches = devices_.glitches();
         server_.publishNow({{"/system/cpu_load", std::round(engine_.cpuLoad() * 100.0) / 100.0},
                             {"/system/xruns", static_cast<std::int64_t>(glitches)}});
@@ -298,6 +306,7 @@ std::optional<std::string> strArg(const Args& args, const char* key) {
 } // namespace
 
 void Controller::onClient(const control::ClientInfo& client, bool connected) {
+    if (options_.lan) options_.lan->onClient(client, connected);
     if (!isCapd(client)) return;
     captureClients_ += connected ? 1 : -1;
     if (connected || captureClients_ > 0) return;

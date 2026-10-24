@@ -21,6 +21,8 @@
 
 namespace dc::mixd {
 
+class LanService;
+
 class Controller {
 public:
     struct Options {
@@ -29,6 +31,7 @@ public:
         std::chrono::milliseconds statsInterval{500};
         bool verbose = true;
         PluginHost* plugins = nullptr; // VST3 host, null when the build has none
+        LanService* lan = nullptr; // LAN streams, inputs and pairing (optional)
     };
 
     Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
@@ -44,6 +47,8 @@ public:
     void onDeviceState(const DeviceManager::State& state);
     // ControlServer::Options::onClient (network thread): follows the capture process (capd).
     void onClient(const control::ClientInfo& client, bool connected);
+    // The LAN service added or removed ports (network thread).
+    void portsChanged() { scheduleRebuild(); }
 
 private:
     void seed(const std::vector<DeviceInfo>& devices);

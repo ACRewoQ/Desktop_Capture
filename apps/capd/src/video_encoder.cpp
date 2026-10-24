@@ -39,15 +39,18 @@ std::vector<std::pair<std::string, std::string>> familyOptions(const std::string
     const std::string q = std::to_string(v.quality);
     std::vector<std::pair<std::string, std::string>> o;
     if (has(name, "_nvenc")) {
-        o = {{"preset", "p4"}, {"tune", "hq"}, {"delay", "0"}};
+        // forced-idr: a frame submitted as a keyframe becomes an IDR (a preview receiver can start from it).
+        o = {{"preset", v.lowLatency ? "p2" : "p4"}, {"tune", v.lowLatency ? "ull" : "hq"}, {"delay", "0"},
+             {"forced-idr", "1"}};
         if (v.rateControl == "cqp") o.insert(o.end(), {{"rc", "constqp"}, {"qp", q}});
         else o.emplace_back("rc", v.rateControl == "cbr" ? "cbr" : "vbr");
     } else if (has(name, "_amf")) {
-        o = {{"usage", "transcoding"}, {"quality", "balanced"}};
+        o = {{"usage", v.lowLatency ? "ultralowlatency" : "transcoding"}, {"quality", v.lowLatency ? "speed" : "balanced"}};
         if (v.rateControl == "cqp") o.insert(o.end(), {{"rc", "cqp"}, {"qp_i", q}, {"qp_p", q}});
         else o.emplace_back("rc", v.rateControl == "cbr" ? "cbr" : "vbr_peak");
     } else if (has(name, "_qsv")) {
-        o = {{"preset", "medium"}};
+        o = {{"preset", v.lowLatency ? "veryfast" : "medium"}, {"forced_idr", "1"}};
+        if (v.lowLatency) o.insert(o.end(), {{"async_depth", "1"}, {"look_ahead", "0"}});
     } else if (has(name, "_mf")) {
         o = {{"hw_encoding", "1"}, {"scenario", "display_remoting"}};
         if (v.rateControl == "cqp") {
@@ -56,6 +59,12 @@ std::vector<std::pair<std::string, std::string>> familyOptions(const std::string
         } else {
             o.emplace_back("rate_control", v.rateControl == "cbr" ? "cbr" : "pc_vbr");
         }
+    } else if (name == "libx264") {
+        // veryfast: about one P-core per 1080p60 stream on a recent CPU; x264 is the fallback when no GPU encoder opens.
+        o = {{"preset", "veryfast"}, {"forced-idr", "1"}};
+        if (v.lowLatency) o.emplace_back("tune", "zerolatency");
+        if (v.rateControl == "cqp") o.emplace_back("crf", q);
+        else if (v.rateControl == "cbr") o.emplace_back("nal-hrd", "cbr");
     }
     return o;
 }
@@ -67,6 +76,7 @@ VideoEncoder::VideoEncoder(const Device& dev, const std::string& codecName, cons
     : dev_(dev), settings_(v), codecName_(codecName) {
     const AVCodec* codec = avcodec_find_encoder_by_name(codecName_.c_str());
     if (!codec) throw std::runtime_error("not in this FFmpeg build");
+    software_ = codecName_ == "libx264";
 
     // FFmpeg D3D11 device wrapping our own device: capture, composition and encoding share one GPU.
     d3dDevice_ = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
@@ -98,7 +108,7 @@ VideoEncoder::VideoEncoder(const Device& dev, const std::string& codecName, cons
     ctx_->time_base = AVRational{1, v.fps};
     ctx_->framerate = AVRational{v.fps, 1};
     ctx_->sample_aspect_ratio = AVRational{1, 1};
-    ctx_->gop_size = v.fps * 2;
+    ctx_->gop_size = v.gopFrames > 0 ? v.gopFrames : v.fps * 2;
     ctx_->max_b_frames = 0;
     ctx_->color_primaries = AVCOL_PRI_BT709;
     ctx_->color_trc = AVCOL_TRC_BT709;
@@ -118,7 +128,14 @@ VideoEncoder::VideoEncoder(const Device& dev, const std::string& codecName, cons
         ctx_->rc_buffer_size = static_cast<int>(v.rateControl == "cbr" ? bitrate : bitrate * 2);
     }
 
-    if (accepts(codec, AV_PIX_FMT_D3D11)) {
+    if (software_) {
+        // The converter still renders into the GPU pool; the encoding thread downloads each surface
+        // (av_hwframe_transfer_data: staging copy + map under FFmpeg's device lock, about 1 ms at 1080p).
+        if (!accepts(codec, AV_PIX_FMT_NV12)) throw std::runtime_error("does not take NV12");
+        ctx_->pix_fmt = AV_PIX_FMT_NV12;
+        ctx_->thread_count = 0;  // x264 picks its own thread count
+        inputMode_ = "d3d11 downloaded to cpu";
+    } else if (accepts(codec, AV_PIX_FMT_D3D11)) {
         ctx_->pix_fmt = AV_PIX_FMT_D3D11;
         ctx_->sw_pix_fmt = AV_PIX_FMT_NV12;
         ctx_->hw_frames_ctx = av_buffer_ref(d3dFrames_);
@@ -192,8 +209,9 @@ VideoEncoder::Surface VideoEncoder::acquire() {
     return s;
 }
 
-void VideoEncoder::submit(Surface s, std::int64_t pts) {
+void VideoEncoder::submit(Surface s, std::int64_t pts, bool keyframe) {
     s.frame->pts = pts;
+    s.frame->pict_type = keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
     {
         std::lock_guard lock(mutex_);
         if (closing_ || !error_.empty()) {
@@ -232,12 +250,25 @@ void VideoEncoder::run() {
 }
 
 void VideoEncoder::encode(AVFrame* frame) {
-    if (frame && qsvFrames_) {
+    if (frame && software_) {
+        AVFrame* cpu = av_frame_alloc();
+        cpu->format = AV_PIX_FMT_NV12;
+        const int r = av_hwframe_transfer_data(cpu, frame, 0);
+        cpu->pts = frame->pts;
+        cpu->pict_type = frame->pict_type;
+        av_frame_free(&frame);
+        if (r < 0) {
+            av_frame_free(&cpu);
+            check(r, "download nv12 surface");
+        }
+        frame = cpu;
+    } else if (frame && qsvFrames_) {
         AVFrame* mapped = av_frame_alloc();
         mapped->format = AV_PIX_FMT_QSV;
         mapped->hw_frames_ctx = av_buffer_ref(qsvFrames_);
         const int r = av_hwframe_map(mapped, frame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT);
         mapped->pts = frame->pts;
+        mapped->pict_type = frame->pict_type;
         av_frame_free(&frame);
         if (r < 0) {
             av_frame_free(&mapped);
@@ -297,15 +328,19 @@ VideoEncoder::Stats VideoEncoder::stats() const {
 
 std::unique_ptr<VideoEncoder> openVideoEncoder(const Device& dev, const VideoSettings& v, bool globalHeader,
                                                std::vector<std::string>* log) {
-    if (v.encoder == "x264")
-        throw std::runtime_error("x264 (software) is not part of this build; use auto or a hardware encoder");
+    // auto: the GPU encoders first, x264 last (the design doc: x264 when there is no GPU encoder).
     std::vector<std::string> families;
-    if (v.encoder == "auto") families = {"nvenc", "amf", "qsv", "mf"};
+    if (v.encoder == "auto") families = {"nvenc", "amf", "qsv", "mf", "x264"};
     else families = {v.encoder};
 
     std::string errors;
     for (const auto& family : families) {
-        const std::string name = v.codec + "_" + family;
+        if (family == "x264" && v.codec != "h264") {
+            if (log) log->push_back("libx264: only encodes h264");
+            errors += std::string(errors.empty() ? "" : "; ") + "libx264: only encodes h264";
+            continue;
+        }
+        const std::string name = family == "x264" ? std::string("libx264") : v.codec + "_" + family;
         try {
             auto enc = std::make_unique<VideoEncoder>(dev, name, v, globalHeader);
             if (log) log->push_back(name + ": opened");

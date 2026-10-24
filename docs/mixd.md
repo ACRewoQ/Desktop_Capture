@@ -1,6 +1,6 @@
 # 音声エンジン（mixd）
 
-P2 レーンA の骨格。設計書の「device-io」「mixer-core」「control-server」に当たる部分と、録画用の共有メモリ書き出しを持つ。P3 レーンA1 で内蔵エフェクトと VST3 ホストを足した。プロセス音声（A3）、LAN（N）、録音・サンプラーは別レーン。
+P2 レーンA の骨格。設計書の「device-io」「mixer-core」「control-server」に当たる部分と、録画用の共有メモリ書き出しを持つ。P3 で、LAN（送信ストリーム・LAN 入力・ペアリング・相手 PC）をレーン N、内蔵エフェクトと VST3 ホストをレーン A1 で追加。プロセス音声（A2）、録音・サンプラー（A3）は P3 の各レーン。
 
 ## 構成
 
@@ -16,6 +16,9 @@ P2 レーンA の骨格。設計書の「device-io」「mixer-core」「control-
 | `fx_manager` | エフェクトスロットの追加・削除・移動、パラメーターの受け渡し、VST3 の読み込みとスキャン、プラグイン一覧の公開 | 制御 |
 | `fx/builtin` | 内蔵エフェクト 6 種（eq4・comp・gate・reverb・delay・limiter）と `FxSlot`（バイパスのクロスフェード） | 音声 |
 | `vst3/vst3_host`（apps/mixd/vst3） | JUCE 9 による VST3 ホスト（スキャン用の子プロセス、キャッシュ、プラグインの画面） | JUCE のメッセージ（メイン） |
+| `lan_service` | LAN 側：`lan/<n>` に送られたバスを購読者へ送る（ポート `lan:<n>`）、入力の種類 `lan` のトラックへ相手の送信ストリームを流す（ポート `lan:<相手>/<n>`、クロックズレ補正つき）、`/lan/subscribe`、ペアリング、`/lan/peers/#` | 制御、UDP 受信、送出（1 ms） |
+| `lan_peer_link` | ペアリング済みの相手 PC ごとの制御接続（role = peer）。相手の `/lan/stream/#` を写し、こちらのトラックが使うストリームを購読する | 相手ごと |
+| `lan_store` / `discovery` | サーバー ID・ペアリング・トークンの保存（`%APPDATA%\DesktopCapture\mixd-lan.txt`）、mDNS（`_dcmix._tcp`） | 制御 |
 
 JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台と出力1台を1本のスレッドで組にし、エンドポイント ID も公開しないので、「トラックごとに別の入力デバイス」に合わない。JUCE は VST3 ホストだけに使う（内蔵エフェクトは自前）。
 
@@ -74,6 +77,14 @@ JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台�
 - 共有モードの入力は 100ms のバッファで開く（遅延は増えない）。10ms では読み遅れでなくても欠落が出た。
 - デバイスの位置（GetBuffer の devicePosition）は、共有モードで変換されるデバイスではデバイス側のレートで数える。
 
+## LAN
+
+制御プロトコルの 8 章（検出・ペアリング）と 10 章（購読）、docs/spec/lan-media.md。
+
+- 既定で 0.0.0.0:47800 で待ち受ける。同じ PC からの接続はそのまま、LAN からはペアリング済み（トークン）か、ペアリング受付中に正しい 6 桁コードを出した「リモコン」と「相手 PC のエンジン」だけを受ける。`--local-only` で従来どおり 127.0.0.1 だけ（LAN 機能なし）、`--allow-remote` はペアリングなしで受ける（開発用）。
+- UDP 47810（`--media-port`）で LAN 音声を送受信。`--no-discovery` で mDNS を使わない（相手は `/lan/peers/add` でアドレス指定）、`--lan-store` で保存ファイルを変える。
+- 相手 PC のストリームを使う手順：`/lan/peers/#` に相手が見えたら（または `/lan/peers/add`）、相手で `/remote/pairing/start`、こちらで `/lan/peers/pair id=<相手> code=<6桁>`。あとはトラックを `input/kind = lan`、`input/source = <相手の id>/<n>` にすると、相手が `lan/<n>` に送っている音が届く（`input/state` = ok、`input/lan_delay_ms` に受信バッファの量）。
+
 ## 録画の開始・停止
 
 docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/state` など）を持ち、実際の録画は capd（role = サービス、名前 `capd`）が行う。`/capture/record/start` で `starting`、capd の `/capture/report state=recording` で `recording`（`elapsed_ms` はエンジンが 250ms ごとに更新）、`stop` で `stopping`、`report idle` で `idle`。録画中に capd が切断すると `error`。
@@ -83,4 +94,5 @@ docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/sta
 - `ctest`：`[mixd]` のテストがフィルター、パン、ミキサー（ルーティング、センド、キュー、ミュート）、共有メモリ、計画（ソロ、入力状態、デバイス要求）、仮想デバイスでのクロック切り替え、制御サーバー越しの結合を確かめる。
 - `[fx]` のテストが内蔵エフェクトの音（EQ の利き、コンプの圧縮量、ゲート、リバーブ・ディレイの尾、リミッターの天井）、バイパス、偽のプラグインホストでのスロット操作を確かめる。`dc_vst3_tests`（JUCE ありのとき）がテスト用プラグイン DC Test Gain でスキャン・キャッシュ・読み込み・パラメーター・音声処理と、落ちるプラグインのスキャンを確かめる。
 - `mixd --fake-devices`：音声ハードウェアなしで UI などから接続できる。
+- `[lan]` のテスト：mixd 2 台を 1 プロセスで動かし、片方のマスターを `lan/1` に送り、もう片方のトラックで鳴らす（レベルが届く、購読の出入り、相手 PC の追加・ペアリング・削除、peer の制限）。ループバック以外のアドレスがあれば、リモコンと相手 PC のペアリング（コード違い、トークン、取り消し）も確かめる。
 - G2「バッファ128〜256で音切れなし」：`scripts\g2-engine.ps1`（`-Device` で出力、`-WithInput -InputDevice` で入力を選ぶ）。xrun のログ行には時刻、ストリームごとの実測レート、ブリッジの比率、入力欠落の様子が出る。1kHz のテストトーンをマスターに流し、共有モードはループバックの正弦波フィットで音切れを数え、両モードで `/system/xruns`（デバイスの欠落、周期の取りこぼし、ブリッジのアンダーラン）と `/system/cpu_load` を記録する。

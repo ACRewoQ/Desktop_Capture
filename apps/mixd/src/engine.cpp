@@ -1,5 +1,7 @@
 #include "engine.hpp"
 
+#include "dc/lanmedia/audio_receiver.hpp"
+#include "dc/lanmedia/audio_sender.hpp"
 #include "dc/shmaudio/clock.hpp"
 
 #include <algorithm>
@@ -87,7 +89,8 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
         for (std::size_t i = 0; i < plan->inputs.size(); ++i) {
             auto& port = *plan->inputs[i];
             float* buf = plan->inputScratch[i].data();
-            port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
+            if (port.lan) port.lan->pull(buf, static_cast<std::size_t>(n), chunkTime);
+            else port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
             inputPtrs_[i] = buf;
         }
         mixer_.process(*plan, n, inputPtrs_.data(), shm_);
@@ -111,7 +114,9 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
                     interleave_[static_cast<std::size_t>(2 * i)] = l[i];
                     interleave_[static_cast<std::size_t>(2 * i + 1)] = r[i];
                 }
-                plan->buses[b]->bridge.push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
+                auto& port = *plan->buses[b];
+                if (port.lan) port.lan->push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
+                else port.bridge.push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
             }
         }
 
