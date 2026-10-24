@@ -10,6 +10,7 @@ using V = Value;
 constexpr auto RO = Access::ReadOnly;
 constexpr auto RW = Access::ReadWrite;
 constexpr std::int64_t kI64Max = std::numeric_limits<std::int64_t>::max();
+constexpr std::int64_t kArgbMax = 0xFFFFFFFFLL;
 
 ParamSpec b(std::string p, bool def, std::string desc, Access a = RW) {
     return {std::move(p), ValueType::Bool, a, {}, {}, {}, {}, V{def}, std::move(desc)};
@@ -166,12 +167,95 @@ Schema buildV1() {
     sc.add(i("/sampler/bank/#/pad/#/duration_ms", 0, kI64Max, 0, "音声の長さ ms", RO));
     sc.add(b("/sampler/bank/#/pad/#/playing", false, "再生中", RO));
 
-    // --- video (minimal in v1; scenes and layers are added by lane B1 in P3) ---
+    // --- video mixer (lane B1): sources, scenes with layers, mixes with program/preview and transitions ---
+    // Sources, scenes and layers are added and removed by methods; numbers are fixed IDs like tracks.
     sc.add(s("/video/mix/#/name", "", "映像ミックス名"));
     sc.add(i("/video/mix/#/width", 160, 3840, 1920, "合成解像度（幅）"));
     sc.add(i("/video/mix/#/height", 90, 2160, 1080, "合成解像度（高さ）"));
     sc.add(i("/video/mix/#/fps", 10, 120, 60, "合成フレームレート"));
-    sc.add(b("/video/mix/#/active", false, "出力先があり合成中", RO));
+    sc.add(b("/video/mix/#/active", false, "出力先から参照されている（/capture/mix・/video/vcam/mix・/video/monitor/mix・/video/preview/mix・/video/lan/mix）", RO));
+    sc.add(i("/video/mix/#/background", 0, kArgbMax, 0xFF000000LL, "背景色（0xAARRGGBB）"));
+    sc.add(i("/video/mix/#/program_scene", 0, kMaxVideoScenes, 0,
+             "本番に出しているシーン（0 = なし）。変えるとトランジションで切り替わる"));
+    sc.add(i("/video/mix/#/preview_scene", 0, kMaxVideoScenes, 0, "次に出すシーン（プレビュー、0 = なし）"));
+    sc.add(e("/video/mix/#/transition/type", {"cut", "fade"}, "fade", "シーン切り替えの効果"));
+    sc.add(i("/video/mix/#/transition/duration_ms", 0, 10000, 300, "フェードの長さ ms"));
+
+    sc.add(s("/video/scene/#/name", "", "シーン名"));
+    sc.add(i("/video/scene/#/position", 1, kMaxVideoScenes, 1, "シーン一覧の並び順（1 始まり、連番）", RO));
+    {
+        const std::string l = "/video/scene/#/layer/#";
+        sc.add(s(l + "/name", "", "レイヤー名（\"\" = ソース名を表示）"));
+        sc.add(i(l + "/position", 1, kMaxLayersPerScene, 1, "重なり順（1 = 最前面、連番）", RO));
+        sc.add(i(l + "/source", 0, kMaxVideoSources, 0, "表示するソース /video/source/<n>（0 = なし）"));
+        sc.add(b(l + "/visible", true, "表示"));
+        sc.add(f(l + "/x", -4.0, 4.0, 0.0, "表示枠の左端（キャンバスの幅 = 1）"));
+        sc.add(f(l + "/y", -4.0, 4.0, 0.0, "表示枠の上端（キャンバスの高さ = 1）"));
+        sc.add(f(l + "/width", 0.0, 8.0, 1.0, "表示枠の幅（キャンバスの幅 = 1）"));
+        sc.add(f(l + "/height", 0.0, 8.0, 1.0, "表示枠の高さ（キャンバスの高さ = 1）"));
+        sc.add(e(l + "/fit", {"fit", "fill", "stretch"}, "fit",
+                 "枠への収め方（fit = 縦横比を保って全体を表示、fill = 縦横比を保って枠を埋める、stretch = 引き伸ばす）"));
+        for (const char* side : {"left", "top", "right", "bottom"})
+            sc.add(f(l + "/crop/" + side, 0.0, 1.0, 0.0, "切り取り（ソースの幅・高さに対する割合）"));
+        sc.add(f(l + "/opacity", 0.0, 1.0, 1.0, "不透明度"));
+        sc.add(b(l + "/chroma/enabled", false, "クロマキー"));
+        sc.add(i(l + "/chroma/color", 0, 0xFFFFFF, 0x00FF00, "抜く色（0xRRGGBB）"));
+        sc.add(f(l + "/chroma/similarity", 0.0, 1.0, 0.4, "抜く色の範囲（大きいほど広く抜く）"));
+        sc.add(f(l + "/chroma/smoothness", 0.0, 1.0, 0.08, "境目のなめらかさ"));
+        sc.add(f(l + "/chroma/spill", 0.0, 1.0, 0.1, "色かぶりの除去"));
+        sc.add(e(l + "/no_signal", {"transparent", "image"}, "transparent",
+                 "ソースが途切れたときの表示（transparent = 透明、image = 「信号なし」画像）"));
+    }
+
+    {
+        const std::string src = "/video/source/#";
+        sc.add(s(src + "/name", "", "ソース名"));
+        sc.add(e(src + "/kind", {"display", "window", "camera", "image", "media", "text", "color", "lan"}, "display",
+                 "ソースの種類（追加時に決まる）", RO));
+        sc.add(e(src + "/state", {"none", "ok", "disconnected", "error"}, "none",
+                 "capd が報告する状態（none = どのミックスでも使っていない）", RO));
+        sc.add(s(src + "/error", "", "state = error の理由", RO));
+        sc.add(i(src + "/width", 0, 16384, 0, "ソースの実際の幅（capd が報告）", RO));
+        sc.add(i(src + "/height", 0, 16384, 0, "ソースの実際の高さ（capd が報告）", RO));
+        sc.add(b(src + "/cursor", true, "マウスカーソルを入れる（display / window）"));
+        sc.add(s(src + "/display/id", "", "モニター ID（/video/devices/display/#/id、\"\" = 主モニター）"));
+        sc.add(e(src + "/display/method", {"wgc", "dda"}, "wgc",
+                 "取得方式（wgc = Windows.Graphics.Capture、dda = Desktop Duplication）"));
+        sc.add(s(src + "/window/exe", "", "ウィンドウの実行ファイル名（例 game.exe）"));
+        sc.add(s(src + "/window/title", "", "ウィンドウタイトル"));
+        sc.add(e(src + "/window/match", {"title", "exe"}, "title",
+                 "閉じたあとにつなぎ直す条件（title = 実行ファイル名とタイトル、exe = 実行ファイル名だけ）"));
+        sc.add(s(src + "/camera/id", "", "カメラ ID（/video/devices/camera/#/id）"));
+        sc.add(s(src + "/camera/name", "", "カメラ名（ID が変わったときの照合用）"));
+        sc.add(i(src + "/camera/width", 0, 7680, 0, "取り込み解像度の幅（0 = 自動：1920×1080 以下で最大のもの）"));
+        sc.add(i(src + "/camera/height", 0, 4320, 0, "取り込み解像度の高さ（0 = 自動）"));
+        sc.add(i(src + "/camera/fps", 0, 240, 0, "取り込みフレームレート（0 = 自動：60 以下で最大）"));
+        sc.add(s(src + "/file", "", "ファイルのパス（image / media）"));
+        sc.add(b(src + "/media/loop", true, "動画を繰り返す"));
+        sc.add(s(src + "/text/content", "", "表示する文字（改行可）"));
+        sc.add(s(src + "/text/font", "Yu Gothic UI", "フォント名"));
+        sc.add(i(src + "/text/size", 8, 512, 48, "文字の大きさ（ピクセル）"));
+        sc.add(i(src + "/text/color", 0, kArgbMax, 0xFFFFFFFFLL, "文字色（0xAARRGGBB）"));
+        sc.add(i(src + "/text/background", 0, kArgbMax, 0, "背景色（0xAARRGGBB、0 = 透明）"));
+        sc.add(b(src + "/text/bold", false, "太字"));
+        sc.add(b(src + "/text/italic", false, "斜体"));
+        sc.add(e(src + "/text/align", {"left", "center", "right"}, "left", "行揃え"));
+        sc.add(i(src + "/text/wrap_width", 0, 7680, 0, "折り返し幅（ピクセル、0 = 折り返さない）"));
+        sc.add(i(src + "/color/value", 0, kArgbMax, 0xFF000000LL, "単色ソースの色（0xAARRGGBB）"));
+        sc.add(s(src + "/lan/stream", "", "LAN メディア伝送の受信ストリーム ID（レーン N）"));
+    }
+
+    // what capd can capture on this PC (capd reports these with /video/devices/report)
+    sc.add(s("/video/devices/display/#/id", "", "モニター ID", RO));
+    sc.add(s("/video/devices/display/#/name", "", "モニター名", RO));
+    sc.add(i("/video/devices/display/#/width", 0, 16384, 0, "幅（物理ピクセル）", RO));
+    sc.add(i("/video/devices/display/#/height", 0, 16384, 0, "高さ（物理ピクセル）", RO));
+    sc.add(b("/video/devices/display/#/primary", false, "主モニター", RO));
+    sc.add(s("/video/devices/window/#/exe", "", "実行ファイル名", RO));
+    sc.add(s("/video/devices/window/#/title", "", "ウィンドウタイトル", RO));
+    sc.add(s("/video/devices/camera/#/id", "", "カメラ ID", RO));
+    sc.add(s("/video/devices/camera/#/name", "", "カメラ名", RO));
+
     sc.add(i("/video/vcam/mix", 0, kMaxVideoMixes, 0, "仮想カメラに出す映像ミックス（0 = なし）"));
     sc.add(e("/video/vcam/resolution", {"1080p", "720p"}, "1080p", "仮想カメラの解像度"));
     sc.add(i("/video/monitor/mix", 0, kMaxVideoMixes, 0, "全画面表示に出す映像ミックス（0 = なし）"));
@@ -257,6 +341,25 @@ Schema buildV1() {
                   "パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による", "P3"});
     sc.addMethod({"/sampler/release", "pad:int, bank:int?", "nil", "パッドを離す（hold のパッドが止まる）", "P3"});
     sc.addMethod({"/sampler/stop", "bank:int?", "nil", "再生中のパッドを止める（bank なし = 全バンク）", "P3"});
+    sc.addMethod({"/video/source/add", "kind:string, name:string?", "int（新しいソース番号）",
+                  "ソースを追加。番号は空いている最小の番号", "P3"});
+    sc.addMethod({"/video/source/remove", "source:int", "nil", "ソースを削除。そのソースを表示していたレイヤーも消える", "P3"});
+    sc.addMethod({"/video/source/report", "source:int, state:string, width:int?, height:int?, error:string?", "nil",
+                  "capd がソースの状態を知らせる（role = サービスの接続だけ）", "P3"});
+    sc.addMethod({"/video/scene/add", "name:string?, position:int?", "int（新しいシーン番号）", "シーンを追加", "P3"});
+    sc.addMethod({"/video/scene/remove", "scene:int", "nil", "シーンを削除。参照していた program / preview は 0 に戻る", "P3"});
+    sc.addMethod({"/video/scene/move", "scene:int, position:int", "nil", "シーンの並び順を変える", "P3"});
+    sc.addMethod({"/video/scene/#/layer/add", "source:int, name:string?, position:int?", "int（新しいレイヤー番号）",
+                  "レイヤーを追加（既定は最前面、キャンバス全体）", "P3"});
+    sc.addMethod({"/video/scene/#/layer/remove", "layer:int", "nil", "レイヤーを削除", "P3"});
+    sc.addMethod({"/video/scene/#/layer/move", "layer:int, position:int", "nil", "重なり順を変える（1 = 最前面）", "P3"});
+    sc.addMethod({"/video/mix/add", "name:string?", "int（新しいミックス番号）", "映像ミックスを追加（最大 4）", "P3"});
+    sc.addMethod({"/video/mix/remove", "mix:int", "nil", "映像ミックスを削除。参照していた出力先は 0 に戻る", "P3"});
+    sc.addMethod({"/video/mix/#/take", "", "nil",
+                  "プレビューのシーンをトランジションで本番に出し、直前の本番シーンをプレビューに入れる", "P3"});
+    sc.addMethod({"/video/devices/refresh", "", "nil", "モニター・ウィンドウ・カメラ一覧の更新を capd に頼む（イベント video.devices.refresh）", "P3"});
+    sc.addMethod({"/video/devices/report", "kind:string, <n>/<field>:値…", "nil",
+                  "capd がモニター・ウィンドウ・カメラの一覧を知らせる（role = サービスの接続だけ）", "P3"});
     sc.addMethod({"/track/#/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/track/#/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});

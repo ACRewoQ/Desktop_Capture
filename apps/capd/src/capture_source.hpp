@@ -30,10 +30,16 @@ public:
 
     // Count of OS-side problems recovered from (access lost, pool recreated, ...).
     virtual std::uint64_t recoveries() const = 0;
+
+    // The captured monitor or window went away (WGC item closed). The owner drops the source and looks again.
+    virtual bool closed() const { return false; }
 };
 
-// Windows.Graphics.Capture, monitor capture with the cursor. Win10 1903+.
-std::unique_ptr<CaptureSource> createWgcSource(const Device& dev, const MonitorInfo& monitor);
+// Windows.Graphics.Capture, monitor capture. Win10 1903+.
+std::unique_ptr<CaptureSource> createWgcSource(const Device& dev, const MonitorInfo& monitor, bool cursor = true);
+
+// Windows.Graphics.Capture, one window.
+std::unique_ptr<CaptureSource> createWgcWindowSource(const Device& dev, HWND window, bool cursor = true);
 
 // DXGI Desktop Duplication (the Win10 fallback). The cursor is not drawn (it comes as a separate shape).
 std::unique_ptr<CaptureSource> createDdaSource(const Device& dev, const MonitorInfo& monitor);

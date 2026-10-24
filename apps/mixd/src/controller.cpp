@@ -2,7 +2,9 @@
 #include "lan_service.hpp"
 
 #include "dc/protocol/constants.hpp"
+#include "dc/control/video_methods.hpp"
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/video.hpp"
 #include "dc/shmaudio/clock.hpp"
 #include "dc/version.hpp"
 
@@ -137,6 +139,7 @@ void Controller::seed(const std::vector<DeviceInfo>& devices) {
     put("/mixer/track_count", std::int64_t{kInitialTracks});
     put("/capture/audio/1/source", std::string("master"));
     server_.publishNow(c);
+    server_.publishNow(videoDerived(server_.store().tree()));
 }
 
 void Controller::registerMethods() {
@@ -174,6 +177,7 @@ void Controller::registerMethods() {
         devices_.refresh();
         return Result{};
     });
+    control::registerVideoMethods(server_); // the video mixer's tree; capd does the work
 }
 
 namespace {
@@ -196,6 +200,7 @@ std::string padBase(int index) {
 } // namespace
 
 void Controller::onDelta(const Delta& delta) {
+    control::followVideoDelta(server_, delta);
     if (options_.lan) options_.lan->onDelta(delta); // first, so new LAN ports are there for the plan
     // values the engine itself reports (load, counters, device lists, derived states) and settings
     // read elsewhere (recorder, sampler files) do not change the mix; everything else might
@@ -203,7 +208,7 @@ void Controller::onDelta(const Delta& delta) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
-                                                "/capture/error", "/lan/", "/remote/", "/recorder/"};
+                                                "/capture/error", "/video/", "/lan/", "/remote/", "/recorder/"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
         // of the sampler only the pads' mode and volume reach the plan (loaded files arrive separately)

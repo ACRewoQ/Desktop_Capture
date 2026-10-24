@@ -1,10 +1,11 @@
-// capd: capture process. P2 skeleton (lane B): one video mix with one scene (a monitor), recorded together with the
-// engine's audio from shared memory into MKV/MP4.
+// capd: capture process. Runs the video mixer (sources, scenes, layers, up to 4 mixes; lane B1) from the engine's
+// tree and records a mix together with the engine's audio from shared memory into MKV/MP4.
 //
 //   capd [serve] [--host H] [--port N]   normal mode: follow the engine's /capture settings and record start/stop
 //   capd --version
-//   capd list                     monitors and the hardware encoders that open on this PC (Windows)
+//   capd list                     monitors, windows, cameras and the hardware encoders that open on this PC (Windows)
 //   capd record [options]         record until Ctrl+C or --seconds
+//   capd mixtest [--out DIR] [--media FILE]   video mixer self-test (Windows)
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
 //   capd avsync FILE [options]    A/V offset from dc-av-flash flashes and mixd --test-pulse bursts (G2)
 //
@@ -15,9 +16,15 @@
 #include "src/settings.hpp"
 
 #ifdef _WIN32
+#include "src/mix_test.hpp"
 #include "src/video_encoder.hpp"
 #include "src/video_mix.hpp"
+#include "src/video_source.hpp"
+
+#include <mfapi.h>
 #endif
+
+#include "dc/protocol/defaults.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/shmaudio/layout.hpp"
@@ -62,6 +69,7 @@ usage:
   capd list
   capd record [options]
   capd probe FILE
+  capd mixtest [--out DIR] [--media FILE]   video mixer self-test: pixels of scenes, transitions, sources
   capd avsync FILE [--region X,Y,W,H] [--audio-stream N] [--csv FILE]
 
 record options:
@@ -82,7 +90,7 @@ record options:
   --mix-size WxH          video mix (canvas) size (default: the recorded size)
   --mix-fps N             video mix frame rate (default: the recorded rate)
   --source wgc|dda        capture API (default wgc; dda = Desktop Duplication, avoids the Win10 yellow border)
-  --monitor N             monitor index from "capd list" (default: primary)
+  --monitor N             monitor number from "capd list" (default: primary)
   --audio LIST            audio streams, comma separated: master, track/<n> (default master; "none" = no audio)
   --audio-codec aac|opus|pcm   default aac
   --audio-bitrate KBPS    default 192
@@ -107,14 +115,23 @@ std::vector<std::string> split(const std::string& s, char sep) {
 #ifdef _WIN32
 int cmdList() {
     std::cout << "capd " << dc::kVersionString << ", FFmpeg " << ffmpegVersion() << "\n\nmonitors:\n";
-    const auto monitors = listMonitors();
-    for (const auto& m : monitors) {
-        std::cout << "  [" << m.index << "] " << m.deviceName << "  " << (m.desktop.right - m.desktop.left) << "x"
-                  << (m.desktop.bottom - m.desktop.top) << " at (" << m.desktop.left << "," << m.desktop.top << ")"
-                  << (m.primary ? "  primary" : "") << "  on " << m.adapterName << "\n";
+    const auto displays = listDisplays();
+    for (std::size_t i = 0; i < displays.size(); ++i) {
+        const auto& d = displays[i];
+        std::cout << "  [" << i << "] " << d.name << "  " << d.gdiName << "  " << d.width << "x" << d.height
+                  << (d.primary ? "  primary" : "") << "\n      id " << d.id << "\n";
+    }
+    std::cout << "\nwindows:\n";
+    for (const auto& w : listWindows()) std::cout << "  " << w.exe << "  \"" << w.title << "\"\n";
+    std::cout << "\ncameras:\n";
+    if (SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_FULL))) {
+        for (const auto& c : listCameras()) std::cout << "  " << c.name << "\n      id " << c.id << "\n";
+        MFShutdown();
     }
     std::cout << "\nencoders (opened at 1280x720 on the primary monitor's GPU):\n";
-    const Device dev = createDevice(pickMonitor(monitors, -1).adapter.Get());
+    const auto primary = findMonitor("");
+    if (!primary) throw std::runtime_error("no monitor attached to the desktop");
+    const Device dev = createDevice(primary->adapter.Get());
     auto names = availableHwEncoders();
     names.emplace_back("libx264");
     for (const auto& name : names) {
@@ -284,10 +301,24 @@ int cmdRecord(const std::vector<std::string>& args) {
     const std::string path = output.empty() ? recordingPath(s, std::time(nullptr)) : output;
 
 #ifdef _WIN32
-    std::unique_ptr<VideoMix> mix;
+    // The video mixer with the start tree (mix 1 shows one monitor), adjusted by the options.
+    std::unique_ptr<VideoEngine> video;
+    std::shared_ptr<VideoMix> mix;
     if (s.withVideo) {
-        mix = std::make_unique<VideoMix>(s.mix);
-        mix->start();
+        dc::proto::ParamTree tree;
+        for (const auto& c : dc::proto::globalDefaults()) tree.set(c.path, c.value);
+        tree.set("/video/source/1/display/method", s.mix.source);
+        if (s.mix.monitor >= 0) {
+            const auto displays = listDisplays();
+            if (s.mix.monitor >= static_cast<int>(displays.size())) throw std::runtime_error("no such monitor number");
+            tree.set("/video/source/1/display/id", displays[static_cast<size_t>(s.mix.monitor)].id);
+        }
+        tree.set("/video/mix/1/width", std::int64_t{s.mix.width});
+        tree.set("/video/mix/1/height", std::int64_t{s.mix.height});
+        tree.set("/video/mix/1/fps", std::int64_t{s.mix.fps});
+        video = std::make_unique<VideoEngine>();
+        video->update(tree);
+        mix = video->acquire(1);
     }
     Recorder rec(s, mix.get(), path, shmSuffix);
 #else
@@ -336,7 +367,8 @@ int cmdRecord(const std::vector<std::string>& args) {
 
     const auto fin = rec.stop();
 #ifdef _WIN32
-    if (mix) mix->stop();
+    mix.reset();
+    video.reset();
 #endif
     if (error.empty()) error = fin.error;
     char res[600];
@@ -424,6 +456,9 @@ int main(int argc, char** argv) {
         if (cmd == "list") return cmdList();
 #endif
         if (cmd == "record") return cmdRecord(args);
+#ifdef _WIN32
+        if (cmd == "mixtest") return cmdMixTest(args);
+#endif
         if (cmd == "serve") return cmdServe(args);
         if (cmd == "probe" && args.size() == 1) return cmdProbe(args[0]);
         if (cmd == "avsync" && !args.empty()) return cmdAvSync(args);
