@@ -368,7 +368,11 @@ private:
         if (events_ < kRateCheckEvents) return false;
         const double perEvent = (now - firstEvent_) / (kRateCheckEvents - kRateSkipEvents) * kSampleRate;
         if (perEvent < 1.5 * period_) return false;
-        suggestedPeriod_ = (static_cast<int>(perEvent) + 31) / 32 * 32;
+        // wake-ups jitter a little: about the device's default period means that period (G2: the
+        // UR22 measured just over 480 and rounding up to 512 starved it)
+        suggestedPeriod_ = std::abs(perEvent - defaultPeriod_) < 0.1 * defaultPeriod_
+                               ? defaultPeriod_
+                               : static_cast<int>(std::lround(perEvent / 32)) * 32;
         markFailed();
         return true;
     }
