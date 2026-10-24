@@ -227,6 +227,7 @@ public:
         hr = client_->GetMixFormat(&mix);
         if (FAILED(hr)) return fail(error, "GetMixFormat", hr);
         int channels = mix->nChannels;
+        const double mixRate = mix->nSamplesPerSec;
         DWORD mask = defaultMask(channels);
         if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22)
             mask = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix)->dwChannelMask;
@@ -263,6 +264,7 @@ public:
             hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, buffer, 0, &format_.wfx.Format, nullptr);
             if (FAILED(hr)) return fail(error, "Initialize (shared)", hr);
             period_ = hnsToFrames(defPeriod);
+            devRate_ = mixRate > 0 ? mixRate : kSampleRate;
         } else {
             format_ = *exclusiveFormat;
             REFERENCE_TIME period = std::max(minPeriod, framesToHns(cfg.blockFrames));
@@ -342,6 +344,7 @@ public:
             const double secs = qpcSecondsNow() - t0;
             if (secs > 1) out += ", rate " + std::to_string(static_cast<long long>(static_cast<double>(frames_.load()) / secs)) + " Hz";
         }
+        if (duplicates_.load()) out += ", duplicate frames dropped " + std::to_string(duplicates_.load());
         if (!input_ || glitches_.load() == 0) return out;
         // a late read shows as a long wait before the discontinuity; a device-side drop as a short one
         return out + ", last discontinuity: " + std::to_string(lastGapUs_.load() / 1000.0).substr(0, 6) +
@@ -439,7 +442,7 @@ private:
         int silentWaits = 0;
         bool first = true;
         double lastRead = 0;
-        UINT64 expectedPos = 0;
+        double expectedPos = 0; // 48 kHz frames
         while (!stop_) {
             if (WaitForSingleObject(event_, 200) != WAIT_OBJECT_0) {
                 if (++silentWaits >= 10) {
@@ -455,6 +458,9 @@ private:
             if (gapUs > maxGapUs_.load()) maxGapUs_ = gapUs;
             UINT32 next = 0;
             HRESULT hr = S_OK;
+            // device positions count frames at the device rate (44.1 kHz for a device converted in
+            // shared mode): compare them in 48 kHz frames
+            const double toStream = kSampleRate / devRate_;
             while (SUCCEEDED(hr = capture_->GetNextPacketSize(&next)) && next > 0) {
                 BYTE* data = nullptr;
                 UINT32 frames = 0;
@@ -462,24 +468,36 @@ private:
                 UINT64 devPos = 0, qpc = 0;
                 hr = capture_->GetBuffer(&data, &frames, &flags, &devPos, &qpc);
                 if (FAILED(hr)) break;
+                if (hr == AUDCLNT_S_BUFFER_EMPTY || frames == 0) break;
+                const double pos = static_cast<double>(devPos) * toStream;
+                // a packet the device hands out again (G2: the Realtek mic in exclusive mode, about
+                // 1.5x the real rate): drop what was delivered already, judged by its position
+                UINT32 skip = 0;
+                if (!first && devRate_ == kSampleRate && pos + 0.5 < expectedPos) {
+                    skip = static_cast<UINT32>(std::min<double>(frames, expectedPos - pos + 0.5));
+                    duplicates_.fetch_add(skip);
+                }
                 const bool discontinuity = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0 && !first;
                 if (discontinuity) {
                     lastGapUs_ = gapUs;
-                    lastSkipped_ = static_cast<std::int64_t>(devPos) - static_cast<std::int64_t>(expectedPos);
+                    lastSkipped_ = static_cast<std::int64_t>(std::llround(pos - expectedPos));
                     glitches_.fetch_add(1);
                 }
-                expectedPos = devPos + frames;
+                expectedPos = std::max(expectedPos, pos + frames);
                 first = false;
+                const UINT32 fresh = frames - skip;
                 const std::size_t samples = static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels_);
-                if (samples <= scratch_.size()) {
+                if (fresh > 0 && samples <= scratch_.size()) {
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) std::fill_n(scratch_.data(), samples, 0.0f);
                     else toFloat(format_, data, scratch_.data(), samples);
-                    inCb_(scratch_.data(), static_cast<int>(frames), static_cast<double>(qpc) * 1e-7, discontinuity);
+                    inCb_(scratch_.data() + static_cast<std::size_t>(skip) * static_cast<std::size_t>(channels_),
+                          static_cast<int>(fresh), static_cast<double>(qpc) * 1e-7 + skip / kSampleRate, discontinuity);
                 }
-                frames_.fetch_add(frames);
+                frames_.fetch_add(fresh);
                 if (startTime_.load() == 0) startTime_ = now;
                 hr = capture_->ReleaseBuffer(frames);
                 if (FAILED(hr)) break;
+                if (exclusive_) break; // exclusive mode: one buffer per event
             }
             if (FAILED(hr)) {
                 markFailed();
@@ -514,6 +532,8 @@ private:
     std::atomic<std::uint64_t> glitches_{0};
     std::atomic<std::int64_t> lastGapUs_{0}, maxGapUs_{0}, lastSkipped_{0};
     std::atomic<std::uint64_t> frames_{0}; // frames rendered or captured since the first period
+    std::atomic<std::uint64_t> duplicates_{0}; // captured frames dropped as already delivered
+    double devRate_ = kSampleRate;         // rate of the device positions
     std::atomic<double> startTime_{0};
     std::thread thread_;
 };
