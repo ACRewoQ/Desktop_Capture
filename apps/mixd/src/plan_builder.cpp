@@ -1,6 +1,8 @@
 #include "plan_builder.hpp"
 
 #include "dsp.hpp"
+#include "recorder.hpp"
+#include "sampler.hpp"
 
 #include "dc/protocol/routing.hpp"
 #include "dc/protocol/schema.hpp"
@@ -88,7 +90,7 @@ DeviceDemand deviceDemand(const ParamTree& tree) {
 }
 
 BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64_t generation,
-                      const BuildOptions& options) {
+                      const BuildOptions& options, const PlanResources& resources) {
     BuildResult r;
     auto plan = std::make_unique<MixPlan>();
     plan->generation = generation;
@@ -203,8 +205,18 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
             s.inputChannel = static_cast<int>(num(tree, base + "/input/channel", 1)) - 1;
             if (!src.empty()) state = s.input >= 0 ? "ok" : "disconnected";
             s.inputDisconnected = !src.empty() && s.input < 0;
+        } else if (kind == "sampler") {
+            const auto src = str(tree, base + "/input/source");
+            int bank = 0;
+            if (!src.empty()) {
+                bank = -1;
+                if (src.size() == 1 && src[0] >= '1' && src[0] <= '0' + kSamplerBanks) bank = src[0] - '0';
+            }
+            s.samplerBank = resources.sampler ? bank : -1;
+            state = bank >= 0 ? "ok" : "disconnected";
+            s.inputDisconnected = bank < 0;
         } else if (kind != "none" && !kind.empty()) {
-            state = "disconnected"; // process / LAN / sampler inputs arrive in phase 3
+            state = "disconnected"; // process / LAN inputs arrive with lanes A2 / N
             s.inputDisconnected = true;
         }
         r.inputState[n] = state;
@@ -244,6 +256,18 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
         r.shmChannels[static_cast<std::size_t>(id)] = s->shmTap == Tap::Pre ? static_cast<std::uint32_t>(s->channels) : 2u;
         r.shmDisconnected[static_cast<std::size_t>(id)] = s->inputDisconnected;
     }
+
+    // --- per-track recording: the streams of the take decide (frozen when the take started)
+    if (resources.take) {
+        plan->take = resources.take;
+        const auto& streams = resources.take->streams();
+        for (std::size_t i = 0; i < streams.size(); ++i)
+            if (StripPlan* s = stripById(streams[i].strip)) {
+                s->recordStream = static_cast<int>(i);
+                s->recordTap = streams[i].tap;
+            }
+    }
+    plan->sampler = resources.sampler;
 
     for (const auto& in : plan->inputs)
         plan->inputScratch.emplace_back(static_cast<std::size_t>(kMaxBlockFrames * in->channels), 0.0f);
