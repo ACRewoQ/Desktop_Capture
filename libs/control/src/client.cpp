@@ -33,6 +33,7 @@ bool ControlClient::connect(std::chrono::milliseconds timeout, std::string* erro
     hello.meterPort = options_.meterPort;
     hello.token = options_.token;
     hello.pairCode = options_.pairCode;
+    hello.clientId = options_.clientId;
     send(hello);
     read();
     schedulePing();

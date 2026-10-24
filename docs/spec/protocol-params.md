@@ -12,21 +12,23 @@
 | `/system/sample_rate` | int | ro | 48000 | `48000` | サンプルレート（48kHz 固定） |
 | `/system/block_size` | int | rw | 64 / 128 / 256 / 512 / 1024 | `256` | 音声バッファのサンプル数 |
 | `/system/clock_device` | string | rw |  | `""` | クロック基準デバイスの ID（"" = 自動） |
-| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ） |
+| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。48kHz 以外のデバイスはエンジンがレート変換する） |
 | `/system/clock_active` | string | ro |  | `""` | 実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー） |
 | `/system/latency_ms` | float | ro | 0 〜 1000 | `0` | クロック基準デバイスの出力バッファによる遅延 ms |
 | `/system/cpu_load` | float | ro | 0 〜 1 | `0` | 音声スレッドの負荷率 |
 | `/system/xruns` | int | ro | 0 〜 9.22337e+18 | `0` | 起動後の音切れ回数 |
-| `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI はエンドポイント ID、ASIO は asio:<ドライバー名>。protocol.md 4.4） |
 | `/devices/input/#/name` | string | ro |  | `""` | デバイス名 |
 | `/devices/input/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
 | `/devices/input/#/connected` | bool | ro |  | `false` | 接続中 |
 | `/devices/input/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
-| `/devices/output/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/input/#/sample_rate` | int | ro | 0 〜 384000 | `0` | デバイス側のサンプルレート（0 = 不明。48000 以外はエンジンが変換する） |
+| `/devices/output/#/id` | string | ro |  | `""` | デバイス ID（WASAPI はエンドポイント ID、ASIO は asio:<ドライバー名>。protocol.md 4.4） |
 | `/devices/output/#/name` | string | ro |  | `""` | デバイス名 |
 | `/devices/output/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
 | `/devices/output/#/connected` | bool | ro |  | `false` | 接続中 |
 | `/devices/output/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
+| `/devices/output/#/sample_rate` | int | ro | 0 〜 384000 | `0` | デバイス側のサンプルレート（0 = 不明。48000 以外はエンジンが変換する） |
 | `/devices/process/#/exe` | string | ro |  | `""` | 音声を出しているアプリの実行ファイル名 |
 | `/devices/process/#/pid` | int | ro | 0 〜 9.22337e+18 | `0` | プロセス ID |
 | `/devices/process/#/title` | string | ro |  | `""` | ウィンドウタイトル |
@@ -37,7 +39,7 @@
 | `/track/#/position` | int | ro | 1 〜 64 | `1` | 画面上の並び順（1 始まり、連番） |
 | `/track/#/channels` | int | rw | 1 / 2 | `2` | 1 = モノ、2 = ステレオ |
 | `/track/#/input/kind` | string | rw | none / device / process / lan / sampler | `"none"` | 入力の種類 |
-| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN は <相手の id>/<n>。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
+| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名（大文字小文字は区別しない）、LAN は <相手の id>/<n>。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
 | `/track/#/input/channel` | int | rw | 1 〜 64 | `1` | デバイスの何チャンネル目から使うか |
 | `/track/#/input/state` | string | ro | none / ok / disconnected | `"none"` | 入力の接続状態 |
 | `/track/#/input/lan_buffer_ms` | float | rw | 0 〜 200 | `0` | LAN 入力の受信バッファ目標 ms（0 = 自動） |

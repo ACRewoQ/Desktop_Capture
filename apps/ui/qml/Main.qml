@@ -55,6 +55,7 @@ Window {
             height: masterStrip.height
             model: master
             isMaster: true
+            onOutputRequested: sourcePicker.openOutput()
         }
     }
 
@@ -73,7 +74,13 @@ Window {
         }
     }
 
-    StripMenu { id: stripMenu; anchors.fill: parent }
+    StripMenu {
+        id: stripMenu
+        anchors.fill: parent
+        onInputRequested: (row, name) => sourcePicker.openInput(row, name)
+    }
+
+    SourcePicker { id: sourcePicker; objectName: "sourcePicker"; anchors.fill: parent }
 
     Toast { id: toast }
 

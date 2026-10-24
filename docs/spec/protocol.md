@@ -104,7 +104,29 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 
 録画の音声ストリーム `/capture/audio/#/source` は `""`、`master`、`track/<n>` のどれかです。
 
-### 4.4 ビデオミキサー
+### 4.4 デバイス ID と入力元
+
+`/devices/input/#/id`・`/devices/output/#/id` の形は API によって違います。UI は中身を解釈せず、そのまま `/track/#/input/source` や `device/<id>` に使います。
+
+| api | 入力の ID | 出力の ID |
+|---|---|---|
+| `wasapi` / `vmic` | WASAPI のエンドポイント ID（`{0.0.1.00000000}.{…}`） | 同じ |
+| `asio` | `asio:<ドライバー名>`（全入力チャンネルで 1 台。トラックは `/track/#/input/channel` で選ぶ） | `asio:<ドライバー名>:<n>-<n+1>`（ステレオの組ごとに 1 台。チャンネル数が奇数なら最後は `:<n>-<n>` のモノ） |
+
+- `vmic` は仮想オーディオケーブル（VB-CABLE など）です。WASAPI のデバイスと同じに扱い、`device/<id>` と `vmic/<id>` のどちらで指しても同じデバイスに出力します。
+- ASIO はドライバーの仕組み上、同時に 1 つのドライバーしか開けません。2 つ目のドライバーを指した入出力は開かれず、`device.error` で知らせます。ASIO のデバイスがクロック基準に使える出力のとき、エンジンは ASIO のコールバックで動きます。
+- `/devices/*/#/sample_rate` はデバイス側のレートです。48000 以外（44.1kHz など）は共有・排他・ASIO のどれでもエンジンが自前で 48kHz に変換します。
+
+**ID が変わったときの再照合**：Windows はサンプルレートの変更や USB の差し替えでデバイスに新しい ID を付けることがあります。設定（入力元、出力先、センド先、キュー、`/system/clock_device`）が指す ID が一覧から消え、エンジンがその ID の名前を覚えていて、同じ向き・同じ名前の接続中デバイスがちょうど 1 台あり、そのデバイスがまだどこからも指されていなければ、エンジンは設定の ID を新しいものに書き換えます（エンジン発のデルタ、`device.rematched` イベント）。名前の記憶はエンジンの起動中だけです（プロファイル保存は P5）。
+
+**プロセス音声**：`/track/#/input/kind` = `process` のとき、`source` は実行ファイル名（`chrome.exe` など、大文字小文字は区別しない）です。
+
+- エンジンはその名前で動いているプロセスのうち、親が同じ名前でないもの（プロセスツリーの根）を選び、子プロセスごと 48kHz ステレオで取り込みます。根が複数あるときは音声セッションを持つもの、次に起動の早いものを選びます。
+- 同じアプリを指すトラックが何本あっても取り込みは 1 本で、各トラックへ配ります（Windows 10 は 1 プロセス内で同じ PID を 2 回開けないため）。
+- アプリが終了すると `input/state` = `disconnected`（無音）になり、同じ実行ファイル名のアプリが起動したら自動でつなぎ直します。
+- `/devices/process/#` は音声セッションを持つアプリの一覧で、実行ファイル名ごとに 1 行（`pid` は根のプロセス）です。`/devices/refresh` か数秒ごとの見直しで更新されます。
+
+### 4.5 ビデオミキサー
 
 映像の設定もエンジンのツリーが持ち、実際の取り込みと合成は capd が行います（レーン B1）。
 
@@ -201,8 +223,8 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
 | `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
-| `/video/source/add` ほか | 一覧参照 | | P3 | ビデオミキサーのソース・シーン・レイヤー・ミックスの追加・削除・並べ替え、`/video/mix/#/take`（4.4） |
-| `/video/source/report`, `/video/devices/report` | 4.4 参照 | nil | P3 | capd からの報告。role = サービス以外は `unauthorized` |
+| `/video/source/add` ほか | 一覧参照 | | P3 | ビデオミキサーのソース・シーン・レイヤー・ミックスの追加・削除・並べ替え、`/video/mix/#/take`（4.5） |
+| `/video/source/report`, `/video/devices/report` | 4.5 参照 | nil | P3 | capd からの報告。role = サービス以外は `unauthorized` |
 | `/video/output/report` | `output`:str（`vcam` / `monitor`）, `state`:str, `detail`:str? | nil | P3 | capd から映像出力の状態を知らせる（5.4.4）。role = サービス以外は `unauthorized` |
 | `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P3 | ペアリング受付（8 章） |
 | `/remote/unpair` | `id`:str | nil | P3 | ペアリングの取り消し。つながっていれば切断する |
@@ -277,7 +299,9 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `recorder.started` | `folder` | トラック別録音の開始 |
 | `recorder.stopped` | `folder`, `duration_ms`, `error`? | トラック別録音の停止 |
 | `capture.segment` | `file`, `reason` | GPU リセットなどで新しいファイルに切り替えた（P3） |
-| `device.lost` / `device.restored` | `id`, `name` | デバイスの切断・復帰（P3） |
+| `device.lost` / `device.restored` | `id`, `name`, `kind`（`input` / `output` / `process`） | 設定で使っているデバイス・アプリの切断と復帰。プロセスの `id` は実行ファイル名 |
+| `device.rematched` | `old_id`, `id`, `name` | ID が変わったデバイスを名前で照合し、設定を書き換えた（4.4） |
+| `device.error` | `message` | デバイスを開けなかった（他のアプリが排他で使用中、2 つ目の ASIO ドライバーなど）。同じ理由は続けて送らない |
 | `video.devices.refresh` | なし | `/video/devices/refresh` が呼ばれた。capd が一覧を送り直す（P3） |
 
 ### 5.6 生存確認

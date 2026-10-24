@@ -54,13 +54,20 @@ std::vector<int> tracksByPosition(const ParamTree& tree) {
     return out;
 }
 
+std::string lowerExe(const std::string& exe) {
+    std::string s = exe;
+    for (auto& c : s)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return s;
+}
+
 DeviceDemand deviceDemand(const ParamTree& tree) {
     DeviceDemand d;
     d.clockDevice = str(tree, "/system/clock_device");
     d.mode = tree.getAs<std::string>("/system/audio_mode").value_or("shared");
     d.blockFrames = static_cast<int>(num(tree, "/system/block_size", 256));
 
-    std::set<std::string> inputs;
+    std::set<std::string> inputs, processes;
     std::vector<std::string> outputs;
     auto addOut = [&](const std::string& id) {
         if (!id.empty() && std::find(outputs.begin(), outputs.end(), id) == outputs.end()) outputs.push_back(id);
@@ -71,10 +78,10 @@ DeviceDemand deviceDemand(const ParamTree& tree) {
     std::set<std::string> rest;
     for (int n : existingTracks(tree)) {
         const auto base = trackBase(n);
-        if (str(tree, base + "/input/kind") == "device") {
-            const auto src = str(tree, base + "/input/source");
-            if (!src.empty()) inputs.insert(src);
-        }
+        const auto kind = str(tree, base + "/input/kind");
+        const auto src = str(tree, base + "/input/source");
+        if (kind == "device" && !src.empty()) inputs.insert(src);
+        if (kind == "process" && !src.empty()) processes.insert(lowerExe(src));
         for (int k = 1; k <= proto::kMaxTrackOutputs; ++k)
             if (auto id = deviceOf(str(tree, base + "/out/" + std::to_string(k) + "/target")); !id.empty()) rest.insert(id);
         for (int k = 1; k <= proto::kMaxTrackSends; ++k)
@@ -83,8 +90,66 @@ DeviceDemand deviceDemand(const ParamTree& tree) {
     if (auto id = deviceOf(str(tree, "/cue/target")); !id.empty()) rest.insert(id);
     for (const auto& id : rest) addOut(id);
     d.inputs.assign(inputs.begin(), inputs.end());
+    d.processes.assign(processes.begin(), processes.end());
     d.outputs = std::move(outputs);
     return d;
+}
+
+RematchResult rematchDevices(const ParamTree& tree, const std::vector<DeviceInfo>& devices,
+                             const std::map<std::string, KnownDevice>& known) {
+    // every setting that names a device: (path, id, input, prefix kept in front of the id)
+    struct Ref {
+        std::string path, id, prefix;
+        bool input;
+    };
+    std::vector<Ref> refs;
+    auto target = [&](const std::string& path) {
+        const auto v = str(tree, path);
+        auto t = proto::parseTarget(v);
+        if (t && (t->kind == RouteTarget::Kind::Device || t->kind == RouteTarget::Kind::VirtualMic))
+            refs.push_back({path, t->id, v.substr(0, v.size() - t->id.size()), false});
+    };
+    for (int n : existingTracks(tree)) {
+        const auto base = trackBase(n);
+        if (str(tree, base + "/input/kind") == "device")
+            if (auto src = str(tree, base + "/input/source"); !src.empty()) refs.push_back({base + "/input/source", src, "", true});
+        for (int k = 1; k <= proto::kMaxTrackOutputs; ++k) target(base + "/out/" + std::to_string(k) + "/target");
+        for (int k = 1; k <= proto::kMaxTrackSends; ++k) target(base + "/send/" + std::to_string(k) + "/target");
+    }
+    for (int k = 1; k <= proto::kMaxTrackOutputs; ++k) target("/master/out/" + std::to_string(k) + "/target");
+    target("/cue/target");
+    if (auto clock = str(tree, "/system/clock_device"); !clock.empty()) refs.push_back({"/system/clock_device", clock, "", false});
+
+    auto connected = [&](const std::string& id, bool input) {
+        return std::any_of(devices.begin(), devices.end(),
+                           [&](const DeviceInfo& d) { return d.id == id && d.input == input && d.connected; });
+    };
+    std::set<std::pair<std::string, bool>> used;
+    for (const auto& r : refs) used.insert({r.id, r.input});
+
+    RematchResult out;
+    std::map<std::pair<std::string, bool>, std::string> moved; // (old id, input) -> new id
+    for (const auto& r : refs) {
+        const std::pair<std::string, bool> key{r.id, r.input};
+        if (moved.count(key) || connected(r.id, r.input) || r.id.rfind("asio:", 0) == 0) continue;
+        const auto k = known.find(r.id);
+        if (k == known.end() || k->second.input != r.input || k->second.name.empty()) continue;
+        const DeviceInfo* candidate = nullptr;
+        int count = 0;
+        for (const auto& d : devices)
+            if (d.connected && d.input == r.input && d.name == k->second.name) {
+                ++count;
+                candidate = &d;
+            }
+        // exactly one device of that name, and not one the settings use already
+        if (count != 1 || used.count({candidate->id, r.input})) continue;
+        moved[key] = candidate->id;
+        used.insert({candidate->id, r.input});
+        out.moved.push_back({r.id, candidate->id, k->second.name});
+    }
+    for (const auto& r : refs)
+        if (auto m = moved.find({r.id, r.input}); m != moved.end()) out.changes.push_back({r.path, r.prefix + m->second});
+    return out;
 }
 
 BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64_t generation,
@@ -95,6 +160,7 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
     plan->blockFrames = std::clamp(static_cast<int>(num(tree, "/system/block_size", 256)), 16, kMaxBlockFrames);
     plan->testToneGain = options.testToneGain;
     plan->testToneHz = options.testToneHz;
+    plan->testPulseSeconds = options.testPulseSeconds;
 
     const auto tracks = existingTracks(tree);
     std::set<int> trackSet(tracks.begin(), tracks.end());
@@ -134,7 +200,11 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
             case RouteTarget::Kind::VirtualMic:
                 if (int b = bus(t->id); b >= 0) return Destination{Destination::Kind::Bus, b};
                 return std::nullopt;
-            default: return std::nullopt; // none, LAN (lane N)
+            case RouteTarget::Kind::Lan:
+                if (int n = proto::lanStreamOf(*t); n > 0)
+                    if (int b = bus("lan:" + std::to_string(n)); b >= 0) return Destination{Destination::Kind::Bus, b};
+                return std::nullopt; // nobody receives the stream right now
+            default: return std::nullopt;
         }
     };
 
@@ -197,14 +267,22 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
         StripPlan s = strip(base, n);
         const auto kind = str(tree, base + "/input/kind");
         std::string state = "none";
-        if (kind == "device") {
+        if (kind == "device" || kind == "process") {
             const auto src = str(tree, base + "/input/source");
-            s.input = src.empty() ? -1 : input(src);
+            s.input = src.empty() ? -1 : input(kind == "device" ? src : processPortKey(src));
             s.inputChannel = static_cast<int>(num(tree, base + "/input/channel", 1)) - 1;
             if (!src.empty()) state = s.input >= 0 ? "ok" : "disconnected";
             s.inputDisconnected = !src.empty() && s.input < 0;
+        } else if (kind == "lan") {
+            // LAN stream "<peer id>/<n>": the LAN service opens a port for it while it can subscribe
+            const auto src = str(tree, base + "/input/source");
+            s.input = src.empty() ? -1 : input("lan:" + src);
+            s.inputChannel = static_cast<int>(num(tree, base + "/input/channel", 1)) - 1;
+            const bool playing = s.input >= 0 && plan->inputs[static_cast<std::size_t>(s.input)]->streaming.load();
+            if (!src.empty()) state = playing ? "ok" : "disconnected";
+            s.inputDisconnected = !src.empty() && !playing;
         } else if (kind != "none" && !kind.empty()) {
-            state = "disconnected"; // process / LAN / sampler inputs arrive in phase 3
+            state = "disconnected"; // sampler inputs (A3)
             s.inputDisconnected = true;
         }
         r.inputState[n] = state;

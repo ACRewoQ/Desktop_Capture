@@ -16,9 +16,12 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <vector>
 
 namespace dc::mixd {
+
+class LanService;
 
 class Controller {
 public:
@@ -27,6 +30,7 @@ public:
         std::chrono::milliseconds meterInterval{33};
         std::chrono::milliseconds statsInterval{500};
         bool verbose = true;
+        LanService* lan = nullptr; // LAN streams, inputs and pairing (optional)
     };
 
     Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
@@ -42,6 +46,8 @@ public:
     void onDeviceState(const DeviceManager::State& state);
     // ControlServer::Options::onClient (network thread): follows the capture process (capd).
     void onClient(const control::ClientInfo& client, bool connected);
+    // The LAN service added or removed ports (network thread).
+    void portsChanged() { scheduleRebuild(); }
 
 private:
     void seed(const std::vector<DeviceInfo>& devices);
@@ -50,6 +56,8 @@ private:
     void rebuild();
     void applyDeviceState(const DeviceManager::State& state);
     void publishDevices(const std::vector<DeviceInfo>& devices);
+    void publishProcesses(const std::vector<ProcessInfo>& processes);
+    void rematch();
     void scheduleMeters();
     void scheduleStats();
     std::vector<proto::Change> deviceChanges(const std::vector<DeviceInfo>& devices) const;
@@ -78,6 +86,8 @@ private:
     std::uint64_t generation_ = 0;
     PortTable ports_;
     std::vector<DeviceInfo> deviceList_;
+    std::vector<ProcessInfo> processList_;
+    std::map<std::string, KnownDevice> known_; // every device seen since the start, for rematch()
     std::vector<std::string> lastErrors_;
     std::vector<std::string> lastNotes_;
     std::array<std::uint32_t, kMaxStrips> shmChannels_{};

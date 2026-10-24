@@ -23,6 +23,14 @@ struct ClientInfo {
     proto::ClientRole role = proto::ClientRole::Local;
     std::string address;
     bool loopback = true;
+    std::string clientId; // Hello.client_id
+};
+
+// Answer of ControlServer::Options::authorize for a non-loopback client.
+struct AuthDecision {
+    bool allowed = false;
+    std::string message; // why not (sent with the unauthorized error)
+    std::string token;   // issued by a successful pairing, returned in Welcome.token
 };
 
 class ControlServer;
@@ -44,7 +52,11 @@ public:
         std::string serverName = "mixd";
         std::string serverId;
         std::uint64_t sessionId = 0;
-        bool allowRemote = false;            // accept non-loopback clients (pairing comes in P4)
+        bool allowRemote = false;            // accept any non-loopback client without pairing (development)
+        // Pairing check for non-loopback clients (role Remote or Peer; other roles are refused). Called on
+        // the network thread with the Hello. Without it, non-loopback clients are refused unless
+        // allowRemote is set.
+        std::function<AuthDecision(const proto::Hello&, const ClientInfo&)> authorize;
         std::size_t maxRemoteClients = 4;
         std::chrono::milliseconds idleTimeout{15000};
         // Optional log hook: every decoded client message (after Hello) and connection changes.
@@ -75,6 +87,11 @@ public:
 
     std::uint16_t port() const { return port_; }
     std::size_t clientCount() const;
+
+    // Network-thread only: closes the connections the predicate selects (after a Bye with the reason).
+    void disconnectIf(const std::function<bool(const ClientInfo&)>& which, const std::string& reason);
+    // Network-thread only: the ready connections.
+    std::vector<ClientInfo> clients() const;
 
     // Network-thread only: apply an engine-side change and broadcast the delta immediately.
     void publishNow(const std::vector<proto::Change>& changes, const std::vector<std::string>& removed = {},

@@ -1,14 +1,17 @@
 // mixd: audio engine process. Owns the parameter tree (control server on TCP 47800), mixes up to 64
 // tracks from WASAPI input devices to output devices, sends meters, and writes the tracks the capture
-// output records to shared memory for capd.
+// output records to shared memory for capd. On the LAN it serves paired remote controllers, sends and
+// receives audio streams (UDP 47810) and finds other engines by mDNS (docs/spec/protocol.md 8, 10).
 //
-//   mixd [--port N] [--bind ADDR] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
-//        [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]
+//   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
+//        [--media-port N] [--lan-store FILE] [--no-discovery]
+//        [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--quiet] [--list-devices] [--version]
 
 #include "src/controller.hpp"
 #include "src/device_manager.hpp"
 #include "src/engine.hpp"
 #include "src/fake_backend.hpp"
+#include "src/lan_service.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/shmaudio/layout.hpp"
@@ -33,11 +36,22 @@ static std::uint32_t currentPid() { return static_cast<std::uint32_t>(getpid());
 namespace {
 
 int usage() {
-    std::cerr << "usage: mixd [--port N] [--bind ADDR] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]\n"
-                 "            [--bridge-ms MS] [--test-tone HZ] [--quiet] [--list-devices] [--version]\n"
+    std::cerr << "usage: mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices]\n"
+                 "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
+                 "            [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--quiet] [--list-devices]\n"
+                 "            [--version]\n"
+                 "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
+                 "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
+                 "  --allow-remote  accept LAN clients without pairing (development only)\n"
+                 "  --media-port    UDP port of the LAN audio streams (default 47810)\n"
+                 "  --lan-store     file with the server id and pairings (default %APPDATA%\\DesktopCapture\\mixd-lan.txt)\n"
                  "  --fake-devices  in-process test devices instead of WASAPI (always on outside Windows)\n"
                  "  --bridge-ms     minimum latency of the clock bridge to non-clock devices (default: automatic)\n"
-                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n";
+                 "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n"
+                 "  --test-pulse    make the tone (1 kHz unless --test-tone) a 50 ms burst at every multiple of\n"
+                 "                  SEC seconds of QPC time (A/V sync check with dc-av-flash)\n"
+                 "  --no-asio       do not list or open ASIO drivers\n"
+                 "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
 
@@ -48,11 +62,13 @@ int main(int argc, char** argv) {
     control::ControlServer::Options opt;
     opt.port = proto::kDefaultControlPort;
     opt.serverName = "mixd";
-    opt.serverId = "mixd";
+    opt.bindAddress = "0.0.0.0";
     opt.sessionId = std::random_device{}();
     mixd::DeviceManager::Options devOpt;
     mixd::Controller::Options ctlOpt;
-    bool fake = false, useShm = true, quiet = false, list = false;
+    mixd::LanService::Options lanOpt;
+    lanOpt.storePath = mixd::LanStore::defaultPath();
+    bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, asioDrivers = true;
     std::string shmSuffix;
 
     for (int i = 1; i < argc; ++i) {
@@ -70,6 +86,10 @@ int main(int argc, char** argv) {
         } else if (a == "--port") opt.port = static_cast<std::uint16_t>(std::stoi(next()));
         else if (a == "--bind") opt.bindAddress = next();
         else if (a == "--allow-remote") opt.allowRemote = true;
+        else if (a == "--local-only") localOnly = true;
+        else if (a == "--media-port") lanOpt.mediaPort = static_cast<std::uint16_t>(std::stoi(next()));
+        else if (a == "--lan-store") lanOpt.storePath = next();
+        else if (a == "--no-discovery") lanOpt.discovery = false;
         else if (a == "--fake-devices") fake = true;
         else if (a == "--no-shm") useShm = false;
         else if (a == "--shm-suffix") shmSuffix = next();
@@ -77,24 +97,34 @@ int main(int argc, char** argv) {
         else if (a == "--test-tone") {
             ctlOpt.build.testToneHz = std::stod(next());
             ctlOpt.build.testToneGain = 0.1f;
+        } else if (a == "--test-pulse") {
+            ctlOpt.build.testPulseSeconds = std::stod(next());
+            ctlOpt.build.testToneGain = 0.1f;
         } else if (a == "--quiet") quiet = true;
         else if (a == "--list-devices") list = true;
+        else if (a == "--no-asio") asioDrivers = false;
         else return usage();
     }
-    if (opt.allowRemote && opt.bindAddress == "127.0.0.1") opt.bindAddress = "0.0.0.0";
+    if (localOnly) opt.bindAddress = "127.0.0.1";
     ctlOpt.verbose = !quiet;
+    lanOpt.verbose = !quiet;
 
     try {
         std::unique_ptr<mixd::DeviceBackend> backend;
 #ifdef _WIN32
-        if (!fake) backend = mixd::makeWasapiBackend();
+        if (!fake) backend = mixd::makeWasapiBackend(asioDrivers);
+#else
+        (void)asioDrivers;
 #endif
         if (!backend) backend = std::make_unique<mixd::FakeBackend>();
 
         if (list) {
             for (const auto& d : backend->enumerate())
                 std::cout << (d.input ? "in  " : "out ") << (d.connected ? "ok   " : "gone ") << (d.isDefault ? "* " : "  ")
-                          << d.channels << "ch  " << d.name << "  [" << d.id << "]\n";
+                          << d.channels << "ch " << (d.sampleRate ? std::to_string(d.sampleRate) + "Hz  " : std::string("  "))
+                          << (d.asio ? "asio " : d.virtualCable ? "vmic " : "") << d.name << "  [" << d.id << "]\n";
+            for (const auto& p : backend->enumerateProcesses())
+                std::cout << "app " << p.exe << "  pid " << p.pid << (p.title.empty() ? "" : "  \"" + p.title + "\"") << "\n";
             return 0;
         }
 
@@ -112,6 +142,15 @@ int main(int argc, char** argv) {
 
         asio::io_context io;
         proto::ParamStore store;
+        std::unique_ptr<mixd::LanService> lan;
+        if (!localOnly) {
+            lan = std::make_unique<mixd::LanService>(io, lanOpt);
+            opt.serverId = lan->serverId();
+            opt.authorize = [&lan](const proto::Hello& h, const control::ClientInfo& c) { return lan->authorize(h, c); };
+            ctlOpt.lan = lan.get();
+        } else {
+            opt.serverId = "mixd";
+        }
         mixd::Controller* controller = nullptr;
         opt.onDelta = [&controller](const proto::Delta& d) {
             if (controller) controller->onDelta(d);
@@ -131,6 +170,7 @@ int main(int argc, char** argv) {
 
         server.start();
         ctl.start(devices.enumerateNow());
+        if (lan) lan->start(server, server.port(), [&ctl] { ctl.portsChanged(); });
         controller = &ctl;
         devices.start([&ctl](const mixd::DeviceManager::State& s) { ctl.onDeviceState(s); });
         std::cout << "mixd " << kVersionString << " listening on " << opt.bindAddress << ":" << server.port()
@@ -139,6 +179,7 @@ int main(int argc, char** argv) {
 
         asio::signal_set signals(io, SIGINT, SIGTERM);
         signals.async_wait([&](const asio::error_code&, int) {
+            if (lan) lan->stop();
             ctl.stop();
             server.stop();
             asio::post(io, [&] { io.stop(); });
@@ -146,6 +187,7 @@ int main(int argc, char** argv) {
         io.run();
         controller = nullptr;
         devices.stop(); // stops every stream before the engine goes away
+        lan.reset();
         std::cout << "mixd stopped" << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";

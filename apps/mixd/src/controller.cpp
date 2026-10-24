@@ -1,4 +1,5 @@
 #include "controller.hpp"
+#include "lan_service.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/control/video_methods.hpp"
@@ -50,7 +51,7 @@ std::optional<std::int64_t> intArg(const Args& args, const char* key) {
 
 std::string trackBase(int n) { return "/track/" + std::to_string(n); }
 
-std::string apiOf(const DeviceInfo& d) { return d.virtualCable ? "vmic" : "wasapi"; }
+std::string apiOf(const DeviceInfo& d) { return d.asio ? "asio" : d.virtualCable ? "vmic" : "wasapi"; }
 
 bool samePorts(const PortTable& a, const PortTable& b) { return a.inputs == b.inputs && a.outputs == b.outputs; }
 
@@ -89,6 +90,7 @@ std::vector<Change> Controller::deviceChanges(const std::vector<DeviceInfo>& dev
         c.push_back({base + "/channels", std::int64_t{std::clamp(d.channels, 0, 64)}});
         c.push_back({base + "/connected", d.connected});
         c.push_back({base + "/api", apiOf(d)});
+        c.push_back({base + "/sample_rate", std::int64_t{std::clamp(d.sampleRate, 0, 384000)}});
     }
     return c;
 }
@@ -108,6 +110,7 @@ void Controller::seed(const std::vector<DeviceInfo>& devices) {
 
     for (const auto& x : deviceChanges(devices)) c.push_back(x);
     deviceList_ = devices;
+    for (const auto& d : devices) known_[d.id] = {d.name, d.input};
 
     for (const auto& m : masterDefaults()) c.push_back(m);
     for (const auto& d : devices)
@@ -140,16 +143,20 @@ void Controller::registerMethods() {
 
 void Controller::onDelta(const Delta& delta) {
     control::followVideoDelta(server_, delta);
+    if (options_.lan) options_.lan->onDelta(delta); // first, so new LAN ports are there for the plan
     // values the engine itself reports (load, counters, device lists, derived states) do not change
     // the mix; everything else might
     auto reportOnly = [](const std::string& path) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
-                                                "/capture/error", "/video/"};
+                                                "/capture/error", "/video/", "/lan/", "/remote/"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
-        return path.size() > 12 && path.compare(path.size() - 12, 12, "/input/state") == 0;
+        auto endsWith = [&](std::string_view tail) {
+            return path.size() > tail.size() && path.compare(path.size() - tail.size(), tail.size(), tail) == 0;
+        };
+        return endsWith("/input/state") || endsWith("/input/lan_delay_ms");
     };
     bool relevant = !delta.removed.empty() &&
                     std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) { return !reportOnly(r + "/"); });
@@ -170,7 +177,9 @@ void Controller::scheduleRebuild() {
 void Controller::rebuild() {
     const auto& tree = server_.store().tree();
     devices_.setDemand(deviceDemand(tree));
-    auto result = buildPlan(tree, ports_, ++generation_, options_.build);
+    PortTable ports = ports_;
+    if (options_.lan) options_.lan->addPorts(ports);
+    auto result = buildPlan(tree, ports, ++generation_, options_.build);
     engine_.setPlan(std::move(result.plan));
     engine_.collectRetired();
 
@@ -204,7 +213,16 @@ void Controller::onDeviceState(const DeviceManager::State& state) {
 }
 
 void Controller::applyDeviceState(const DeviceManager::State& state) {
-    if (state.devices != deviceList_) publishDevices(state.devices);
+    if (state.devices != deviceList_) {
+        publishDevices(state.devices);
+        rematch();
+    }
+    if (state.processes != processList_) publishProcesses(state.processes);
+    for (const auto& e : state.events) {
+        if (options_.verbose)
+            std::cout << clockStamp() << e.name << ": " << e.kind << " " << e.label << " [" << e.id << "]" << std::endl;
+        server_.broadcastEventNow({e.name, {{"id", e.id}, {"name", e.label}, {"kind", e.kind}}});
+    }
     server_.publishNow({{"/system/clock_active", state.clockActive},
                         {"/system/latency_ms", std::round(state.latencyMs * 100.0) / 100.0}});
     if (state.errors != lastErrors_) {
@@ -228,8 +246,35 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
     }
 }
 
+void Controller::rematch() {
+    const auto r = rematchDevices(server_.store().tree(), deviceList_, known_);
+    if (r.changes.empty()) return;
+    server_.publishNow(r.changes);
+    for (const auto& m : r.moved) {
+        if (options_.verbose)
+            std::cout << clockStamp() << "device rematched by name: " << m.name << " [" << m.oldId << "] -> [" << m.newId << "]"
+                      << std::endl;
+        server_.broadcastEventNow({"device.rematched", {{"old_id", m.oldId}, {"id", m.newId}, {"name", m.name}}});
+    }
+    scheduleRebuild();
+}
+
+void Controller::publishProcesses(const std::vector<ProcessInfo>& processes) {
+    processList_ = processes;
+    std::vector<Change> c;
+    int n = 0;
+    for (const auto& p : processes) {
+        const std::string base = "/devices/process/" + std::to_string(++n);
+        c.push_back({base + "/exe", p.exe});
+        c.push_back({base + "/pid", static_cast<std::int64_t>(p.pid)});
+        c.push_back({base + "/title", p.title});
+    }
+    server_.publishNow(c, {"/devices/process"});
+}
+
 void Controller::publishDevices(const std::vector<DeviceInfo>& devices) {
     deviceList_ = devices;
+    for (const auto& d : devices) known_[d.id] = {d.name, d.input};
     server_.publishNow(deviceChanges(devices), {"/devices/input", "/devices/output"});
     if (options_.verbose) {
         std::cout << "devices:" << std::endl;
@@ -273,6 +318,7 @@ void Controller::scheduleStats() {
     statsTimer_.async_wait([this](asio::error_code ec) {
         if (ec || stopped_) return;
         engine_.collectRetired();
+        if (options_.lan) options_.lan->tick();
         const auto glitches = devices_.glitches();
         server_.publishNow({{"/system/cpu_load", std::round(engine_.cpuLoad() * 100.0) / 100.0},
                             {"/system/xruns", static_cast<std::int64_t>(glitches)}});
@@ -298,6 +344,7 @@ std::optional<std::string> strArg(const Args& args, const char* key) {
 } // namespace
 
 void Controller::onClient(const control::ClientInfo& client, bool connected) {
+    if (options_.lan) options_.lan->onClient(client, connected);
     if (!isCapd(client)) return;
     captureClients_ += connected ? 1 : -1;
     if (connected || captureClients_ > 0) return;

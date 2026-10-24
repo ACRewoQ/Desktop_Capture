@@ -1,7 +1,7 @@
 import QtQuick
 
 // One mixer strip: name, input, low / high cut, pan, meter + fader, mute / solo. The same item draws
-// the master strip (isMaster: output instead of input, no solo, no menu).
+// the master strip (isMaster: output instead of input, no solo; the name opens the output picker).
 Rectangle {
     id: strip
 
@@ -29,6 +29,7 @@ Rectangle {
     property bool isMaster: false
 
     signal menuRequested(int row, string name)
+    signal outputRequested()
 
     objectName: (isMaster ? "masterStrip" : "strip_") + (isMaster ? "" : index)
     width: Theme.stripWidth
@@ -64,8 +65,7 @@ Rectangle {
         }
         TapHandler {
             id: headerTap
-            enabled: !strip.isMaster
-            onTapped: strip.menuRequested(strip.index, strip.name)
+            onTapped: strip.isMaster ? strip.outputRequested() : strip.menuRequested(strip.index, strip.name)
         }
     }
 
