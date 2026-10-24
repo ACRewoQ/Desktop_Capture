@@ -192,8 +192,11 @@ void ControlServer::removeSession(std::uint64_t id) {
     auto it = sessions_.find(id);
     if (it == sessions_.end()) return;
     if (options_.log) options_.log(it->second->info, "disconnected");
-    if (it->second->ready) --readyClients_;
+    const bool wasReady = it->second->ready;
+    const ClientInfo info = it->second->info;
+    if (wasReady) --readyClients_;
     sessions_.erase(it);
+    if (wasReady && options_.onClient) options_.onClient(info, false);
 }
 
 namespace {
@@ -229,7 +232,7 @@ void ControlServer::onMessage(const std::shared_ptr<Session>& s, Message msg) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, Set>) {
                 auto outcome = store_.applySet(m, s->info.name);
-                if (outcome.delta) broadcast(*outcome.delta);
+                if (outcome.delta) emitDelta(*outcome.delta);
                 s->send(outcome.result);
             } else if constexpr (std::is_same_v<T, Call>) {
                 handleCall(s, m);
@@ -278,6 +281,7 @@ void ControlServer::handleHello(const std::shared_ptr<Session>& s, const Hello& 
     w.sessionId = options_.sessionId;
     s->send(w);
     s->send(store_.snapshot());
+    if (options_.onClient) options_.onClient(s->info, true);
 }
 
 const ControlServer::CallHandler* ControlServer::findHandler(const std::string& method) const {
@@ -316,7 +320,12 @@ void ControlServer::broadcast(const Message& msg) {
 
 void ControlServer::publishNow(const std::vector<Change>& changes, const std::vector<std::string>& removed,
                                std::uint64_t originId, const std::string& originClient) {
-    if (auto delta = store_.publish(changes, removed, originId, originClient)) broadcast(*delta);
+    if (auto delta = store_.publish(changes, removed, originId, originClient)) emitDelta(*delta);
+}
+
+void ControlServer::emitDelta(const Delta& delta) {
+    broadcast(delta);
+    if (options_.onDelta) options_.onDelta(delta);
 }
 
 void ControlServer::broadcastEventNow(const Event& ev) { broadcast(ev); }

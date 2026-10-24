@@ -163,6 +163,28 @@ TEST_CASE("bridge restarts cleanly after a producer discontinuity", "[clocksync]
     CHECK(out[100] == Catch::Approx(0.25f).margin(1e-3));
 }
 
+TEST_CASE("bridge recovers from a consumer stall without winding up", "[clocksync]") {
+    // G2: the clock device was reopened while an input kept streaming; the backlog was drained at the
+    // ratio limit for a minute and the wound-up controller then ran the FIFO dry
+    ClockBridge::Config cfg;
+    cfg.channels = 1;
+    cfg.targetFrames = 1344;
+    ClockBridge b(cfg);
+    std::vector<float> in(480, 0.25f), out(480);
+    double t = 0;
+    for (int i = 0; i < 12000; ++i, t += 0.01) {
+        b.push(in.data(), 480, t);
+        if (i >= 300 && i < 315) continue; // the consumer stalls for 150 ms
+        b.pull(out.data(), 480, t + 0.005);
+    }
+    const auto s = b.stats();
+    CHECK(s.state == ClockBridge::State::Running);
+    CHECK(s.underruns == 0);
+    CHECK(s.overruns == 0);
+    CHECK(s.fifoFrames < 2.0 * cfg.targetFrames);
+    CHECK(std::abs(s.ratio - 1.0) < 1e-4);
+}
+
 TEST_CASE("simulated devices stay locked without glitches", "[clocksync][sim]") {
     SimConfig s;
     s.seconds = 150;

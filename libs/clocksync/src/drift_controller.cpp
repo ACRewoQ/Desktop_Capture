@@ -39,7 +39,11 @@ double DriftController::update(double error, double dt) {
     const double ki = wn * wn / cfg_.nominalRate;
     const double kp = 2 * cfg_.damping * wn / cfg_.nominalRate;
 
-    integral_ = std::clamp(integral_ + ki * filtered_ * dt, -cfg_.maxDeviation, cfg_.maxDeviation);
+    // anti-windup: while the output is at its limit, integrate only what moves it back
+    const double unclamped = kp * filtered_ + integral_;
+    const double step = ki * filtered_ * dt;
+    const bool saturated = (unclamped >= cfg_.maxDeviation && step > 0) || (unclamped <= -cfg_.maxDeviation && step < 0);
+    if (!saturated) integral_ = std::clamp(integral_ + step, -cfg_.maxDeviation, cfg_.maxDeviation);
     deviation_ = std::clamp(kp * filtered_ + integral_, -cfg_.maxDeviation, cfg_.maxDeviation);
     return 1.0 + deviation_;
 }

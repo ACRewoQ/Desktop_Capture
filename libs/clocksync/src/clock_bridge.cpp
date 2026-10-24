@@ -64,11 +64,21 @@ void ClockBridge::pull(float* out, std::size_t count, double now) {
     }
 
     // producer frame index the next output frame corresponds to
-    const double readPos = double(fifo_.read()) - resampler_.bufferedFrames();
-    const double fill = dll_.positionAt(now) - readPos;
+    double readPos = double(fifo_.read()) - resampler_.bufferedFrames();
+    double fill = dll_.positionAt(now) - readPos;
     if (!haveSetpoint_) {
         setpoint_ = fill;
         haveSetpoint_ = true;
+    }
+    // a backlog the size of the whole target (the consumer stalled, e.g. its device was reopened):
+    // drop it now instead of draining it at the ratio limit for a minute
+    if (fill - setpoint_ > double(cfg_.targetFrames)) {
+        const auto excess = std::min<std::size_t>(std::size_t(fill - setpoint_), fifo_.available());
+        fifo_.skip(excess);
+        controller_.reset(true);
+        ++resyncs_;
+        readPos = double(fifo_.read()) - resampler_.bufferedFrames();
+        fill = dll_.positionAt(now) - readPos;
     }
     const double dt = std::max(now - lastPull_, 0.0);
     lastPull_ = now;
