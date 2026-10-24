@@ -38,6 +38,14 @@ void writeAudioHeader(std::uint8_t* out, const AudioHeader& h) {
     put<std::uint16_t>(out + 2, h.frames);
 }
 
+void writeVideoHeader(std::uint8_t* out, const VideoHeader& h) {
+    out[0] = static_cast<std::uint8_t>(h.codec);
+    out[1] = 0;
+    put<std::uint16_t>(out + 2, 0);
+    put<std::uint32_t>(out + 4, h.frameBytes);
+    put<std::uint32_t>(out + 8, h.offset);
+}
+
 std::vector<std::uint8_t> encodeReport(const Report& r) {
     std::vector<std::uint8_t> out(kReportBytes);
     std::uint8_t* p = out.data();
@@ -96,6 +104,19 @@ std::optional<AudioView> parseAudio(std::span<const std::uint8_t> payload) {
                                  (v.header.codec == AudioCodec::Pcm16 ? 2u : 3u);
     if (v.header.codec != AudioCodec::Opus && v.data.size() != pcmBytes) return std::nullopt;
     if (v.header.codec == AudioCodec::Opus && v.data.empty()) return std::nullopt;
+    return v;
+}
+
+std::optional<VideoView> parseVideo(std::span<const std::uint8_t> payload) {
+    if (payload.size() < kVideoHeaderBytes) return std::nullopt;
+    VideoView v;
+    if (payload[0] != static_cast<std::uint8_t>(VideoCodec::H264)) return std::nullopt;
+    v.header.codec = VideoCodec::H264;
+    v.header.frameBytes = get<std::uint32_t>(payload.data() + 4);
+    v.header.offset = get<std::uint32_t>(payload.data() + 8);
+    v.data = payload.subspan(kVideoHeaderBytes);
+    if (v.data.empty() || v.header.frameBytes == 0) return std::nullopt;
+    if (std::uint64_t(v.header.offset) + v.data.size() > v.header.frameBytes) return std::nullopt;
     return v;
 }
 

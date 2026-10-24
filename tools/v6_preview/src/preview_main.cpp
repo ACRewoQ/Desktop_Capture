@@ -5,9 +5,15 @@
 //   dc-v6-preview --listen PORT [options]   receiver for dc-v6-bench --send on another PC (e.g. run this on
 //                                           the remote device); reports receive -> present locally, the
 //                                           sender reports the full round trip
+//   dc-v6-preview --engine HOST[:PORT] [--pair CODE] [options]
+//                                           viewer of the LAN video stream (video/preview by default) of the
+//                                           engine at HOST: pairs once with the code the engine shows
+//                                           (/remote/pairing/start), then subscribes; dc-v6-bench --send-lan
+//                                           on the engine PC is the sender until capd sends the real mix
 //   --fullscreen                            borderless full screen
 
 #include "common.hpp"
+#include "lan_link.hpp"
 #include "options.hpp"
 #include "pipeline.hpp"
 #include "stats.hpp"
@@ -36,18 +42,24 @@ struct Session {
     std::unique_ptr<ReceiverPipeline> rx;
     std::unique_ptr<SenderPipeline> tx;
     std::unique_ptr<TcpReceiver> link;
+    std::unique_ptr<LanVideoViewer> viewer;
     VideoItem* item = nullptr;
     std::int64_t cpu0 = 0, wall0 = 0;
     bool finished = false;
 
     void start(const LUID& luid) {
-        const bool listen = opt.listenPort > 0;
+        const bool listen = opt.listenPort > 0 || !opt.engine.empty();
         stats = std::make_unique<Stats>(Presented, listen ? 0 : static_cast<std::uint64_t>(opt.warmup));
         rx = std::make_unique<ReceiverPipeline>(opt.pipe, *stats, &luid, [this](std::uint64_t) {
             QMetaObject::invokeMethod(item, &QQuickItem::update, Qt::QueuedConnection);
         });
         QString info;
-        if (listen) {
+        if (!opt.engine.empty()) {
+            item->attach(&rx->ring(), stats.get(), nullptr);
+            viewer = std::make_unique<LanVideoViewer>(LanVideoViewer::Options{opt.engine, opt.stream, opt.pairCode},
+                                                      [this](EncodedUnit&& u) { rx->push(std::move(u)); });
+            info = QStringLiteral("LAN %1 from %2").arg(QString::fromStdString(opt.stream), QString::fromStdString(opt.engine));
+        } else if (listen) {
             link = std::make_unique<TcpReceiver>(opt.listenPort, [this](EncodedUnit&& u) { rx->push(std::move(u)); });
             item->attach(&rx->ring(), stats.get(), [this](const AckTimes& a) { link->sendAck(a); });
             info = QStringLiteral("listening on TCP %1").arg(opt.listenPort);
@@ -77,9 +89,11 @@ struct Session {
         if (item) item->detach();
         if (tx) tx->stop();
         link.reset();
+        if (viewer) std::printf("%s\n", viewer->status().c_str());
+        viewer.reset();
         if (rx) rx->stop();
         if (!stats) return;
-        const bool listen = opt.listenPort > 0;
+        const bool listen = opt.listenPort > 0 || !opt.engine.empty();
         std::string title = opt.label;
         if (title.empty())
             title = listen ? "dc-v6-preview receiver (receive -> present)" : "dc-v6-preview local (gen -> present)";
@@ -112,7 +126,7 @@ struct Session {
 int main(int argc, char** argv) {
     CliOptions opt;
     if (!parseCli(argc, argv, opt) || opt.help) {
-        std::cout << "usage: dc-v6-preview [--listen PORT] [--fullscreen] [options]\n"
+        std::cout << "usage: dc-v6-preview [--listen PORT | --engine HOST[:PORT] [--pair CODE]] [--fullscreen] [options]\n"
                   << kCommonUsage;
         return opt.help ? 0 : 2;
     }
@@ -182,8 +196,10 @@ int main(int argc, char** argv) {
     QObject::connect(&live, &QTimer::timeout, [&] {
         if (!session.stats) return;
         item->setStatsText(QString::fromStdString(session.stats->liveLine()));
-        if (++ticks % 4 == 0)
+        if (++ticks % 4 == 0) {
             std::cout << "  " << session.stats->liveLine() << " | " << item->counters() << std::endl;
+            if (session.viewer) std::cout << "  " << session.viewer->status() << std::endl;
+        }
         if (session.rx && !session.rx->error().empty()) {
             exitCode = 1;
             QCoreApplication::quit();

@@ -6,6 +6,10 @@ add_library(dc_lanmedia
     src/net_sim.cpp
     src/packet.cpp
     src/udp_transport.cpp
+    src/video_link.cpp
+    src/video_receiver.cpp
+    src/video_sender.cpp
+    src/video_sim.cpp
 )
 add_library(dc::lanmedia ALIAS dc_lanmedia)
 target_include_directories(dc_lanmedia PUBLIC include)
