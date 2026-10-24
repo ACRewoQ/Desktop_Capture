@@ -1,4 +1,5 @@
 #include "dc/protocol/param_store.hpp"
+#include "dc/protocol/fx.hpp"
 #include "dc/protocol/routing.hpp"
 #include "dc/protocol/video.hpp"
 
@@ -8,9 +9,15 @@ namespace dc::proto {
 
 ValidationError defaultSemanticValidator(const ParamTree& after, const std::vector<Change>& changes) {
     if (auto err = validateVideo(after, changes)) return err;
+    std::vector<std::string> fx;
+    bool routing = false;
     for (const auto& c : changes) {
-        if (c.path.size() > 7 && c.path.compare(c.path.size() - 7, 7, "/target") == 0) return validateRouting(after);
+        if (c.path.size() > 7 && c.path.compare(c.path.size() - 7, 7, "/target") == 0) routing = true;
+        if (c.path.find("/fx/") != std::string::npos) fx.push_back(c.path);
     }
+    if (routing)
+        if (auto err = validateRouting(after)) return err;
+    if (!fx.empty()) return validateFxChanges(after, fx);
     return {};
 }
 

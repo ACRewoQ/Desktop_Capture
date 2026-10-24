@@ -73,13 +73,16 @@ record options:
   --output FILE           file to write (default: <dir>/<date_time>.<container>)
   --dir DIR               folder (default: the Videos folder)
   --container mkv|mp4     default mkv
-  --encoder auto|nvenc|amf|qsv|mf   default auto (NVENC, AMF, QSV, Media Foundation: first that opens)
+  --encoder auto|nvenc|amf|qsv|mf|x264   default auto (NVENC, AMF, QSV, Media Foundation, x264: first that opens)
   --codec h264|hevc|av1   default h264 (above 2560x1440 H.264 is recorded as HEVC)
   --size WxH              recorded size (default 1920x1080)
   --fps N                 recorded frame rate (default 60)
   --rc cbr|vbr|cqp        rate control (default vbr)
   --bitrate KBPS          default 20000
   --quality Q             cqp quality 0-51 (default 23)
+  --gop N                 frames between keyframes (default: 2 seconds)
+  --low-latency           the encoder's low-latency tuning (as the preview stream uses it)
+  --force-keyframes S     request a keyframe every S seconds (tests the preview's keyframe request)
   --mix-size WxH          video mix (canvas) size (default: the recorded size)
   --mix-fps N             video mix frame rate (default: the recorded rate)
   --source wgc|dda        capture API (default wgc; dda = Desktop Duplication, avoids the Win10 yellow border)
@@ -121,11 +124,13 @@ int cmdList() {
         for (const auto& c : listCameras()) std::cout << "  " << c.name << "\n      id " << c.id << "\n";
         MFShutdown();
     }
-    std::cout << "\nhardware encoders (opened at 1280x720 on the primary monitor's GPU):\n";
+    std::cout << "\nencoders (opened at 1280x720 on the primary monitor's GPU):\n";
     const auto primary = findMonitor("");
     if (!primary) throw std::runtime_error("no monitor attached to the desktop");
     const Device dev = createDevice(primary->adapter.Get());
-    for (const auto& name : availableHwEncoders()) {
+    auto names = availableHwEncoders();
+    names.emplace_back("libx264");
+    for (const auto& name : names) {
         VideoSettings v;
         v.width = 1280;
         v.height = 720;
@@ -246,6 +251,9 @@ int cmdRecord(const std::vector<std::string>& args) {
         else if (a == "--rc") s.video.rateControl = next();
         else if (a == "--bitrate") s.video.bitrateKbps = std::atoi(next().c_str());
         else if (a == "--quality") s.video.quality = std::atoi(next().c_str());
+        else if (a == "--gop") s.video.gopFrames = std::atoi(next().c_str());
+        else if (a == "--low-latency") s.video.lowLatency = true;
+        else if (a == "--force-keyframes") s.forceKeyframeSeconds = std::atof(next().c_str());
         else if (a == "--mix-size") {
             if (!parseSize(next(), s.mix.width, s.mix.height)) throw std::runtime_error("bad --mix-size");
             mixSizeSet = true;

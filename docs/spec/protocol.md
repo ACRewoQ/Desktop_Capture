@@ -15,7 +15,8 @@
 |---|---|---|
 | 制御 | 設定の取得・変更、コマンド、通知 | TCP、既定ポート 47800 |
 | メーター | レベルメーター | UDP、約 30Hz、クライアントが指定したポートへ |
-| 検出 | LAN 内のエンジンの自動検出 | mDNS（`_dcmix._tcp`）※P4 で実装 |
+| 検出 | LAN 内のエンジンの自動検出 | mDNS（`_dcmix._tcp`、8 章） |
+| メディア | LAN の音声・映像ストリーム | UDP（[lan-media.md](lan-media.md)、購読は 10 章） |
 
 ## 2. TCP の枠組み
 
@@ -54,8 +55,11 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `/devices` | 入出力デバイス・音声を出しているアプリの一覧（読み取り専用） | A |
 | `/mixer`, `/track/#`, `/master`, `/cue` | ミキサー、トラック、ルーティング、エフェクト | A |
 | `/capture` | 出力先「デスクトップキャプチャ」：録画設定・状態・音声ストリーム割り当て | B |
+| `/recorder` | トラック別録音（WAV / FLAC）の設定・状態 | A3 |
+| `/sampler` | サンプラー（効果音パッド）のバンク・パッド | A3 |
 | `/video` | 映像ミックス、仮想カメラ、全画面表示、プレビュー | B |
 | `/remote` | リモコンの接続数・ペアリング | N / C |
+| `/lan` | LAN 送信ストリーム、購読、LAN 内の別の PC（相手） | N |
 
 ### 4.1 上限値
 
@@ -70,7 +74,12 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | シーン | 最大 32 |
 | レイヤー | 1 シーンあたり 32 |
 | 録画の音声ストリーム | 8（`/capture/audio/1`〜`8`） |
+| サンプラー | 8 バンク × 16 パッド（`/sampler/bank/1/pad/1`〜`/sampler/bank/8/pad/16`） |
 | リモコン同時接続 | 4 |
+| LAN 送信ストリーム（音声） | 8（`/lan/stream/1`〜`8`、出力先 `lan/1`〜`lan/8`） |
+| 購読 | 32（`/lan/sub/#`） |
+| 相手の PC の一覧 | 16（`/lan/peers/#`） |
+| ペアリング済みの相手 | 16（`/remote/paired/#`） |
 
 ### 4.2 トラック番号
 
@@ -87,7 +96,9 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `track/<n>` | 別のトラックの入力に足す | ○ | ○ | × |
 | `device/<id>` | 出力デバイス（`/devices/output/#/id`） | ○ | ○ | ○ |
 | `vmic/<id>` | 仮想マイク（VB-CABLE など） | ○ | ○ | ○ |
-| `lan/<stream>` | LAN メディア伝送の送信ストリーム | ○ | ○ | ○ |
+| `lan/<n>` | LAN 送信ストリーム `/lan/stream/<n>`（1〜8） | ○ | ○ | ○ |
+
+`lan/<n>` は 1〜8 の番号だけです（それ以外は `out_of_range`）。同じストリームへ複数のトラックが出力すると、出力デバイスと同じように足し合わせて送ります。
 
 エンジンは次を拒否します（`conflict`）：自分自身への出力、ループ（例：1→2→1）、マスターからトラックへの出力、センドからマスターへの送り。存在しないトラックを指すと `not_found` です。処理順は出力先のつながりから自動で決めます（`processingOrder()`）。トラックを削除すると、そのトラックを指していた出力先・センド・録画音声ストリームは `""` に戻ります。
 
@@ -109,7 +120,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 - シーンは全ミックスで共有します。ミックスごとに解像度が違ってもよいように、レイヤーの表示枠（`x`, `y`, `width`, `height`）はキャンバスの幅・高さを 1 とした割合で表します（全体 = `0, 0, 1, 1`）。はみ出し（負の値、1 超え）も可。ソースは枠の中に `fit`（縦横比を保って全体）、`fill`（縦横比を保って枠を埋める）、`stretch` で収めます。ソースの解像度が変わっても枠は変わりません。
 - クロップはソースの幅・高さに対する割合（左右・上下それぞれ 0〜1）で、収める前に切り取ります。
 - 色は整数で、背景・文字は `0xAARRGGBB`、クロマキーの色は `0xRRGGBB` です。
-- エンジンは次を拒否します（`not_found`）：存在しないソースを指すレイヤー、存在しないシーンを指す `program_scene` / `preview_scene`、存在しないミックスを指す出力先（`/capture/mix`、`/video/vcam/mix`、`/video/monitor/mix`、`/video/preview/mix`）。0 は「なし」です。
+- エンジンは次を拒否します（`not_found`）：存在しないソースを指すレイヤー、存在しないシーンを指す `program_scene` / `preview_scene`、存在しないミックスを指す出力先（`/capture/mix`、`/video/vcam/mix`、`/video/monitor/mix`、`/video/preview/mix`、`/video/lan/mix`）。0 は「なし」です。
 - ソースを削除すると、そのソースを出していたレイヤーも消えます。シーンを削除すると、それを指していた `program_scene` / `preview_scene` は 0 に、ミックスを削除すると、それを指していた出力先は 0 に戻ります。
 - `/video/mix/#/active` は、出力先のどれかがそのミックスを指している間 true です（エンジンが計算）。capd は出力先があるミックスだけを合成します。
 - 起動直後のツリー：ソース 1 = 主モニター、シーン 1 = そのソースをキャンバス全体に出すレイヤー 1 枚、ミックス 1 の本番・プレビュー = シーン 1。
@@ -124,7 +135,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 
 | 番号 | 名前 | 向き | body のキー |
 |---|---|---|---|
-| 1 | Hello | C→S | `proto` int, `client` str, `role` int（0 = ローカル、1 = リモコン、2 = サービス）, `meter_port` int, `pair_code` str, `token` str |
+| 1 | Hello | C→S | `proto` int, `client` str, `client_id` str, `role` int（0 = ローカル、1 = リモコン、2 = サービス、3 = 相手のエンジン）, `meter_port` int, `pair_code` str, `token` str |
 | 2 | Welcome | S→C | `proto` int, `server` str, `server_id` str, `session` int, `token` str |
 | 3 | Snapshot | S→C | `rev` int, `params` map（パス→値） |
 | 4 | Delta | S→C | `rev` int, `origin` int, `origin_client` str, `changes` map（パス→値）, `removed` [str] |
@@ -149,7 +160,9 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 最初のメッセージは必ず `Hello`。それ以外が来たら `Error(bad_request)` で切断します。
 - `proto` が違えば `Error(unsupported_version)` で切断します。
 - `session` はエンジンの起動ごとに変わります。クライアントは再接続時に値が変わっていたら、手元の状態をすべて捨ててスナップショットから作り直します。
-- ループバック（127.0.0.1 / ::1）以外からの接続は、ペアリング機能（P4）ができるまで既定で拒否します（`unauthorized`）。リモコンの 5 台目は `limit_reached` で拒否します。
+- ループバック（127.0.0.1 / ::1）以外からの接続は、role がリモコン（1）か相手のエンジン（3）で、`token` が有効か、受付中のペアリングコードが合っているときだけ受け付けます（8 章）。それ以外は `unauthorized` です。開発用の `mixd --allow-remote` はこの検査を省きます。リモコンの 5 台目は `limit_reached` で拒否します（相手のエンジンは数えません）。
+- `client_id` はクライアントのインストールごとに固定の id です（相手のエンジンは自分の `server_id`）。ペアリングの記録に使います。空でも接続できますが、ペアリングはできません。
+- role = 3（相手のエンジン）の接続は、ツリーを読むことと `/lan/subscribe`・`/lan/unsubscribe`・`/session/resync` だけができます。Set と他の Call は `unauthorized` です。
 
 ### 5.2 リビジョン（rev）とデルタ
 
@@ -179,12 +192,23 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/mixer/track/move` | `track`:int, `position`:int | nil | P0 | 並び順の変更 |
 | `/capture/record/start` | なし | nil | P0 | 録画開始。録画中なら `conflict` |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止。録画中でなければ `conflict` |
-| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
-| `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え |
+| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int?, `reason`:str? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
+| `/recorder/start` | なし | str（テイクのフォルダー） | P3 | トラック別録音の開始（5.4.2） |
+| `/recorder/stop` | なし | nil | P3 | トラック別録音の停止。録音中でなければ `conflict` |
+| `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
+| `/sampler/release` | `pad`:int, `bank`:int? | nil | P3 | パッドを離す |
+| `/sampler/stop` | `bank`:int?（なし = 全バンク） | nil | P3 | 再生中のパッドを止める |
+| `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
+| `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
 | `/video/source/add` ほか | 一覧参照 | | P3 | ビデオミキサーのソース・シーン・レイヤー・ミックスの追加・削除・並べ替え、`/video/mix/#/take`（4.4） |
 | `/video/source/report`, `/video/devices/report` | 4.4 参照 | nil | P3 | capd からの報告。role = サービス以外は `unauthorized` |
-| `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P4 | ペアリング受付 |
+| `/video/output/report` | `output`:str（`vcam` / `monitor`）, `state`:str, `detail`:str? | nil | P3 | capd から映像出力の状態を知らせる（5.4.4）。role = サービス以外は `unauthorized` |
+| `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P3 | ペアリング受付（8 章） |
+| `/remote/unpair` | `id`:str | nil | P3 | ペアリングの取り消し。つながっていれば切断する |
+| `/lan/subscribe` / `unsubscribe` | `stream`:str, `port`:int / `id`:int | int（購読番号）/ nil | P3 | ストリームの購読（10 章） |
+| `/lan/peers/pair` | `id`:str, `code`:str | nil | P3 | 相手の PC とペアリングする（8 章） |
+| `/lan/peers/forget` / `add` | `id`:str / `address`:str | nil | P3 | 相手の記録を消す / IP アドレスで手動追加 |
 
 未実装・未知のメソッドは `unknown_method` を返します。
 
@@ -200,8 +224,47 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `report idle` | `/capture/state` = `idle`、`capture.stopped` | |
 | capd 側の失敗（エンコーダーを開けない、ディスク満杯で安全停止など） | `/capture/state` = `error`、`/capture/error` = `error` | `/capture/report` `state="error"`, `error` |
 | 録画中（`starting` / `recording` / `stopping`）に capd の接続が切れた | `/capture/state` = `error`、`/capture/error` = "capture process disconnected" | |
+| capd が録画中にファイルを切り替えた（GPU リセットなど、P3） | `/capture/file` を新しいファイルに。`/capture/elapsed_ms` は数え続け、`capture.started` は送らない。`capture.segment` `file`, `reason` | 前のファイルを閉じ、新しいファイルを開いて `/capture/report` `state="recording"`, `file`, `reason` |
 
-`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
+`reason` は、録画中（`/capture/state` = `recording`）の `report recording` に付けたときだけ「ファイルの切り替え」の意味になります（`gpu_reset` など。UI は表示に使うだけ）。`recording` でないときの `reason` は無視します。`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
+
+#### 5.4.2 トラック別録音（レコーダー）
+
+エンジンが自分でファイルに書きます（capd は関係しません）。`/track/#/record/enabled`・`/master/record/enabled` が true のものを、`record/tap` の位置（pre = フェーダー前でトラックのチャンネル数、post = フェーダー後のステレオ）で、1 つのテイクフォルダーに 1 ファイルずつ書きます。
+
+- 開始：`/recorder/start`、または `/recorder/with_capture` が true のとき `/capture/state` が `recording` になった時点。録音対象がなければ `conflict`（"no track armed for recording"）、録音中なら `conflict`。録画に連動して始めたときに録音対象がなければ、何もしません。
+- 停止：`/recorder/stop`、または録画に連動して始めた録音は `/capture/state` が `recording` でなくなった時点（`stopping`・`idle`・`error`）。
+- フォルダー：`/recorder/directory`（`""` = ミュージック\Desktop Capture）の下に `/recorder/folder_name` の名前で作ります。同じ名前があれば `_2`、`_3` を付けます。ファイル名は `<番号2桁>_<表示名>.wav`（マスターは `00_Master`、トラックは `/track/#/` の番号。ファイル名に使えない文字は `_`）。
+- 形式：48kHz / 24bit の WAV か FLAC。WAV が 4GB を超えると RF64 に切り替えます。
+- 全ファイルは同じ音声ブロックから始まり、同じ長さで終わります（サンプル単位でそろう）。録音中に対象・タップ・チャンネル数を変えても次のテイクまで反映しません。録音中に削除したトラックや切断した入力は無音で続きます。
+- ディスク書き込みは別スレッドです。書き込みが間に合わずバッファがあふれた分は無音で埋めて長さを保ち、`/recorder/dropped_frames` に数えます。書き込みに失敗したら（ディスク満杯など）そこまでのファイルを正しく閉じて `/recorder/state` = `error`、`/recorder/error` に理由を入れます。
+
+#### 5.4.3 サンプラー
+
+8 バンク × 16 パッドの効果音パッドです。サンプラーの音は、`/track/#/input/kind` = `sampler` のトラックに入ります（`input/source` が `""` なら全バンク、`"1"`〜`"8"` ならそのバンクだけ）。音量・パン・エフェクト・出力先はそのトラックで決めます。
+
+- `/sampler/bank/#/pad/#/file` を設定すると、エンジンは別スレッドで読み込みます（`state`：`loading` → `ready` か `error`）。WAV・FLAC・MP3・Ogg Vorbis を読み、48kHz のステレオに変換してメモリに置きます。1 ファイル 10 分まで。読み込み中や空のパッドの `trigger` は何もしません（エラーにもしません）。
+- `mode`：`oneshot` は押すと最後まで再生し、再生中に押すと頭から。`toggle` は押すたびに再生と停止。`hold` は押している間（`release` まで）だけ。`loop` は押すたびにループ再生と停止。停止と頭出しは数 ms のフェードでつなぎます。
+- 同時に鳴らせるのは 32 音まで。足りないときは一番古い音を止めます。
+- 再生中は `playing` が true になります（約 30Hz で更新）。再生中にファイルを差し替えるとその音は止まります。
+- `pad`・`bank` が範囲外なら `out_of_range` です。
+
+#### 5.4.4 映像出力の状態（仮想カメラ・全画面表示）
+
+仮想カメラ（`/video/vcam/*`）と全画面表示（`/video/monitor/*`）は capd が出します。capd は出力の状態が変わるたびに `/video/output/report` で知らせ、エンジンは `/video/<output>/state`・`/video/<output>/detail` に書きます（`detail` 省略 = `""`）。
+
+| `output` | `state` | 意味 |
+|---|---|---|
+| `vcam` | `off` | 出していない（`/video/vcam/mix` = 0、またはミックスがない） |
+| | `waiting` | 出しているが、カメラを開いているアプリがない |
+| | `active` | アプリがカメラを読んでいる |
+| | `unavailable` | 出せない（仮想カメラが未登録など）。`detail` に理由 |
+| `monitor` | `off` | 出していない（`/video/monitor/mix` = 0、またはミックスがない） |
+| | `active` | 表示中 |
+| | `no_display` | `/video/monitor/display` のモニターが見つからない。つながれば capd が自動で戻して `active` を送る |
+| | `error` | 表示できない。`detail` に理由。ほかの出力（録画・仮想カメラ）は止まらない |
+
+`output` か `state` が上の表にない値なら `bad_request` です。capd の接続が切れたら、エンジンは両方を `off`・`""` に戻します（capd は再接続したら今の状態を送り直します）。
 
 ### 5.5 Event（通知）
 
@@ -211,6 +274,8 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 |---|---|---|
 | `capture.started` | `file` | 録画開始 |
 | `capture.stopped` | `file`, `duration_ms` | 録画停止 |
+| `recorder.started` | `folder` | トラック別録音の開始 |
+| `recorder.stopped` | `folder`, `duration_ms`, `error`? | トラック別録音の停止 |
 | `capture.segment` | `file`, `reason` | GPU リセットなどで新しいファイルに切り替えた（P3） |
 | `device.lost` / `device.restored` | `id`, `name` | デバイスの切断・復帰（P3） |
 | `video.devices.refresh` | なし | `/video/devices/refresh` が呼ばれた。capd が一覧を送り直す（P3） |
@@ -220,6 +285,44 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - クライアントは 5 秒ごとに `Ping` を送ります。サーバーはすぐ `Pong` を返します。
 - サーバーは 15 秒間何も受信しなかった接続を切ります。
 - 切断されたクライアントは再接続し、スナップショットから作り直します。
+
+### 5.7 エフェクト
+
+各トラックとマスターに最大 16 個のエフェクトを挿入できます。処理順は `fx/1` → `fx/2` → …で、置き場所は Lo-Hi フィルターの後・録画の pre タップとフェーダーの前です（入力 → ローカット → ハイカット → エフェクト → [pre] → フェーダー → パン → [post]）。
+
+スロット `/track/#/fx/#`（マスターは `/master/fx/#`）の中身：
+
+| パス | 内容 |
+|---|---|
+| `type` | `eq4` / `comp` / `gate` / `reverb` / `delay` / `limiter`（内蔵）、`vst3:<id>`（`/plugins/#/id`） |
+| `name` | 表示名。内蔵は日本語名、VST3 はプラグイン名 |
+| `bypass` | バイパス（10ms で切り替え、バイパス中の VST3 は処理しない） |
+| `param/<キー>` | パラメーター（float）。内蔵はキーと範囲が決まっている（[protocol-params.md](protocol-params.md) の「エフェクトのパラメーター」表）。VST3 はキー `p<ParamID>`（VST3 の ParamID を 10 進で）、値は 0〜1 の正規化値 |
+| `status` | `ok`、`loading`（VST3 を読み込み中）、`failed`（読み込み失敗、理由は `error`）、`missing`（その VST3 がこの PC にない） |
+| `latency_samples` | エフェクトが足す遅延。トラック間の遅延補正はしない（ライブ用途のため。遅延のあるエフェクトを並列の経路に挿すと位相がずれる） |
+| `param_count` | パラメーターの総数 |
+| `editor` | VST3 のプラグイン画面をエンジンの PC に開く（true）・閉じる（false）。利用者が画面を閉じると false に戻る。内蔵エフェクトで true は `conflict` |
+
+コマンド：
+
+| メソッド | 引数 | 戻り値 | 説明 |
+|---|---|---|---|
+| `/track/#/fx/add` | `type`:str, `index`:int?（既定 末尾） | int（スロット番号） | 追加。`index` 以降は 1 つずつ後ろへずれる。16 個あれば `limit_reached`、知らない種別は `not_found`。VST3 は `status = loading` で追加され、読み込めたら `ok` とパラメーターが届く |
+| `/track/#/fx/remove` | `index`:int | nil | 削除。後ろのスロットは前に詰める |
+| `/track/#/fx/move` | `from`:int, `to`:int | nil | 並べ替え。番号は付け直す |
+| `/track/#/fx/#/params` | `offset`:int?（既定 0）, `count`:int?（既定 64、最大 256）, `keys`:str?（`,` 区切り） | str（JSON 配列） | パラメーターの情報。`keys` があればそのキーだけ、なければプラグインの並び順で `offset` から `count` 個 |
+
+マスターも同じ（`/master/fx/add` など）。スロット番号はトラック番号と違い固定 ID ではなく、削除・並べ替えのたびに 1 から振り直します（スロットの部分木を消して作り直すデルタが届きます）。
+
+`params` の戻り値は JSON の配列で、要素は `{"key", "name", "unit", "min", "max", "default", "value", "text", "steps", "log"}` です。`text` はプラグインが表示する値の文字列（例 `"-6.0 dB"`）、`steps` は 0 = 連続、2 以上 = 段階数、`log` は内蔵エフェクトの対数スライダー。VST3 の `min`/`max` は 0 と 1、`unit` はプラグインの申告するラベルです。
+
+VST3 のパラメーターは数万個あるものがあるので（V7）、ツリーには全部は載せません。載るのは、読み込み時のプラグインの並びで最初の 128 個、`params` で取得されたもの、プラグイン画面で動かされたもので、1 つのエフェクトにつき最大 1024 個です。ツリーにないパラメーターは `params` で取得してから Set します（取得したキーはそのデルタが `Result` より前に届きます）。プラグインの中で変わった値（画面での操作、プリセットの切り替え）もデルタで届きます。ホストが自動化用に用意しただけの空きスロット（名前が空や `#` で始まるもの）と MIDI CC 用のものは出しません。
+
+### 5.8 プラグイン（VST3）
+
+エンジンは起動時に前回のスキャン結果（キャッシュ）を読み、`/plugins/#` に一覧を載せます。`/plugins/scan` は標準の VST3 フォルダーと `/plugins/extra_dirs` を探し、新しいファイルと更新されたファイルだけを調べます（`rescan = true` で全部）。プラグインはスキャン用の子プロセスで 1 つずつ読み込むので、読み込みで落ちる・止まるプラグインがあってもエンジンは止まりません（`status` = `crashed` / `timeout`）。進み具合は `/plugins/scan/state`・`progress`・`current` で分かります。スキャン中にもう一度呼ぶと `conflict` です。
+
+`/plugins/#` の番号はスキャンのたびに名前順で振り直します。エフェクトの `type` には番号ではなく `id` を使います。
 
 ## 6. エラーコード
 
@@ -255,14 +358,52 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 
 `meter_id` は `/track/#/meter_id`、`/master/meter_id`（= 0）で対応づけます。
 
-## 8. 検出とペアリング（P4 で実装、ここでは方針のみ）
+## 8. 検出とペアリング
 
-- エンジンは mDNS でサービス `_dcmix._tcp` を広告します。TXT レコード：`proto=1`、`id=<server_id>`、`name=<PC名>`。
-- リモコンは初回、エンジン側の画面に表示された 6 桁コードを `Hello.pair_code` に入れて接続します。成功すると `Welcome.token` が返り、以後は `Hello.token` で接続します。
-- ローカル UI と capd はループバック接続なのでペアリング不要です。
+### 8.1 検出（mDNS / DNS-SD）
+
+- エンジンはサービス `_dcmix._tcp`（ポート = 制御の TCP ポート）を広告します。インスタンス名は `/lan/name`（空ならコンピューター名）。TXT レコード：`proto=1`、`id=<server_id>`、`name=<表示名>`。
+- エンジンは同じサービスを探し、見つけた相手（自分以外）を `/lan/peers/#` に載せます。mDNS が届かない相手（別のサブネット、VPN など）は `/lan/peers/add` で IP アドレスから追加できます（手動の相手は再起動後も残ります）。
+- `server_id` はインストールごとに 1 度だけ乱数で作り、設定フォルダーに保存します（`/lan/id` にも出します）。
+- Windows では OS の DNS-SD（`DnsServiceRegister` / `DnsServiceBrowse`）を使います。UDP 5353 を自分で開かないので、OS の mDNS とぶつからず、ファイアウォールの追加の許可も要りません。
+
+### 8.2 ペアリング
+
+ペアリングは「受け付ける側」と「つなぐ側」の 1 方向です。つないだ側（リモコン、または別の PC のエンジン）が、受け付けた側に接続し、そのストリームを受け取れるようになります。2 台の PC で双方向に送り合うときは、両方の PC でペアリングします。
+
+1. 受け付ける側の画面で `/remote/pairing/start` を呼ぶと 6 桁の数字が返り、`/remote/pairing/active` = true になります。受付は 2 分で終わり、1 台成功するか `/remote/pairing/stop` でも終わります。
+2. つなぐ側は Hello に `pair_code` と `client_id` を入れて接続します（相手のエンジンは role = 3。エンジンの UI からは `/lan/peers/pair` `id`, `code` を呼ぶと、エンジンが代わりに接続します）。
+3. コードが合えば、エンジンはトークン（128 ビットの乱数を 16 進 32 文字）を作って `Welcome.token` で返し、`client_id`・名前・role と一緒に保存して `/remote/paired/#` に載せます。つなぐ側はトークンを保存し、以後は `Hello.token` で接続します。
+4. コードが違うと `unauthorized` で切断します。5 回間違えると受付を終わります。
+5. `/remote/unpair` で取り消すと、そのトークンは使えなくなり、つながっていれば切断します。つなぐ側の相手一覧では `refused` になります。
+
+ローカル UI と capd はループバック接続なのでペアリング不要です。制御の TCP は暗号化しません（個人用の LAN での利用が前提）。
 
 ## 9. 互換性のルール
 
 - キーやパラメーターの**追加**は互換とみなします（受信側は知らないものを無視）。v1 のまま追加できます。
 - パラメーターの意味・型・範囲の変更、削除、メッセージ形式の変更は非互換です。`kProtocolVersion` を上げ、この仕様書と `protocol-params.md` を同じ PR で更新します。
+- Hello の role = 3（相手のエンジン）と `client_id` は P3 で足しました。古いエンジンは知らない role を `bad_request` で拒否するので、LAN でつなぐ PC は同じ版にそろえてください。
 - 各レーンがパラメーターを足すときは `schema_v1.cpp` に追加し、`protocol-params.md` を生成し直します（`schema_doc_up_to_date` テストが食い違いを検出します）。
+
+## 10. LAN ストリームの購読
+
+LAN の音声・映像は、受け取る側が送る側のエンジンに制御プロトコルで申し込み、送る側がその宛先へ UDP で送ります（パケットの形式は [lan-media.md](lan-media.md)）。受信者のいないストリームは送らず、映像はエンコードもしません。
+
+| ストリーム | 中身 | 送るプロセス（UDP の送り元） |
+|---|---|---|
+| `audio/<n>` | 出力先 `lan/<n>` に出された音声（`/lan/stream/<n>` の設定） | mixd（UDP 47810） |
+| `video/preview` | リモコンのプレビュー（`/video/preview/*`） | capd（UDP 47811） |
+| `video/lan` | 映像ミックスの出力先「LAN 送信」（`/video/lan/*`） | capd（UDP 47811） |
+
+- `/lan/subscribe` `stream`, `port` で申し込みます。送り先は「制御の接続元の IP アドレス」の `port`（受け取る側の UDP ポート）です。戻り値の購読番号は `/lan/sub/<番号>` に対応し、`/lan/unsubscribe` `id` でやめます。購読は**その制御接続が切れると自動で消えます**。同じ接続から同じストリーム・同じポートへの申し込みは、前の番号を返します。32 件を超えると `limit_reached` です。
+- エンジンは購読を `/lan/sub/#`（`stream`、`address`、`client`）に載せます。capd は `video/*` の購読をツリーで追い、プレビュー・LAN 送信の映像をエンコードしてその宛先へ送ります。`/lan/stream/#/subscribers` は音声ストリームごとの購読数です。
+- 受信レポート（lan-media.md 2.4）はパケットの送り元へ返すので、映像のキーフレーム要求は capd に、音声の統計は mixd に届きます。
+
+### 10.1 別の PC の音声をトラックに入れる
+
+- `/track/#/input/kind` = `lan`、`/track/#/input/source` = `<相手の id>/<n>`（相手の `/lan/peers/#/id` と、相手の `audio/<n>`）。
+- エンジンはペアリング済みで見つかっている相手に自分から接続し（role = 3）、相手のストリーム名を `/lan/peers/#/stream/#` に写します。トラックが参照しているストリームだけを購読し、参照がなくなればやめます。
+- 相手から同じ UDP の送り元で複数のストリームが届くので、受け取る側は相手の `/lan/stream/<n>/stream_id` を見てパケットを振り分けます（コーデックの変更などで送信を開き直すと変わります）。
+- 受け取った音声は相手との時計のずれを補正して（lan-media.md 3 章）、エンジンのクロックで鳴らします。`/track/#/input/lan_buffer_ms` は受信バッファの目標（0 = 自動）、`/track/#/input/lan_delay_ms` は今のバッファ量です。
+- 相手がいない・受信が途絶えた間は無音で、`/track/#/input/state` = `disconnected` になります。相手が戻れば自動で購読し直します（設計書「デバイス切断時の動作」の LAN 入力）。

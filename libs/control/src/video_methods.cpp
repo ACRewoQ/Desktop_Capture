@@ -24,7 +24,7 @@ void registerVideoMethods(ControlServer& server) {
 void followVideoDelta(ControlServer& server, const Delta& delta) {
     auto touches = [](const std::string& p) {
         return p.rfind("/video/mix", 0) == 0 || p == "/capture/mix" || p == "/video/vcam/mix" ||
-               p == "/video/monitor/mix" || p == "/video/preview/mix";
+               p == "/video/monitor/mix" || p == "/video/preview/mix" || p == "/video/lan/mix";
     };
     bool relevant = false;
     for (const auto& r : delta.removed) relevant = relevant || touches(r);
