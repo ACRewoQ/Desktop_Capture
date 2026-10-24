@@ -32,7 +32,7 @@ int usage() {
     std::cerr << "usage:\n"
                  "  dc-cli [--host H] [--port P] snapshot [PREFIX]\n"
                  "  dc-cli [--host H] [--port P] set PATH VALUE\n"
-                 "  dc-cli [--host H] [--port P] call METHOD [key=value ...]\n"
+                 "  dc-cli [--host H] [--port P] call METHOD [key=value ...]   (value s:123 = the string \"123\")\n"
                  "  dc-cli [--host H] [--port P] watch [--meters]\n"
                  "  dc-cli schema [--markdown]\n";
     return 2;
@@ -69,6 +69,7 @@ Value parseValue(const std::string& text, const ParamSpec* spec) {
         }
         return text; // let the server report the type mismatch
     }
+    if (text.rfind("s:", 0) == 0) return text.substr(2); // a string that looks like a number (s:012345)
     if (text == "true") return true;
     if (text == "false") return false;
     if (text == "nil") return std::monostate{};

@@ -20,6 +20,7 @@ Window {
         { key: "video", label: "映像", file: "VideoPage.qml", keep: false },
         { key: "sampler", label: "サンプラー", file: "SamplerPage.qml", keep: false },
         { key: "capture", label: "録画", file: "CapturePage.qml", keep: false },
+        { key: "lan", label: "LAN", file: "LanPage.qml", keep: false },
         { key: "settings", label: "設定", file: "SettingsPage.qml", keep: false },
     ]
     readonly property var pageKeys: pages.map(p => p.key)
@@ -96,10 +97,18 @@ Window {
         MouseArea { anchors.fill: parent } // swallow touches while disconnected
         Text {
             anchors.centerIn: parent
+            visible: !connection.needsPairing
             color: Theme.text
             font.pixelSize: 20
             text: connection.statusText + "\n" + connection.address
             horizontalAlignment: Text.AlignHCenter
+        }
+        PairingPanel {
+            objectName: "pairingPanel"
+            anchors.centerIn: parent
+            visible: connection.needsPairing
+            message: connection.pairingMessage
+            onEntered: (code) => connection.pair(code)
         }
     }
 

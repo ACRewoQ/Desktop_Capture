@@ -47,12 +47,14 @@ set(DC_UI_QML
     TopBar.qml
     NavRail.qml
     RecordButton.qml
+    PairingPanel.qml
     # pages
     MixerPage.qml
     SettingsPage.qml
     VideoPage.qml
     CapturePage.qml
     SamplerPage.qml
+    LanPage.qml
     # mixer
     Strip.qml
     Fader.qml

@@ -95,6 +95,7 @@ QString Connection::statusText() const {
     case State::Handshaking: return QStringLiteral("接続中…");
     case State::Ready: return QStringLiteral("接続済み");
     case State::Waiting:
+        if (needsPairing_) return pairingMessage_;
         return lastError_.isEmpty() ? QStringLiteral("切断されました。再接続します")
                                     : QStringLiteral("切断されました（%1）。再接続します").arg(lastError_);
     }
@@ -157,6 +158,9 @@ void Connection::onConnected() {
     hello.clientName = clientName_;
     hello.role = options_.role;
     hello.meterPort = meterPort();
+    hello.clientId = options_.clientId;
+    hello.token = options_.token;
+    if (options_.token.empty()) hello.pairCode = pairCode_;
     send(hello);
 }
 
@@ -172,7 +176,18 @@ void Connection::onSocketClosed() {
         return;
     }
     setState(State::Waiting);
-    scheduleReconnect();
+    // Without a code, connecting again would only be refused again.
+    if (!needsPairing_) scheduleReconnect();
+}
+
+void Connection::pair(const QString& code) {
+    pairCode_ = code.trimmed().toStdString();
+    needsPairing_ = false;
+    pairingMessage_.clear();
+    reconnectTimer_.stop();
+    reconnectDelayMs_ = options_.reconnectMinMs;
+    if (running_ && state_ == State::Waiting) openSocket();
+    else emit stateChanged();
 }
 
 void Connection::scheduleReconnect() {
@@ -203,6 +218,11 @@ void Connection::handle(Message msg) {
     if (auto* w = std::get_if<Welcome>(&msg)) {
         welcome_ = *w;
         gotWelcome_ = true;
+        pairCode_.clear();
+        if (!w->token.empty() && w->token != options_.token) {
+            options_.token = w->token;
+            emit tokenChanged(QString::fromStdString(w->token));
+        }
         return;
     }
     if (auto* s = std::get_if<Snapshot>(&msg)) {
@@ -248,6 +268,23 @@ void Connection::handle(Message msg) {
     }
     if (auto* e = std::get_if<Error>(&msg)) {
         lastError_ = QString::fromStdString(e->message.empty() ? errorName(e->code) : e->message);
+        if (e->code == ErrorCode::Unauthorized && options_.role != ClientRole::Local) {
+            // The engine's reasons (mixd lan_service): not paired, wrong code, pairing not open,
+            // unknown token. A refused token is forgotten so that the next try uses a code.
+            const std::string& m = e->message;
+            if (m.find("token") != std::string::npos && !options_.token.empty()) {
+                options_.token.clear();
+                emit tokenChanged(QString());
+            }
+            pairingMessage_ = m.find("wrong") != std::string::npos ? QStringLiteral("数字が違います。もう一度入れてください")
+                            : m.find("not open") != std::string::npos
+                                ? QStringLiteral("エンジンの PC で受付が始まっていません（LAN ページの「受付を始める」）")
+                            : m.find("token") != std::string::npos
+                                ? QStringLiteral("ペアリングが取り消されました。もう一度ペアリングしてください")
+                                : QStringLiteral("初めてつなぐ PC です。ペアリングしてください");
+            needsPairing_ = true;
+            pairCode_.clear();
+        }
         return; // the server closes the connection
     }
     if (std::holds_alternative<Bye>(msg)) {

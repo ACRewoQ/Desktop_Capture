@@ -47,6 +47,12 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 - サンプラー：8 バンク × 16 パッド。パッドは押した瞬間に鳴らし（`/sampler/trigger`）、「押す間」のパッドは離したときに止める（`/sampler/release`）。指ごとに別のパッドを押せる。「編集」を押している間は、タップでパッドの設定（ファイル・名前・色・押したときの動き・音量）を開く。
 - 録画：録画ファイルの形式・保存先・映像（エンコーダー、解像度、ビットレートなど）・音声ストリーム 1〜8 と、トラック別録音（開始・停止、録音するトラック、形式、保存先）。録画の設定は録画を始めた時点で capd が読むので、録画中に変えると次の録画から効く。
 
+## LAN ページとリモコンのペアリング
+
+- LAN ページ：この PC の名前、ペアリングの受付（6 桁の数字を大きく表示）とペアリング済みの機器（取り消し）、見つかった別の PC（ペアリング・忘れる・IP アドレスで追加、相手の送信ストリーム）、LAN 送信 1〜8（名前・コーデック・Opus の設定・受信数）、受け取っている相手。
+- リモコン（`--remote`）は、初めてのエンジンに断られると数字のキーパッドを出す。6 桁を入れるとつなぎ直し、もらったトークンを次から使う。インストールごとの ID とトークンは `QSettings`（Windows はレジストリ `HKCU\Software\DesktopCapture\dc-ui`）に保存する。エンジンで取り消されたトークンは消して、もう一度ペアリングを求める。
+- 同じ PC からのループバック接続はペアリング不要（protocol.md 8.2）。試験ではエンジンを LAN のアドレスで指定する。
+
 ## タッチ操作の約束
 
 | 操作 | 動き |
@@ -65,5 +71,6 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 |---|---|
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`、サンプラーの `pad`・`edit`） |
+| `--pair CODE` | `--remote` で、キーパッドの代わりにペアリングの数字を渡す |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)） |

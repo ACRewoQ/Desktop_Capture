@@ -23,7 +23,11 @@
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QSettings>
+#include <QSysInfo>
 #include <QTimer>
+#include <QUrl>
+#include <QUuid>
 #include <QImage>
 
 #include <cstdio>
@@ -71,6 +75,7 @@ int main(int argc, char** argv) {
         {"connect", "Engine (mixd or dc-mock-server) to control.", "host[:port]", "127.0.0.1"},
         {"remote", "Connect as a remote controller (role 1) instead of the local UI."},
         {"fullscreen", "Show full screen (remote controller)."},
+        {"pair", "With --remote: pair with the 6-digit CODE the engine shows (instead of typing it).", "code"},
         {"backend", "Scene graph backend: default (D3D11 on Windows), d3d11 or software.", "name", "default"},
         {"selftest", "Run the scripted check against the engine, print the result and exit (changes its state)."},
         {"no-meters", "With --selftest: do not expect meter packets."},
@@ -101,7 +106,26 @@ int main(int argc, char** argv) {
     opt.role = cli.isSet("remote") ? dc::proto::ClientRole::Remote : dc::proto::ClientRole::Local;
     opt.clientName = cli.isSet("remote") ? QStringLiteral("dc-ui-remote") : QStringLiteral("dc-ui");
 
+    // A remote controller pairs once per engine (protocol.md 8.2): its id and the tokens it got are
+    // kept in the user's settings (registry on Windows).
+    QSettings settings(QStringLiteral("DesktopCapture"), QStringLiteral("dc-ui"));
+    const QString tokenKey = QStringLiteral("tokens/%1_%2").arg(opt.host).arg(opt.port);
+    if (opt.role == dc::proto::ClientRole::Remote) {
+        QString id = settings.value(QStringLiteral("client_id")).toString();
+        if (id.isEmpty()) {
+            id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            settings.setValue(QStringLiteral("client_id"), id);
+        }
+        opt.clientId = id.toStdString();
+        opt.token = settings.value(tokenKey).toString().toStdString();
+        opt.clientName = QSysInfo::machineHostName().isEmpty() ? opt.clientName : QSysInfo::machineHostName();
+    }
+
     dc::ui::Connection connection(opt);
+    QObject::connect(&connection, &dc::ui::Connection::tokenChanged, [&](const QString& token) {
+        if (token.isEmpty()) settings.remove(tokenKey);
+        else settings.setValue(tokenKey, token);
+    });
     dc::ui::StripModel tracks(connection, dc::ui::StripModel::Kind::Tracks);
     dc::ui::StripModel master(connection, dc::ui::StripModel::Kind::Master);
     dc::ui::Recorder recorder(connection);
@@ -125,6 +149,7 @@ int main(int argc, char** argv) {
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
     if (!window) return 1;
 
+    if (cli.isSet("pair")) connection.pair(cli.value("pair"));
     connection.start();
     if (cli.isSet("screenshot")) {
         const QStringList size = cli.value("size").split(QLatin1Char('x'));

@@ -28,6 +28,10 @@ class Connection : public QObject {
     Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
     Q_PROPERTY(QString address READ address CONSTANT)
     Q_PROPERTY(QString serverName READ serverName NOTIFY stateChanged)
+    // Remote controller: the engine wants a pairing code (protocol.md 8.2). Reconnecting pauses until
+    // pair() is called with the 6 digits the engine's screen shows.
+    Q_PROPERTY(bool needsPairing READ needsPairing NOTIFY stateChanged)
+    Q_PROPERTY(QString pairingMessage READ pairingMessage NOTIFY stateChanged)
 
 public:
     enum class State { Idle, Connecting, Handshaking, Ready, Waiting };
@@ -42,6 +46,8 @@ public:
         int reconnectMinMs = 500;
         int reconnectMaxMs = 5000;
         int handshakeTimeoutMs = 5000;
+        std::string clientId;  // stable per installation (remote controller pairing)
+        std::string token;     // from an earlier pairing with this engine, "" = none
     };
 
     using ResultHandler = std::function<void(const proto::Result&)>;
@@ -63,6 +69,10 @@ public:
 
     const proto::ParamTree& tree() const { return tree_; }
     const proto::Welcome& welcome() const { return welcome_; }
+    bool needsPairing() const { return needsPairing_; }
+    QString pairingMessage() const { return pairingMessage_; }
+    // Connects again with this pairing code (6 digits).
+    Q_INVOKABLE void pair(const QString& code);
 
     // Sends a request. The handler always runs exactly once, later on the GUI thread: with the
     // server's Result, or with an Internal error when not connected or the connection drops.
@@ -81,6 +91,8 @@ signals:
     void deltaApplied(const dc::proto::Delta& delta);
     void eventReceived(const dc::proto::Event& event);
     void metersReceived(const dc::proto::MeterPacket& packet);
+    // A pairing gave a token (save it for the next start), or the saved one was refused ("").
+    void tokenChanged(const QString& token);
 
 private:
     void setState(State s);
@@ -114,6 +126,9 @@ private:
     bool resyncPending_ = false;
     std::uint64_t nextId_ = 1;
     std::map<std::uint64_t, ResultHandler> pending_;
+    std::string pairCode_;
+    bool needsPairing_ = false;
+    QString pairingMessage_;
 };
 
 } // namespace dc::ui
