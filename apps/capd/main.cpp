@@ -19,6 +19,7 @@
 #include "src/video_mix.hpp"
 
 #include "dc/vcam/pattern.hpp"
+#include "dc/vcam/pixels.hpp"
 #include "dc/vcam/sender.hpp"
 #endif
 
@@ -172,7 +173,7 @@ int cmdVcam(const std::vector<std::string>& args) {
     if (pattern) {
         dc::vcam::Sender sender(kind);
         const int w = 1920, h = 1080;
-        std::vector<std::uint8_t> frame(std::size_t(w) * h * 4);
+        std::vector<std::uint8_t> frame(std::size_t(w) * h * 4), nv12(std::size_t(w) * h * 3 / 2);
         const std::int64_t freq = dc::shm::qpcFrequency();
         std::uint32_t index = 0;
         std::int64_t next = dc::shm::nowQpc();
@@ -180,7 +181,13 @@ int cmdVcam(const std::vector<std::string>& args) {
         while (!done()) {
             const std::int64_t now = dc::shm::nowQpc();
             dc::vcam::draw_test_pattern_bgra(frame.data(), w, h, w * 4, {now, index++});
-            sender.sendBgra(frame.data(), w * 4, w, h, now);
+            if (kind == dc::vcam::CameraKind::MediaFoundation) {
+                // NV12 as capd's real output sends it, so the source's copy path is what gets measured.
+                dc::vcam::bgra_to_nv12(frame.data(), w, h, w * 4, nv12.data(), w, nv12.data() + std::size_t(w) * h, w, w, h);
+                sender.sendNv12(nv12.data(), w, nv12.data() + std::size_t(w) * h, w, w, h, now);
+            } else {
+                sender.sendBgra(frame.data(), w * 4, w, h, now);
+            }
             if (std::chrono::steady_clock::now() >= nextPrint) {
                 nextPrint += std::chrono::seconds(1);
                 const auto st = sender.status();
