@@ -170,6 +170,7 @@ int main(int argc, char** argv) {
             if (!localOnly) {
                 lan = std::make_unique<mixd::LanService>(io, lanOpt);
                 opt.serverId = lan->serverId();
+            opt.serverName = mixd::computerName(); // what peers and remote controllers show for this PC
                 opt.authorize = [&lan](const proto::Hello& h, const control::ClientInfo& c) { return lan->authorize(h, c); };
                 ctlOpt.lan = lan.get();
             } else {

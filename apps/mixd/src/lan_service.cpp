@@ -623,10 +623,11 @@ void LanService::onLinkStatus(const std::string& key, const PeerLinkStatus& stat
     if (!p || !p->conn) return;
     const bool namesChanged = !(p->link.streams == status.streams) || p->link.connected != status.connected ||
                               p->link.refused != status.refused || p->link.serverName != status.serverName;
+    const bool justConnected = status.connected && !p->link.connected;
     p->link = status;
     if (!status.serverName.empty()) p->name = status.serverName;
-    if (status.connected && opts_.verbose && namesChanged)
-        std::cout << "LAN: connected to peer " << p->name << " (" << key << ")" << std::endl;
+    if (justConnected && opts_.verbose)
+        std::cout << "LAN: connected to peer " << (p->name.empty() ? p->host : p->name) << " (" << key << ")" << std::endl;
     if (namesChanged) publishPeers();
     reconcileInputs();
 }

@@ -188,7 +188,8 @@ private:
 
     void resolve(const wchar_t* name) {
         if (!running_) return;
-        if (std::wstring(name) == regName_) return; // ourselves
+        // Our own answer is dropped by its id after resolving, not by its name: two engines on one PC (tests)
+        // register the same computer name, and the second one is renamed by Windows.
         auto* ctx = new ResolveCtx{this, name};
         DNS_SERVICE_RESOLVE_REQUEST req{};
         req.Version = DNS_QUERY_REQUEST_VERSION1;
