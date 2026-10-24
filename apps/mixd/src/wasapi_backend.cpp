@@ -235,6 +235,7 @@ public:
 
         REFERENCE_TIME defPeriod = 0, minPeriod = 0;
         client_->GetDevicePeriod(&defPeriod, &minPeriod);
+        if (defPeriod > 0) defaultPeriod_ = hnsToFrames(defPeriod);
 
         std::optional<Format> exclusiveFormat;
         if (exclusive_) {
@@ -368,6 +369,17 @@ private:
         const double perEvent = (now - firstEvent_) / (kRateCheckEvents - kRateSkipEvents) * kSampleRate;
         if (perEvent < 1.5 * period_) return false;
         suggestedPeriod_ = (static_cast<int>(perEvent) + 31) / 32 * 32;
+        markFailed();
+        return true;
+    }
+
+    // Exclusive capture: a device that overflows its buffer over and over in the first second (the
+    // UR22 wakes every 10 ms but loses data with a 256-frame buffer) gets the device's own default
+    // period, at least twice the current one.
+    bool captureOverflowing() {
+        if (!exclusive_ || events_ > kRateCheckEvents || glitches_.load() < kOverflowLimit) return false;
+        const int suggestion = std::max(defaultPeriod_, 2 * period_);
+        suggestedPeriod_ = (suggestion + 31) / 32 * 32;
         markFailed();
         return true;
     }
@@ -518,6 +530,7 @@ private:
                 markFailed();
                 break;
             }
+            if (captureOverflowing()) break;
         }
         if (avrt_) AvRevertMmThreadCharacteristics(avrt_);
     }
@@ -549,7 +562,8 @@ private:
     std::atomic<std::uint64_t> frames_{0}; // frames rendered or captured since the first period
     std::atomic<std::uint64_t> duplicates_{0}; // captured frames dropped as already delivered
     double devRate_ = kSampleRate;         // rate of the device positions
-    static constexpr int kRateSkipEvents = 10, kRateCheckEvents = 110;
+    static constexpr int kRateSkipEvents = 10, kRateCheckEvents = 110, kOverflowLimit = 10;
+    int defaultPeriod_ = 480; // the device's default period, frames
     int events_ = 0;                       // stream thread only
     double firstEvent_ = 0;
     std::atomic<int> suggestedPeriod_{0};
