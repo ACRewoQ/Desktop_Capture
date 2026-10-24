@@ -2,6 +2,7 @@
 
 #include "connection.hpp"
 
+#include "dc/protocol/fx.hpp"
 #include "dc/protocol/schema.hpp"
 
 #include <algorithm>
@@ -141,6 +142,13 @@ QList<int> ParamHub::indices(const QString& prefix) const {
         it = values.lower_bound(key + std::to_string(n) + "0"); // past "<key>n/..." ('/' sorts before '0')
     }
     std::sort(out.begin(), out.end());
+    return out;
+}
+
+QVariantList ParamHub::builtinEffects() const {
+    QVariantList out;
+    for (const auto& fx : builtinFx())
+        out.push_back(QVariantMap{{"type", QString::fromStdString(fx.type)}, {"name", QString::fromStdString(fx.name)}});
     return out;
 }
 

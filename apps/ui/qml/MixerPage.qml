@@ -8,6 +8,8 @@ Item {
     function openDemo(name) {
         if (name === "menu") trackPanel.open(0, "Track")
         else if (name === "master") masterPanel.open()
+        else if (name === "fx") fxPanel.open("/track/1", "Track")
+        else if (name === "fxedit") fxEditor.open("/track/1/fx/1")
         else if (name === "input") sourcePicker.openInput(0, "Track")
         else if (name === "output") sourcePicker.openOutput()
     }
@@ -25,6 +27,7 @@ Item {
             model: tracks
             scroller: list
             onMenuRequested: (row, name) => trackPanel.open(row, name)
+            onFxRequested: (base, name) => fxPanel.open(base, name)
         }
         footer: AddTrackTile { height: list.height }
 
@@ -50,6 +53,7 @@ Item {
             model: master
             isMaster: true
             onOutputRequested: masterPanel.open()
+            onFxRequested: (base, name) => fxPanel.open(base, name)
         }
     }
 
@@ -59,6 +63,12 @@ Item {
         onInputRequested: (row, name) => sourcePicker.openInput(row, name)
     }
     MasterPanel { id: masterPanel; objectName: "masterPanel" }
+    FxPanel {
+        id: fxPanel
+        objectName: "fxPanel"
+        onEditRequested: (slot) => fxEditor.open(slot)
+    }
+    FxEditor { id: fxEditor; objectName: "fxEditor" }
 
     SourcePicker { id: sourcePicker; objectName: "sourcePicker" }
 }

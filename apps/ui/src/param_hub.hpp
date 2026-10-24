@@ -47,6 +47,8 @@ public:
     // Numbers that exist directly below a list prefix: indices("/video/source") -> [1, 2, 5].
     Q_INVOKABLE QList<int> indices(const QString& prefix) const;
     bool pending(const std::string& path) const { return overrides_.count(path) > 0; }
+    // The built-in effects (libs/protocol fx.hpp) for the "add effect" list: [{type, name}].
+    Q_INVOKABLE QVariantList builtinEffects() const;
 
     static QVariant toVariant(const proto::Value& v);
     // Uses the schema's type for path when it has one (a JS number 2 becomes an int for an int).

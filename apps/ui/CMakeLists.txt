@@ -61,6 +61,8 @@ set(DC_UI_QML
     TrackPanel.qml
     MasterPanel.qml
     TargetList.qml
+    FxPanel.qml
+    FxEditor.qml
     SourcePicker.qml
     # shared parts
     MenuButton.qml
@@ -78,6 +80,7 @@ set(DC_UI_QML
     ParamSwitch.qml
     ParamNumber.qml
     ParamPick.qml
+    ParamSlider.qml
 )
 list(TRANSFORM DC_UI_QML PREPEND qml/ OUTPUT_VARIABLE DC_UI_QML_FILES)
 # Served next to the module's qmldir (qrc:/DcUi/Main.qml), so that the Theme singleton resolves.

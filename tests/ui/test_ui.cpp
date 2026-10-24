@@ -246,6 +246,37 @@ private slots:
         QVERIFY(ui::waitUntil([&] { return tracks.inputTextAt(1) == QStringLiteral("サンプラー B3"); }, 2000));
     }
 
+    void effectChain() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::StripModel tracks(c, ui::StripModel::Kind::Tracks);
+        ui::ParamHub hub(c);
+        ui::ParamList fxSlots;
+        fxSlots.setPrefix(QStringLiteral("/track/1/fx"));
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        QCOMPARE(hub.builtinEffects().size(), 6);
+        hub.call(QStringLiteral("/track/1/fx/add"), {{QStringLiteral("type"), QStringLiteral("comp")}});
+        hub.call(QStringLiteral("/track/1/fx/add"), {{QStringLiteral("type"), QStringLiteral("eq4")}});
+        QVERIFY(ui::waitUntil([&] { return fxSlots.count() == 2; }, 2000));
+        QCOMPARE(tracks.data(tracks.index(0), ui::StripModel::FxCountRole).toInt(), 2);
+        ui::ParamValue firstName;
+        firstName.setPath(QStringLiteral("/track/1/fx/1/name"));
+        QCOMPARE(firstName.value().toString(), QStringLiteral("コンプレッサー"));
+        // Slots are renumbered on move: the Param at slot 1 now shows the EQ.
+        hub.call(QStringLiteral("/track/1/fx/move"), {{QStringLiteral("from"), 2}, {QStringLiteral("to"), 1}});
+        QVERIFY(ui::waitUntil([&] { return firstName.value().toString() == QStringLiteral("4バンドEQ"); }, 2000));
+        // A parameter edit within the built-in range.
+        ui::ParamValue gain;
+        gain.setPath(QStringLiteral("/track/1/fx/1/param/low_gain_db"));
+        gain.set(6.5);
+        QVERIFY(ui::waitUntil([&] { return !gain.pending(); }, 2000));
+        QCOMPARE(c.tree().getAs<double>("/track/1/fx/1/param/low_gain_db").value_or(0), 6.5);
+        hub.call(QStringLiteral("/track/1/fx/remove"), {{QStringLiteral("index"), 1}});
+        QVERIFY(ui::waitUntil([&] { return fxSlots.count() == 1; }, 2000));
+        QCOMPARE(tracks.data(tracks.index(0), ui::StripModel::FxCountRole).toInt(), 1);
+    }
+
     void reconnectsAfterEngineRestart() {
         std::uint16_t port = 0;
         auto h = std::make_unique<Harness>();

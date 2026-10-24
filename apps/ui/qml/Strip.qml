@@ -25,6 +25,7 @@ Rectangle {
     required property bool clip
     required property bool cue
     required property bool recordArmed
+    required property int fxCount
 
     property QtObject model          // tracks or master (StripModel)
     property Item scroller: null     // the scrolling list, paused while the pan is dragged
@@ -32,6 +33,7 @@ Rectangle {
 
     signal menuRequested(int row, string name)
     signal outputRequested()
+    signal fxRequested(string base, string name)
 
     objectName: (isMaster ? "masterStrip" : "strip_") + (isMaster ? "" : index)
     width: Theme.stripWidth
@@ -112,9 +114,30 @@ Rectangle {
         onMoved: (v) => strip.model.setPan(strip.index, v)
     }
 
+    // Effect chain: how many, a tap opens the list.
+    Rectangle {
+        id: fxButton
+        objectName: "fx_" + (strip.isMaster ? "master" : strip.index)
+        anchors { top: panControl.bottom; topMargin: 6; left: parent.left; right: parent.right; margins: 6 }
+        height: 36
+        radius: Theme.radius
+        color: fxTap.pressed ? Theme.controlPressed : strip.fxCount > 0 ? Theme.accentDim : Theme.control
+        Text {
+            anchors.centerIn: parent
+            color: "white"
+            font.pixelSize: 12
+            font.bold: true
+            text: strip.fxCount > 0 ? "FX " + strip.fxCount : "FX"
+        }
+        TapHandler {
+            id: fxTap
+            onTapped: strip.fxRequested(strip.isMaster ? "/master" : "/track/" + strip.trackId, strip.name)
+        }
+    }
+
     Item {
         id: body
-        anchors { top: panControl.bottom; bottom: value.top; left: parent.left; right: parent.right; margins: 8 }
+        anchors { top: fxButton.bottom; bottom: value.top; left: parent.left; right: parent.right; margins: 8 }
 
         Meter {
             id: meter

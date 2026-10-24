@@ -174,6 +174,11 @@ QVariant StripModel::data(const QModelIndex& index, int role) const {
     case ClipRole: return meters_[static_cast<std::size_t>(row)].clip;
     case CueRole: return kind_ == Kind::Tracks && flag(row, "cue");
     case RecordRole: return flag(row, "record/enabled");
+    case FxCountRole: {
+        int n = 0;
+        while (n < kMaxFxPerTrack && value(row, ("fx/" + std::to_string(n + 1) + "/type").c_str())) ++n;
+        return n;
+    }
     default: return {};
     }
 }
@@ -185,7 +190,7 @@ QHash<int, QByteArray> StripModel::roleNames() const {
             {SoloRole, "solo"},         {LowcutOnRole, "lowcutOn"},   {LowcutHzRole, "lowcutHz"},
             {HighcutOnRole, "highcutOn"}, {HighcutHzRole, "highcutHz"}, {LevelLRole, "levelL"},
             {LevelRRole, "levelR"},     {ClipRole, "clip"},
-            {CueRole, "cue"},           {RecordRole, "recordArmed"}};
+            {CueRole, "cue"},           {RecordRole, "recordArmed"}, {FxCountRole, "fxCount"}};
 }
 
 double StripModel::faderToDb(double fader) {

@@ -49,6 +49,7 @@ public:
         ClipRole,
         CueRole,
         RecordRole,
+        FxCountRole,
     };
 
     StripModel(Connection& connection, Kind kind, QObject* parent = nullptr);
