@@ -34,17 +34,20 @@ std::string trackBase(int n) { return "/track/" + std::to_string(n); }
 } // namespace
 
 MockEngine::MockEngine(asio::io_context& io, control::ControlServer& server, Options options)
-    : io_(io), server_(server), options_(options), meterTimer_(io), recordTimer_(io) {}
+    : io_(io), server_(server), options_(options), meterTimer_(io), recordTimer_(io),
+      fx_(io, server, &plugins_, nullptr, false) {}
 
 void MockEngine::start() {
     seed();
     registerMethods();
+    fx_.start();
     if (options_.meters) scheduleMeters();
 }
 
 void MockEngine::stop() {
     asio::post(io_, [this] {
         stopped_ = true;
+        fx_.stop();
         meterTimer_.cancel();
         recordTimer_.cancel();
     });
@@ -198,6 +201,7 @@ Result MockEngine::removeTrack(CallContext& ctx) {
         c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
     c.push_back({"/mixer/track_count", static_cast<std::int64_t>(order.size())});
     server_.publishNow(c, {trackBase(static_cast<int>(*id))}, ctx.call.id, ctx.client.name);
+    fx_.clearStrip(static_cast<int>(*id));
     return {};
 }
 

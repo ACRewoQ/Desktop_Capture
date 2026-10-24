@@ -56,8 +56,13 @@ int main(int argc, char** argv) {
     try {
         asio::io_context io;
         dc::proto::ParamStore store;
+        dc::mock::MockEngine* enginePtr = nullptr;
+        opt.onDelta = [&enginePtr](const dc::proto::Delta& d) {
+            if (enginePtr) enginePtr->onDelta(d);
+        };
         dc::control::ControlServer server(io, store, opt);
         dc::mock::MockEngine engine(io, server, mockOpt);
+        enginePtr = &engine;
         server.start();
         engine.start();
         std::cout << "dc-mock-server listening on " << opt.bindAddress << ":" << server.port() << " ("
