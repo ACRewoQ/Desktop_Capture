@@ -69,6 +69,8 @@ std::optional<RecordSettings> settingsFromTree(const proto::ParamTree& tree, std
         AudioStreamSettings a;
         a.slot = *slot;
         a.label = source;
+        // Players list audio tracks by title: use the mixer's name for it ("Master", "Mic", "Game"), if it has one.
+        read(tree, *slot == 0 ? std::string("/master/name") : "/track/" + std::to_string(*slot) + "/name", a.title);
         read(tree, base + "/codec", a.codec);
         readInt(tree, base + "/bitrate_kbps", a.bitrateKbps);
         s.audio.push_back(a);

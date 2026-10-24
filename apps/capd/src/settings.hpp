@@ -28,6 +28,7 @@ struct VideoSettings {
 struct AudioStreamSettings {
     std::uint32_t slot = 0;      // shared-memory slot: 0 = master, n = track n
     std::string label;           // "master", "track/3"
+    std::string title;           // stream title in the file: the track's display name ("" = label)
     std::string codec = "aac";   // aac | opus | pcm
     int bitrateKbps = 192;
 };

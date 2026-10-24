@@ -68,6 +68,7 @@ TEST_CASE("recording settings come from the engine's tree", "[capd]") {
     tree.set("/capture/audio/3/codec", std::string("pcm"));
     tree.set("/video/mix/2/width", std::int64_t{2560});
     tree.set("/video/mix/2/height", std::int64_t{1440});
+    tree.set("/track/5/name", std::string("Game"));
 
     std::string err;
     auto s = settingsFromTree(tree, &err);
@@ -84,6 +85,8 @@ TEST_CASE("recording settings come from the engine's tree", "[capd]") {
     CHECK(s->audio[1].slot == 5);
     CHECK(s->audio[1].label == "track/5");
     CHECK(s->audio[1].codec == "pcm");
+    CHECK(s->audio[0].title.empty());  // no /master/name in this tree
+    CHECK(s->audio[1].title == "Game");
 
     tree.set("/capture/mix", std::int64_t{0});
     CHECK_FALSE(settingsFromTree(tree, &err));
@@ -391,7 +394,7 @@ TEST_CASE("capd records when the engine says so and reports back", "[capd]") {
 
 TEST_CASE("the disk reserve covers 30 seconds of the recording, at least 256 MB", "[capd]") {
     RecordSettings s;
-    s.audio.push_back({0, "master", "aac", 192});
+    s.audio.push_back({0, "master", "", "aac", 192});
     s.video.bitrateKbps = 100000;  // VBR peaks at 150 Mbit/s: 30 s = 563 MB plus the audio
     CHECK(diskReserveBytes(s) == (150000ull + 192) * 1000 / 8 * 30);
     s.video.bitrateKbps = 8000;
@@ -405,7 +408,7 @@ TEST_CASE("a recording refuses to start on a nearly full disk and stops before i
     std::filesystem::create_directories(dir);
     RecordSettings s;
     s.withVideo = false;
-    s.audio.push_back({0, "master", "aac", 192});
+    s.audio.push_back({0, "master", "", "aac", 192});
     const std::string path = (dir / "rec.mp4").string();
     s.container = "mp4";
     const std::uint64_t reserve = diskReserveBytes(s);
@@ -439,5 +442,37 @@ TEST_CASE("a recording refuses to start on a nearly full disk and stops before i
     CHECK(avformat_find_stream_info(fmt, nullptr) >= 0);
     CHECK(fmt->nb_streams == 1);
     avformat_close_input(&fmt);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("audio streams carry the track names and only the first one is played by default", "[capd]") {
+    const auto dir = std::filesystem::temp_directory_path() / ("capd-titles-" + std::to_string(testPid()));
+    std::filesystem::create_directories(dir);
+    for (const std::string container : {"mkv", "mp4"}) {
+        RecordSettings s;
+        s.withVideo = false;
+        s.container = container;
+        s.audio.push_back({0, "master", "Master", "aac", 192});
+        s.audio.push_back({3, "track/3", "", "opus", 96});
+        const std::string path = (dir / ("rec." + container)).string();
+        Recorder rec(s, path, ".capd-titles-none");
+        rec.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        REQUIRE(rec.stop().error.empty());
+
+        AVFormatContext* fmt = nullptr;
+        REQUIRE(avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) == 0);
+        REQUIRE(fmt->nb_streams == 2);
+        const char* key = container == "mp4" ? "handler_name" : "title";
+        const AVDictionaryEntry* t0 = av_dict_get(fmt->streams[0]->metadata, key, nullptr, 0);
+        const AVDictionaryEntry* t1 = av_dict_get(fmt->streams[1]->metadata, key, nullptr, 0);
+        REQUIRE(t0);
+        REQUIRE(t1);
+        CHECK(std::string(t0->value) == "Master");
+        CHECK(std::string(t1->value) == "track/3");
+        CHECK((fmt->streams[0]->disposition & AV_DISPOSITION_DEFAULT) != 0);
+        CHECK((fmt->streams[1]->disposition & AV_DISPOSITION_DEFAULT) == 0);
+        avformat_close_input(&fmt);
+    }
     std::filesystem::remove_all(dir);
 }

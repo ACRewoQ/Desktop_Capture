@@ -210,7 +210,7 @@ int cmdServe(const std::vector<std::string>& args) {
 
 int cmdRecord(const std::vector<std::string>& args) {
     RecordSettings s;
-    s.audio.push_back({0, "master", "aac", 192});
+    s.audio.push_back({0, "master", "", "aac", 192});
     std::string output, shmSuffix, audioCodec = "aac";
     int audioBitrate = 192;
     double seconds = 0;
@@ -252,7 +252,7 @@ int cmdRecord(const std::vector<std::string>& args) {
                 for (const auto& src : split(list, ',')) {
                     const auto slot = slotForSource(src);
                     if (!slot) throw std::runtime_error("bad audio source " + src + " (master or track/<n>)");
-                    s.audio.push_back({*slot, src, "aac", 192});
+                    s.audio.push_back({*slot, src, "", "aac", 192});
                 }
             }
         } else if (a == "--audio-codec") audioCodec = next();

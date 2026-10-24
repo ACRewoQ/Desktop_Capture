@@ -47,6 +47,13 @@ int Muxer::addStream(const AVCodecContext* encoder, const char* title) {
     if (encoder->codec_type == AVMEDIA_TYPE_VIDEO) st->avg_frame_rate = encoder->framerate;
     // MKV keeps a track title; MP4 has no such field and names tracks through the handler name instead.
     if (title) av_dict_set(&st->metadata, isMp4() ? "handler_name" : "title", title, 0);
+    // The first audio stream (normally the master) is the one players play; the others are there for editing.
+    if (encoder->codec_type == AVMEDIA_TYPE_AUDIO) {
+        bool first = true;
+        for (unsigned i = 0; i + 1 < fmt_->nb_streams; ++i)
+            if (fmt_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) first = false;
+        st->disposition = first ? AV_DISPOSITION_DEFAULT : 0;
+    }
     streams_.push_back({encoder->time_base.num, encoder->time_base.den});
     return st->index;
 }

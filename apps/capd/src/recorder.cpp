@@ -99,7 +99,8 @@ void Recorder::start() {
     std::vector<std::uint32_t> slots;
     for (const auto& a : settings_.audio) {
         auto enc = std::make_unique<AudioEncoder>(a, globalHeader);
-        audioStreams_.push_back(muxer_->addStream(enc->context(), a.label.c_str()));
+        const std::string title = a.title.empty() ? a.label : a.title;
+        audioStreams_.push_back(muxer_->addStream(enc->context(), title.c_str()));
         log_.push_back("audio " + std::to_string(audioStreams_.size()) + ": " + a.label + " -> " + enc->description());
         audioEncoders_.push_back(std::move(enc));
         slots.push_back(a.slot);
