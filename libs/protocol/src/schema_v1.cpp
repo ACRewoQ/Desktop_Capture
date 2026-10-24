@@ -74,7 +74,7 @@ Schema buildV1() {
     sc.add(ic("/system/block_size", {64, 128, 256, 512, 1024}, 256, "音声バッファのサンプル数"));
     sc.add(s("/system/clock_device", "", "クロック基準デバイスの ID（\"\" = 自動）"));
     sc.add(e("/system/audio_mode", {"shared", "exclusive"}, "shared",
-             "WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ）"));
+             "WASAPI の動作モード（shared = 共有、exclusive = 排他。48kHz 以外のデバイスはエンジンがレート変換する）"));
     sc.add(s("/system/clock_active", "", "実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー）", RO));
     sc.add(f("/system/latency_ms", 0.0, 1000.0, 0.0, "クロック基準デバイスの出力バッファによる遅延 ms", RO));
     sc.add(f("/system/cpu_load", 0.0, 1.0, 0.0, "音声スレッドの負荷率", RO));
@@ -83,11 +83,12 @@ Schema buildV1() {
     // --- devices (engine-managed lists) ---
     for (const char* dir : {"input", "output"}) {
         const std::string base = std::string("/devices/") + dir + "/#";
-        sc.add(s(base + "/id", "", "デバイス ID（WASAPI エンドポイント ID）", RO));
+        sc.add(s(base + "/id", "", "デバイス ID（WASAPI はエンドポイント ID、ASIO は asio:<ドライバー名>。protocol.md 4.4）", RO));
         sc.add(s(base + "/name", "", "デバイス名", RO));
         sc.add(i(base + "/channels", 0, 64, 0, "チャンネル数", RO));
         sc.add(b(base + "/connected", false, "接続中", RO));
         sc.add(e(base + "/api", {"wasapi", "asio", "vmic"}, "wasapi", "ドライバー種別", RO));
+        sc.add(i(base + "/sample_rate", 0, 384000, 0, "デバイス側のサンプルレート（0 = 不明。48000 以外はエンジンが変換する）", RO));
     }
     sc.add(s("/devices/process/#/exe", "", "音声を出しているアプリの実行ファイル名", RO));
     sc.add(i("/devices/process/#/pid", 0, kI64Max, 0, "プロセス ID", RO));
@@ -103,7 +104,7 @@ Schema buildV1() {
     sc.add(i("/track/#/position", 1, kMaxTracks, 1, "画面上の並び順（1 始まり、連番）", RO));
     sc.add(ic("/track/#/channels", {1, 2}, 2, "1 = モノ、2 = ステレオ"));
     sc.add(e("/track/#/input/kind", {"none", "device", "process", "lan", "sampler"}, "none", "入力の種類"));
-    sc.add(s("/track/#/input/source", "", "入力元（デバイス ID、実行ファイル名、LAN ストリーム ID）"));
+    sc.add(s("/track/#/input/source", "", "入力元（デバイス ID、実行ファイル名（大文字小文字は区別しない）、LAN ストリーム ID）"));
     sc.add(i("/track/#/input/channel", 1, 64, 1, "デバイスの何チャンネル目から使うか"));
     sc.add(e("/track/#/input/state", {"none", "ok", "disconnected"}, "none", "入力の接続状態", RO));
     addStrip(sc, "/track/#", false);
