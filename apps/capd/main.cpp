@@ -7,6 +7,7 @@
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
 //   capd vcam [options]           feed the virtual camera from a monitor (or a stamped test pattern)
+//   capd fullscreen [options]     show a monitor's picture full screen on another (or the same) monitor
 //
 
 #include "src/engine_follower.hpp"
@@ -14,6 +15,7 @@
 #include "src/settings.hpp"
 
 #ifdef _WIN32
+#include "src/fullscreen_output.hpp"
 #include "src/vcam_output.hpp"
 #include "src/video_encoder.hpp"
 #include "src/video_mix.hpp"
@@ -67,6 +69,8 @@ usage:
   capd record [options]
   capd probe FILE
   capd vcam [--seconds S] [--resolution 1080p|720p] [--source wgc|dda] [--monitor N] [--test-pattern]
+  capd fullscreen --display ID [--seconds S] [--monitor N] [--mix-size WxH] [--mix-fps N]
+                          ID: \\.\DISPLAY2 or an index from "capd list"; --monitor is the captured one
 
 record options:
   --seconds S             stop after S seconds (default: run until Ctrl+C)
@@ -230,6 +234,59 @@ int cmdVcam(const std::vector<std::string>& args) {
     out.detach();
     const auto st = out.stats();
     std::cout << "RESULT vcam frames=" << st.frames << " skipped=" << st.skipped << " error=\"" << error << "\"\n";
+    return error.empty() ? 0 : 3;
+}
+#endif
+
+#ifdef _WIN32
+int cmdFullscreen(const std::vector<std::string>& args) {
+    double seconds = 0;
+    std::string display;
+    MixSettings ms;
+    ms.fps = 60;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error("missing value for " + a);
+            return args[++i];
+        };
+        if (a == "--seconds") seconds = std::atof(next().c_str());
+        else if (a == "--display") display = next();
+        else if (a == "--monitor") ms.monitor = std::atoi(next().c_str());
+        else if (a == "--source") ms.source = next();
+        else if (a == "--mix-size") {
+            if (!parseSize(next(), ms.width, ms.height)) throw std::runtime_error("bad --mix-size");
+        } else if (a == "--mix-fps") ms.fps = std::max(1, std::atoi(next().c_str()));
+        else throw std::runtime_error("unknown option " + a);
+    }
+    VideoMix mix(ms);
+    FullscreenOutput out(display, nullptr);
+    std::cout << "source: " << mix.sourceDescription() << " -> full screen on " << (display.empty() ? "(primary)" : display)
+              << (seconds > 0 ? "" : ", Ctrl+C to stop") << "\n"
+              << std::flush;
+    mix.addConsumer([&](ID3D11Texture2D* canvas, std::int64_t, std::int64_t qpc) {
+        out.onFrame(canvas, mix.device(), 0, qpc);
+    });
+    mix.start();
+    const auto t0 = std::chrono::steady_clock::now();
+    auto nextPrint = t0 + std::chrono::seconds(1);
+    std::string error;
+    while (!g_stop && (seconds <= 0 || std::chrono::steady_clock::now() - t0 < std::chrono::duration<double>(seconds))) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!mix.error().empty()) {
+            error = mix.error();
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= nextPrint) {
+            nextPrint += std::chrono::seconds(1);
+            const auto st = out.stats();
+            std::cout << "presented " << st.frames << ", skipped " << st.skipped << " | " << st.state << "\n" << std::flush;
+        }
+    }
+    mix.stop();
+    const auto st = out.stats();
+    std::cout << "RESULT fullscreen frames=" << st.frames << " skipped=" << st.skipped << " state=\"" << st.state
+              << "\" error=\"" << error << "\"\n";
     return error.empty() ? 0 : 3;
 }
 #endif
@@ -479,6 +536,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
         if (cmd == "list") return cmdList();
         if (cmd == "vcam") return cmdVcam(args);
+        if (cmd == "fullscreen") return cmdFullscreen(args);
 #endif
         if (cmd == "record") return cmdRecord(args);
         if (cmd == "serve") return cmdServe(args);

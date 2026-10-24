@@ -22,7 +22,8 @@ if(WIN32)
         src/compositor.cpp
         src/video_encoder.cpp
         src/video_mix.cpp
-        src/vcam_output.cpp)
+        src/vcam_output.cpp
+        src/fullscreen_output.cpp)
     target_link_libraries(capd_core PUBLIC dc_vcam_sender d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32)
 endif()
 dc_apply_options(capd_core)
