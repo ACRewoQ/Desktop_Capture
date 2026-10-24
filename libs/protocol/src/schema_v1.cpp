@@ -110,7 +110,8 @@ Schema buildV1() {
     sc.add(i("/track/#/position", 1, kMaxTracks, 1, "画面上の並び順（1 始まり、連番）", RO));
     sc.add(ic("/track/#/channels", {1, 2}, 2, "1 = モノ、2 = ステレオ"));
     sc.add(e("/track/#/input/kind", {"none", "device", "process", "lan", "sampler"}, "none", "入力の種類"));
-    sc.add(s("/track/#/input/source", "", "入力元（デバイス ID、実行ファイル名、LAN ストリーム ID）"));
+    sc.add(s("/track/#/input/source", "",
+             "入力元（デバイス ID、実行ファイル名、LAN ストリーム ID。sampler は \"\" = 全バンク、\"1\"〜\"8\" = そのバンクだけ）"));
     sc.add(i("/track/#/input/channel", 1, 64, 1, "デバイスの何チャンネル目から使うか"));
     sc.add(e("/track/#/input/state", {"none", "ok", "disconnected"}, "none", "入力の接続状態", RO));
     addStrip(sc, "/track/#", false);
@@ -136,6 +137,31 @@ Schema buildV1() {
     sc.add(s("/capture/audio/#/source", "", "音声ストリーム 1〜8 の中身（\"\" / master / track/<n>）"));
     sc.add(e("/capture/audio/#/codec", {"aac", "opus", "pcm"}, "aac", "音声コーデック"));
     sc.add(i("/capture/audio/#/bitrate_kbps", 64, 512, 192, "音声ビットレート kbps（aac / opus）"));
+
+    // --- recorder: per-track WAV / FLAC (tracks and master opt in with record/enabled, record/tap) ---
+    sc.add(e("/recorder/state", {"idle", "recording", "error"}, "idle", "トラック別録音の状態", RO));
+    sc.add(i("/recorder/elapsed_ms", 0, kI64Max, 0, "録音経過時間 ms", RO));
+    sc.add(s("/recorder/folder", "", "録音中・直前のテイクのフォルダー", RO));
+    sc.add(s("/recorder/error", "", "直前のエラー内容", RO));
+    sc.add(i("/recorder/dropped_frames", 0, kI64Max, 0, "書き込みが間に合わず無音で埋めたフレーム数（テイクごと）", RO));
+    sc.add(e("/recorder/format", {"wav", "flac"}, "wav", "形式（48kHz / 24bit。WAV は 4GB を超えると RF64）"));
+    sc.add(s("/recorder/directory", "", "保存先フォルダー（\"\" = ミュージック\\Desktop Capture）"));
+    sc.add(s("/recorder/folder_name", "%Y-%m-%d_%H-%M-%S", "テイクのフォルダー名パターン（strftime 形式）"));
+    sc.add(b("/recorder/with_capture", true, "録画（/capture）の開始・停止に合わせて録音も開始・停止する"));
+
+    // --- sampler: sound effect pads, played into the tracks whose input kind is sampler ---
+    sc.add(i("/sampler/active_bank", 1, kSamplerBanks, 1, "表示・ホットキー・MIDI の対象バンク"));
+    sc.add(s("/sampler/bank/#/name", "", "バンク名"));
+    sc.add(s("/sampler/bank/#/pad/#/file", "", "音声ファイルのパス（WAV / FLAC / MP3 / Ogg Vorbis。\"\" = 空）"));
+    sc.add(s("/sampler/bank/#/pad/#/name", "", "パッドの表示名（\"\" = ファイル名）"));
+    sc.add(s("/sampler/bank/#/pad/#/color", "", "パッドの色（#rrggbb、\"\" = 既定）"));
+    sc.add(e("/sampler/bank/#/pad/#/mode", {"oneshot", "toggle", "hold", "loop"}, "oneshot",
+             "oneshot = 最後まで再生（押し直すと頭から）、toggle = 押すたびに再生・停止、hold = 押している間だけ、loop = 押すたびにループ再生・停止"));
+    sc.add(f("/sampler/bank/#/pad/#/volume_db", kMinVolumeDb, kMaxVolumeDb, 0.0, "パッドの音量 dB"));
+    sc.add(e("/sampler/bank/#/pad/#/state", {"empty", "loading", "ready", "error"}, "empty", "ファイルの読み込み状態", RO));
+    sc.add(s("/sampler/bank/#/pad/#/error", "", "読み込みエラーの内容", RO));
+    sc.add(i("/sampler/bank/#/pad/#/duration_ms", 0, kI64Max, 0, "音声の長さ ms", RO));
+    sc.add(b("/sampler/bank/#/pad/#/playing", false, "再生中", RO));
 
     // --- video (minimal in v1; scenes and layers are added by lane B1 in P3) ---
     sc.add(s("/video/mix/#/name", "", "映像ミックス名"));
@@ -182,6 +208,13 @@ Schema buildV1() {
     sc.addMethod({"/capture/record/stop", "", "nil", "録画停止", "P0"});
     sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?", "nil",
                   "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ）", "P2"});
+    sc.addMethod({"/recorder/start", "", "string（テイクのフォルダー）",
+                  "トラック別録音を開始。録音対象がなければ conflict", "P3"});
+    sc.addMethod({"/recorder/stop", "", "nil", "トラック別録音を停止", "P3"});
+    sc.addMethod({"/sampler/trigger", "pad:int, bank:int?", "nil",
+                  "パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による", "P3"});
+    sc.addMethod({"/sampler/release", "pad:int, bank:int?", "nil", "パッドを離す（hold のパッドが止まる）", "P3"});
+    sc.addMethod({"/sampler/stop", "bank:int?", "nil", "再生中のパッドを止める（bank なし = 全バンク）", "P3"});
     sc.addMethod({"/track/#/fx/add", "type:string, index:int?", "int（スロット番号）", "エフェクト追加", "P3"});
     sc.addMethod({"/track/#/fx/remove", "index:int", "nil", "エフェクト削除", "P3"});
     sc.addMethod({"/track/#/fx/move", "from:int, to:int", "nil", "エフェクトの順序変更", "P3"});

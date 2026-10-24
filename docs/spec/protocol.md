@@ -54,6 +54,8 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `/devices` | 入出力デバイス・音声を出しているアプリの一覧（読み取り専用） | A |
 | `/mixer`, `/track/#`, `/master`, `/cue` | ミキサー、トラック、ルーティング、エフェクト | A |
 | `/capture` | 出力先「デスクトップキャプチャ」：録画設定・状態・音声ストリーム割り当て | B |
+| `/recorder` | トラック別録音（WAV / FLAC）の設定・状態 | A3 |
+| `/sampler` | サンプラー（効果音パッド）のバンク・パッド | A3 |
 | `/video` | 映像ミックス、仮想カメラ、全画面表示、プレビュー | B |
 | `/remote` | リモコンの接続数・ペアリング | N / C |
 
@@ -67,6 +69,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | エフェクト | 1 トラックあたり 16 |
 | 映像ミックス | 最大 4 |
 | 録画の音声ストリーム | 8（`/capture/audio/1`〜`8`） |
+| サンプラー | 8 バンク × 16 パッド（`/sampler/bank/1/pad/1`〜`/sampler/bank/8/pad/16`） |
 | リモコン同時接続 | 4 |
 
 ### 4.2 トラック番号
@@ -150,6 +153,11 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/capture/record/start` | なし | nil | P0 | 録画開始。録画中なら `conflict` |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止。録画中でなければ `conflict` |
 | `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
+| `/recorder/start` | なし | str（テイクのフォルダー） | P3 | トラック別録音の開始（5.4.2） |
+| `/recorder/stop` | なし | nil | P3 | トラック別録音の停止。録音中でなければ `conflict` |
+| `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
+| `/sampler/release` | `pad`:int, `bank`:int? | nil | P3 | パッドを離す |
+| `/sampler/stop` | `bank`:int?（なし = 全バンク） | nil | P3 | 再生中のパッドを止める |
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
 | `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
@@ -172,6 +180,27 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 
 `state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
 
+#### 5.4.2 トラック別録音（レコーダー）
+
+エンジンが自分でファイルに書きます（capd は関係しません）。`/track/#/record/enabled`・`/master/record/enabled` が true のものを、`record/tap` の位置（pre = フェーダー前でトラックのチャンネル数、post = フェーダー後のステレオ）で、1 つのテイクフォルダーに 1 ファイルずつ書きます。
+
+- 開始：`/recorder/start`、または `/recorder/with_capture` が true のとき `/capture/state` が `recording` になった時点。録音対象がなければ `conflict`（"no track armed for recording"）、録音中なら `conflict`。録画に連動して始めたときに録音対象がなければ、何もしません。
+- 停止：`/recorder/stop`、または録画に連動して始めた録音は `/capture/state` が `recording` でなくなった時点（`stopping`・`idle`・`error`）。
+- フォルダー：`/recorder/directory`（`""` = ミュージック\Desktop Capture）の下に `/recorder/folder_name` の名前で作ります。同じ名前があれば `_2`、`_3` を付けます。ファイル名は `<番号2桁>_<表示名>.wav`（マスターは `00_Master`、トラックは `/track/#/` の番号。ファイル名に使えない文字は `_`）。
+- 形式：48kHz / 24bit の WAV か FLAC。WAV が 4GB を超えると RF64 に切り替えます。
+- 全ファイルは同じ音声ブロックから始まり、同じ長さで終わります（サンプル単位でそろう）。録音中に対象・タップ・チャンネル数を変えても次のテイクまで反映しません。録音中に削除したトラックや切断した入力は無音で続きます。
+- ディスク書き込みは別スレッドです。書き込みが間に合わずバッファがあふれた分は無音で埋めて長さを保ち、`/recorder/dropped_frames` に数えます。書き込みに失敗したら（ディスク満杯など）そこまでのファイルを正しく閉じて `/recorder/state` = `error`、`/recorder/error` に理由を入れます。
+
+#### 5.4.3 サンプラー
+
+8 バンク × 16 パッドの効果音パッドです。サンプラーの音は、`/track/#/input/kind` = `sampler` のトラックに入ります（`input/source` が `""` なら全バンク、`"1"`〜`"8"` ならそのバンクだけ）。音量・パン・エフェクト・出力先はそのトラックで決めます。
+
+- `/sampler/bank/#/pad/#/file` を設定すると、エンジンは別スレッドで読み込みます（`state`：`loading` → `ready` か `error`）。WAV・FLAC・MP3・Ogg Vorbis を読み、48kHz のステレオに変換してメモリに置きます。1 ファイル 10 分まで。読み込み中や空のパッドの `trigger` は何もしません（エラーにもしません）。
+- `mode`：`oneshot` は押すと最後まで再生し、再生中に押すと頭から。`toggle` は押すたびに再生と停止。`hold` は押している間（`release` まで）だけ。`loop` は押すたびにループ再生と停止。停止と頭出しは数 ms のフェードでつなぎます。
+- 同時に鳴らせるのは 32 音まで。足りないときは一番古い音を止めます。
+- 再生中は `playing` が true になります（約 30Hz で更新）。再生中にファイルを差し替えるとその音は止まります。
+- `pad`・`bank` が範囲外なら `out_of_range` です。
+
 ### 5.5 Event（通知）
 
 パラメーターではない出来事を知らせます。状態そのものは必ずツリーにも載せ、Event は「起きたこと」の通知だけに使います（再接続したクライアントはツリーから状態を復元できるようにするため）。
@@ -180,6 +209,8 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 |---|---|---|
 | `capture.started` | `file` | 録画開始 |
 | `capture.stopped` | `file`, `duration_ms` | 録画停止 |
+| `recorder.started` | `folder` | トラック別録音の開始 |
+| `recorder.stopped` | `folder`, `duration_ms`, `error`? | トラック別録音の停止 |
 | `capture.segment` | `file`, `reason` | GPU リセットなどで新しいファイルに切り替えた（P3） |
 | `device.lost` / `device.restored` | `id`, `name` | デバイスの切断・復帰（P3） |
 

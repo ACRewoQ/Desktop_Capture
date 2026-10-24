@@ -93,4 +93,10 @@ TEST_CASE("default parameter sets are complete and valid", "[schema]") {
     CHECK(global.count("/capture/audio/8/codec"));
     CHECK(global.count("/video/mix/1/name"));
     CHECK_FALSE(global.count("/devices/input/1/id"));
+    CHECK(global.count("/recorder/format"));
+    CHECK(global.count("/sampler/bank/8/pad/16/file"));
+    CHECK_FALSE(global.count("/sampler/bank/9/name"));
+    CHECK_FALSE(global.count("/sampler/bank/1/pad/17/file"));
+    for (const auto& c : globalDefaults())
+        if (c.path == "/sampler/bank/3/name") CHECK(c.value == Value{std::string("Bank 3")});
 }

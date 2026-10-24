@@ -37,7 +37,7 @@
 | `/track/#/position` | int | ro | 1 〜 64 | `1` | 画面上の並び順（1 始まり、連番） |
 | `/track/#/channels` | int | rw | 1 / 2 | `2` | 1 = モノ、2 = ステレオ |
 | `/track/#/input/kind` | string | rw | none / device / process / lan / sampler | `"none"` | 入力の種類 |
-| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN ストリーム ID） |
+| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN ストリーム ID。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
 | `/track/#/input/channel` | int | rw | 1 〜 64 | `1` | デバイスの何チャンネル目から使うか |
 | `/track/#/input/state` | string | ro | none / ok / disconnected | `"none"` | 入力の接続状態 |
 | `/track/#/name` | string | rw |  | `""` | 表示名 |
@@ -106,6 +106,26 @@
 | `/capture/audio/#/source` | string | rw |  | `""` | 音声ストリーム 1〜8 の中身（"" / master / track/<n>） |
 | `/capture/audio/#/codec` | string | rw | aac / opus / pcm | `"aac"` | 音声コーデック |
 | `/capture/audio/#/bitrate_kbps` | int | rw | 64 〜 512 | `192` | 音声ビットレート kbps（aac / opus） |
+| `/recorder/state` | string | ro | idle / recording / error | `"idle"` | トラック別録音の状態 |
+| `/recorder/elapsed_ms` | int | ro | 0 〜 9.22337e+18 | `0` | 録音経過時間 ms |
+| `/recorder/folder` | string | ro |  | `""` | 録音中・直前のテイクのフォルダー |
+| `/recorder/error` | string | ro |  | `""` | 直前のエラー内容 |
+| `/recorder/dropped_frames` | int | ro | 0 〜 9.22337e+18 | `0` | 書き込みが間に合わず無音で埋めたフレーム数（テイクごと） |
+| `/recorder/format` | string | rw | wav / flac | `"wav"` | 形式（48kHz / 24bit。WAV は 4GB を超えると RF64） |
+| `/recorder/directory` | string | rw |  | `""` | 保存先フォルダー（"" = ミュージック\Desktop Capture） |
+| `/recorder/folder_name` | string | rw |  | `"%Y-%m-%d_%H-%M-%S"` | テイクのフォルダー名パターン（strftime 形式） |
+| `/recorder/with_capture` | bool | rw |  | `true` | 録画（/capture）の開始・停止に合わせて録音も開始・停止する |
+| `/sampler/active_bank` | int | rw | 1 〜 8 | `1` | 表示・ホットキー・MIDI の対象バンク |
+| `/sampler/bank/#/name` | string | rw |  | `""` | バンク名 |
+| `/sampler/bank/#/pad/#/file` | string | rw |  | `""` | 音声ファイルのパス（WAV / FLAC / MP3 / Ogg Vorbis。"" = 空） |
+| `/sampler/bank/#/pad/#/name` | string | rw |  | `""` | パッドの表示名（"" = ファイル名） |
+| `/sampler/bank/#/pad/#/color` | string | rw |  | `""` | パッドの色（#rrggbb、"" = 既定） |
+| `/sampler/bank/#/pad/#/mode` | string | rw | oneshot / toggle / hold / loop | `"oneshot"` | oneshot = 最後まで再生（押し直すと頭から）、toggle = 押すたびに再生・停止、hold = 押している間だけ、loop = 押すたびにループ再生・停止 |
+| `/sampler/bank/#/pad/#/volume_db` | float | rw | -144 〜 12 | `0` | パッドの音量 dB |
+| `/sampler/bank/#/pad/#/state` | string | ro | empty / loading / ready / error | `"empty"` | ファイルの読み込み状態 |
+| `/sampler/bank/#/pad/#/error` | string | ro |  | `""` | 読み込みエラーの内容 |
+| `/sampler/bank/#/pad/#/duration_ms` | int | ro | 0 〜 9.22337e+18 | `0` | 音声の長さ ms |
+| `/sampler/bank/#/pad/#/playing` | bool | ro |  | `false` | 再生中 |
 | `/video/mix/#/name` | string | rw |  | `""` | 映像ミックス名 |
 | `/video/mix/#/width` | int | rw | 160 〜 3840 | `1920` | 合成解像度（幅） |
 | `/video/mix/#/height` | int | rw | 90 〜 2160 | `1080` | 合成解像度（高さ） |
@@ -144,6 +164,11 @@
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
 | `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
+| `/recorder/start` | なし | string（テイクのフォルダー） | P3 | トラック別録音を開始。録音対象がなければ conflict |
+| `/recorder/stop` | なし | nil | P3 | トラック別録音を停止 |
+| `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
+| `/sampler/release` | pad:int, bank:int? | nil | P3 | パッドを離す（hold のパッドが止まる） |
+| `/sampler/stop` | bank:int? | nil | P3 | 再生中のパッドを止める（bank なし = 全バンク） |
 | `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
