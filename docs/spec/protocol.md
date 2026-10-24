@@ -15,7 +15,8 @@
 |---|---|---|
 | 制御 | 設定の取得・変更、コマンド、通知 | TCP、既定ポート 47800 |
 | メーター | レベルメーター | UDP、約 30Hz、クライアントが指定したポートへ |
-| 検出 | LAN 内のエンジンの自動検出 | mDNS（`_dcmix._tcp`）※P4 で実装 |
+| 検出 | LAN 内のエンジンの自動検出 | mDNS（`_dcmix._tcp`、8 章） |
+| メディア | LAN の音声・映像ストリーム | UDP（[lan-media.md](lan-media.md)、購読は 10 章） |
 
 ## 2. TCP の枠組み
 
@@ -56,6 +57,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `/capture` | 出力先「デスクトップキャプチャ」：録画設定・状態・音声ストリーム割り当て | B |
 | `/video` | 映像ミックス、仮想カメラ、全画面表示、プレビュー | B |
 | `/remote` | リモコンの接続数・ペアリング | N / C |
+| `/lan` | LAN 送信ストリーム、購読、LAN 内の別の PC（相手） | N |
 
 ### 4.1 上限値
 
@@ -68,6 +70,10 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | 映像ミックス | 最大 4 |
 | 録画の音声ストリーム | 8（`/capture/audio/1`〜`8`） |
 | リモコン同時接続 | 4 |
+| LAN 送信ストリーム（音声） | 8（`/lan/stream/1`〜`8`、出力先 `lan/1`〜`lan/8`） |
+| 購読 | 32（`/lan/sub/#`） |
+| 相手の PC の一覧 | 16（`/lan/peers/#`） |
+| ペアリング済みの相手 | 16（`/remote/paired/#`） |
 
 ### 4.2 トラック番号
 
@@ -84,7 +90,9 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `track/<n>` | 別のトラックの入力に足す | ○ | ○ | × |
 | `device/<id>` | 出力デバイス（`/devices/output/#/id`） | ○ | ○ | ○ |
 | `vmic/<id>` | 仮想マイク（VB-CABLE など） | ○ | ○ | ○ |
-| `lan/<stream>` | LAN メディア伝送の送信ストリーム | ○ | ○ | ○ |
+| `lan/<n>` | LAN 送信ストリーム `/lan/stream/<n>`（1〜8） | ○ | ○ | ○ |
+
+`lan/<n>` は 1〜8 の番号だけです（それ以外は `out_of_range`）。同じストリームへ複数のトラックが出力すると、出力デバイスと同じように足し合わせて送ります。
 
 エンジンは次を拒否します（`conflict`）：自分自身への出力、ループ（例：1→2→1）、マスターからトラックへの出力、センドからマスターへの送り。存在しないトラックを指すと `not_found` です。処理順は出力先のつながりから自動で決めます（`processingOrder()`）。トラックを削除すると、そのトラックを指していた出力先・センド・録画音声ストリームは `""` に戻ります。
 
@@ -94,7 +102,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 
 | 番号 | 名前 | 向き | body のキー |
 |---|---|---|---|
-| 1 | Hello | C→S | `proto` int, `client` str, `role` int（0 = ローカル、1 = リモコン、2 = サービス）, `meter_port` int, `pair_code` str, `token` str |
+| 1 | Hello | C→S | `proto` int, `client` str, `client_id` str, `role` int（0 = ローカル、1 = リモコン、2 = サービス、3 = 相手のエンジン）, `meter_port` int, `pair_code` str, `token` str |
 | 2 | Welcome | S→C | `proto` int, `server` str, `server_id` str, `session` int, `token` str |
 | 3 | Snapshot | S→C | `rev` int, `params` map（パス→値） |
 | 4 | Delta | S→C | `rev` int, `origin` int, `origin_client` str, `changes` map（パス→値）, `removed` [str] |
@@ -119,7 +127,9 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 最初のメッセージは必ず `Hello`。それ以外が来たら `Error(bad_request)` で切断します。
 - `proto` が違えば `Error(unsupported_version)` で切断します。
 - `session` はエンジンの起動ごとに変わります。クライアントは再接続時に値が変わっていたら、手元の状態をすべて捨ててスナップショットから作り直します。
-- ループバック（127.0.0.1 / ::1）以外からの接続は、ペアリング機能（P4）ができるまで既定で拒否します（`unauthorized`）。リモコンの 5 台目は `limit_reached` で拒否します。
+- ループバック（127.0.0.1 / ::1）以外からの接続は、role がリモコン（1）か相手のエンジン（3）で、`token` が有効か、受付中のペアリングコードが合っているときだけ受け付けます（8 章）。それ以外は `unauthorized` です。開発用の `mixd --allow-remote` はこの検査を省きます。リモコンの 5 台目は `limit_reached` で拒否します（相手のエンジンは数えません）。
+- `client_id` はクライアントのインストールごとに固定の id です（相手のエンジンは自分の `server_id`）。ペアリングの記録に使います。空でも接続できますが、ペアリングはできません。
+- role = 3（相手のエンジン）の接続は、ツリーを読むことと `/lan/subscribe`・`/lan/unsubscribe`・`/session/resync` だけができます。Set と他の Call は `unauthorized` です。
 
 ### 5.2 リビジョン（rev）とデルタ
 
@@ -152,7 +162,11 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
-| `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P4 | ペアリング受付 |
+| `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P3 | ペアリング受付（8 章） |
+| `/remote/unpair` | `id`:str | nil | P3 | ペアリングの取り消し。つながっていれば切断する |
+| `/lan/subscribe` / `unsubscribe` | `stream`:str, `port`:int / `id`:int | int（購読番号）/ nil | P3 | ストリームの購読（10 章） |
+| `/lan/peers/pair` | `id`:str, `code`:str | nil | P3 | 相手の PC とペアリングする（8 章） |
+| `/lan/peers/forget` / `add` | `id`:str / `address`:str | nil | P3 | 相手の記録を消す / IP アドレスで手動追加 |
 
 未実装・未知のメソッドは `unknown_method` を返します。
 
@@ -222,14 +236,51 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 
 `meter_id` は `/track/#/meter_id`、`/master/meter_id`（= 0）で対応づけます。
 
-## 8. 検出とペアリング（P4 で実装、ここでは方針のみ）
+## 8. 検出とペアリング
 
-- エンジンは mDNS でサービス `_dcmix._tcp` を広告します。TXT レコード：`proto=1`、`id=<server_id>`、`name=<PC名>`。
-- リモコンは初回、エンジン側の画面に表示された 6 桁コードを `Hello.pair_code` に入れて接続します。成功すると `Welcome.token` が返り、以後は `Hello.token` で接続します。
-- ローカル UI と capd はループバック接続なのでペアリング不要です。
+### 8.1 検出（mDNS / DNS-SD）
+
+- エンジンはサービス `_dcmix._tcp`（ポート = 制御の TCP ポート）を広告します。インスタンス名は `/lan/name`（空ならコンピューター名）。TXT レコード：`proto=1`、`id=<server_id>`、`name=<表示名>`。
+- エンジンは同じサービスを探し、見つけた相手（自分以外）を `/lan/peers/#` に載せます。mDNS が届かない相手（別のサブネット、VPN など）は `/lan/peers/add` で IP アドレスから追加できます（手動の相手は再起動後も残ります）。
+- `server_id` はインストールごとに 1 度だけ乱数で作り、設定フォルダーに保存します（`/lan/id` にも出します）。
+- Windows では OS の DNS-SD（`DnsServiceRegister` / `DnsServiceBrowse`）を使います。UDP 5353 を自分で開かないので、OS の mDNS とぶつからず、ファイアウォールの追加の許可も要りません。
+
+### 8.2 ペアリング
+
+ペアリングは「受け付ける側」と「つなぐ側」の 1 方向です。つないだ側（リモコン、または別の PC のエンジン）が、受け付けた側に接続し、そのストリームを受け取れるようになります。2 台の PC で双方向に送り合うときは、両方の PC でペアリングします。
+
+1. 受け付ける側の画面で `/remote/pairing/start` を呼ぶと 6 桁の数字が返り、`/remote/pairing/active` = true になります。受付は 2 分で終わり、1 台成功するか `/remote/pairing/stop` でも終わります。
+2. つなぐ側は Hello に `pair_code` と `client_id` を入れて接続します（相手のエンジンは role = 3。エンジンの UI からは `/lan/peers/pair` `id`, `code` を呼ぶと、エンジンが代わりに接続します）。
+3. コードが合えば、エンジンはトークン（128 ビットの乱数を 16 進 32 文字）を作って `Welcome.token` で返し、`client_id`・名前・role と一緒に保存して `/remote/paired/#` に載せます。つなぐ側はトークンを保存し、以後は `Hello.token` で接続します。
+4. コードが違うと `unauthorized` で切断します。5 回間違えると受付を終わります。
+5. `/remote/unpair` で取り消すと、そのトークンは使えなくなり、つながっていれば切断します。つなぐ側の相手一覧では `refused` になります。
+
+ローカル UI と capd はループバック接続なのでペアリング不要です。制御の TCP は暗号化しません（個人用の LAN での利用が前提）。
 
 ## 9. 互換性のルール
 
 - キーやパラメーターの**追加**は互換とみなします（受信側は知らないものを無視）。v1 のまま追加できます。
 - パラメーターの意味・型・範囲の変更、削除、メッセージ形式の変更は非互換です。`kProtocolVersion` を上げ、この仕様書と `protocol-params.md` を同じ PR で更新します。
+- Hello の role = 3（相手のエンジン）と `client_id` は P3 で足しました。古いエンジンは知らない role を `bad_request` で拒否するので、LAN でつなぐ PC は同じ版にそろえてください。
 - 各レーンがパラメーターを足すときは `schema_v1.cpp` に追加し、`protocol-params.md` を生成し直します（`schema_doc_up_to_date` テストが食い違いを検出します）。
+
+## 10. LAN ストリームの購読
+
+LAN の音声・映像は、受け取る側が送る側のエンジンに制御プロトコルで申し込み、送る側がその宛先へ UDP で送ります（パケットの形式は [lan-media.md](lan-media.md)）。受信者のいないストリームは送らず、映像はエンコードもしません。
+
+| ストリーム | 中身 | 送るプロセス（UDP の送り元） |
+|---|---|---|
+| `audio/<n>` | 出力先 `lan/<n>` に出された音声（`/lan/stream/<n>` の設定） | mixd（UDP 47810） |
+| `video/preview` | リモコンのプレビュー（`/video/preview/*`） | capd（UDP 47811） |
+| `video/lan` | 映像ミックスの出力先「LAN 送信」（`/video/lan/*`） | capd（UDP 47811） |
+
+- `/lan/subscribe` `stream`, `port` で申し込みます。送り先は「制御の接続元の IP アドレス」の `port`（受け取る側の UDP ポート）です。戻り値の購読番号は `/lan/sub/<番号>` に対応し、`/lan/unsubscribe` `id` でやめます。購読は**その制御接続が切れると自動で消えます**。同じ接続から同じストリーム・同じポートへの申し込みは、前の番号を返します。32 件を超えると `limit_reached` です。
+- エンジンは購読を `/lan/sub/#`（`stream`、`address`、`client`）に載せます。capd は `video/*` の購読をツリーで追い、プレビュー・LAN 送信の映像をエンコードしてその宛先へ送ります。`/lan/stream/#/subscribers` は音声ストリームごとの購読数です。
+- 受信レポート（lan-media.md 2.4）はパケットの送り元へ返すので、映像のキーフレーム要求は capd に、音声の統計は mixd に届きます。
+
+### 10.1 別の PC の音声をトラックに入れる
+
+- `/track/#/input/kind` = `lan`、`/track/#/input/source` = `<相手の id>/<n>`（相手の `/lan/peers/#/id` と、相手の `audio/<n>`）。
+- エンジンはペアリング済みで見つかっている相手に自分から接続し（role = 3）、相手のストリーム名を `/lan/peers/#/stream/#` に写します。トラックが参照しているストリームだけを購読し、参照がなくなればやめます。
+- 受け取った音声は相手との時計のずれを補正して（lan-media.md 3 章）、エンジンのクロックで鳴らします。`/track/#/input/lan_buffer_ms` は受信バッファの目標（0 = 自動）、`/track/#/input/lan_delay_ms` は今のバッファ量です。
+- 相手がいない・受信が途絶えた間は無音で、`/track/#/input/state` = `disconnected` になります。相手が戻れば自動で購読し直します（設計書「デバイス切断時の動作」の LAN 入力）。
