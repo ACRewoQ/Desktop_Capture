@@ -1,12 +1,14 @@
 #include "dc/protocol/param_store.hpp"
 #include "dc/protocol/fx.hpp"
 #include "dc/protocol/routing.hpp"
+#include "dc/protocol/video.hpp"
 
 #include <stdexcept>
 
 namespace dc::proto {
 
 ValidationError defaultSemanticValidator(const ParamTree& after, const std::vector<Change>& changes) {
+    if (auto err = validateVideo(after, changes)) return err;
     std::vector<std::string> fx;
     bool routing = false;
     for (const auto& c : changes) {
