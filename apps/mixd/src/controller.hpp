@@ -6,6 +6,7 @@
 
 #include "device_manager.hpp"
 #include "engine.hpp"
+#include "fx_manager.hpp"
 #include "plan_builder.hpp"
 #include "recorder.hpp"
 #include "sampler.hpp"
@@ -34,6 +35,7 @@ public:
         std::chrono::milliseconds meterInterval{33};
         std::chrono::milliseconds statsInterval{500};
         bool verbose = true;
+        PluginHost* plugins = nullptr; // VST3 host, null when the build has none
         LanService* lan = nullptr; // LAN streams, inputs and pairing (optional)
     };
 
@@ -125,6 +127,7 @@ private:
     std::uint64_t loadSerial_ = 0;
     std::array<std::uint64_t, 2> lastPlaying_{};
     std::unique_ptr<SampleLoader> loader_;
+    FxManager fx_;
 };
 
 } // namespace dc::mixd

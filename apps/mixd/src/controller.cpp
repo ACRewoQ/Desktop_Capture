@@ -64,7 +64,8 @@ bool samePorts(const PortTable& a, const PortTable& b) { return a.inputs == b.in
 Controller::Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
                        shm::AudioRingWriter* shm, Options options)
     : io_(io), server_(server), devices_(devices), engine_(engine), shm_(shm), options_(options), meterTimer_(io),
-      statsTimer_(io), recordTimer_(io), recorderTimer_(io) {
+      statsTimer_(io), recordTimer_(io), recorderTimer_(io),
+      fx_(io, server, options.plugins, [this] { scheduleRebuild(); }, options.verbose) {
     loader_ = std::make_unique<SampleLoader>([this](SampleLoader::Result r) {
         asio::post(io_, [this, r = std::move(r)]() mutable {
             if (!stopped_) sampleLoaded(std::move(r));
@@ -75,6 +76,7 @@ Controller::Controller(asio::io_context& io, control::ControlServer& server, Dev
 void Controller::start(const std::vector<DeviceInfo>& devices) {
     seed(devices);
     registerMethods();
+    fx_.start();
     scheduleRebuild();
     scheduleMeters();
     scheduleStats();
@@ -83,6 +85,7 @@ void Controller::start(const std::vector<DeviceInfo>& devices) {
 void Controller::stop() {
     asio::post(io_, [this] {
         stopped_ = true;
+        fx_.stop();
         meterTimer_.cancel();
         statsTimer_.cancel();
         recordTimer_.cancel();
@@ -202,9 +205,11 @@ std::string padBase(int index) {
 void Controller::onDelta(const Delta& delta) {
     control::followVideoDelta(server_, delta);
     if (options_.lan) options_.lan->onDelta(delta); // first, so new LAN ports are there for the plan
+    fx_.onDelta(delta);
     // values the engine itself reports (load, counters, device lists, derived states) and settings
-    // read elsewhere (recorder, sampler files) do not change the mix; everything else might
+    // read elsewhere (recorder, sampler files) do not change the mix; everything else might. Effect slots reach the mix through FxManager.
     auto reportOnly = [](const std::string& path) {
+        if (FxManager::handlesPath(path)) return true;
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
@@ -229,7 +234,9 @@ void Controller::onDelta(const Delta& delta) {
         }
     }
     bool relevant = !delta.removed.empty() &&
-                    std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) { return !reportOnly(r + "/"); });
+                    std::any_of(delta.removed.begin(), delta.removed.end(), [&](const std::string& r) {
+                        return !FxManager::handlesPath(r) && !reportOnly(r + "/");
+                    });
     for (const auto& c : delta.changes) relevant = relevant || !reportOnly(c.path);
     if (relevant) scheduleRebuild();
 }
@@ -249,7 +256,7 @@ void Controller::rebuild() {
     devices_.setDemand(deviceDemand(tree));
     PortTable ports = ports_;
     if (options_.lan) options_.lan->addPorts(ports);
-    auto result = buildPlan(tree, ports, ++generation_, options_.build, PlanResources{take_, samplerTable()});
+    auto result = buildPlan(tree, ports, ++generation_, options_.build, PlanResources{take_, samplerTable(), &fx_.rack()});
     engine_.setPlan(std::move(result.plan));
     engine_.collectRetired();
 
@@ -551,6 +558,7 @@ Result Controller::removeTrack(CallContext& ctx) {
         c.push_back({trackBase(order[i]) + "/position", static_cast<std::int64_t>(i + 1)});
     c.push_back({"/mixer/track_count", static_cast<std::int64_t>(order.size())});
     server_.publishNow(c, {trackBase(static_cast<int>(*id))}, ctx.call.id, ctx.client.name);
+    fx_.clearStrip(static_cast<int>(*id));
     return {};
 }
 

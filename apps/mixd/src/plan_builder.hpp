@@ -60,6 +60,7 @@ struct BuildOptions {
 struct PlanResources {
     std::shared_ptr<RecorderTake> take;
     std::shared_ptr<const SamplerTable> sampler;
+    const FxRack* fx = nullptr; // the loaded effect slots per strip (FxManager::rack()), or none
 };
 
 BuildResult buildPlan(const proto::ParamTree& tree, const PortTable& ports, std::uint64_t generation,

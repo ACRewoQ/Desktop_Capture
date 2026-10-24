@@ -136,8 +136,8 @@ TEST_CASE("rejected changes return an error and change nothing", "[integration]"
     CHECK(r2.code == ErrorCode::Conflict);
     auto r3 = a->call("/no/such/method").get();
     CHECK(r3.code == ErrorCode::UnknownMethod);
-    auto r4 = a->call("/track/1/fx/add", {{"type", std::string("eq4")}}).get(); // P3, not in mock
-    CHECK(r4.code == ErrorCode::UnknownMethod);
+    auto r4 = a->call("/track/1/fx/add", {{"type", std::string("chorus")}}).get();
+    CHECK(r4.code == ErrorCode::NotFound);
     CHECK(h.serverTree() == before);
 }
 

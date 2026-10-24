@@ -165,9 +165,16 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 
 FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。Qt 6 は V5 で導入しました（vcpkg ではなく `scripts\install-qt.ps1` でビルド済みを `C:\dev\Qt` に入れ、環境変数 `DC_QT_DIR` で見つけます。見つからなければ Qt を使うターゲットは飛ばします）。JUCE は V7 で導入方法を確かめました（下記の 7 章）。
 
-## 7. JUCE を使うターゲット（VST3 ホスト、V7）
+## 7. JUCE を使うターゲット（VST3 ホスト）
 
-JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。重いので既定ではビルドせず、オプション `DC_WITH_JUCE` を ON にしたプリセット `windows-juce` を使います。
+JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。mixd の VST3 ホスト（P3 A1）が使うので、Windows ではオプション `DC_WITH_JUCE` が既定で ON です（`windows` プリセットが `DC_WITH_JUCE=ON` を渡すので、前からある build\windows でも `scripts\test.ps1` でビルドされ、初回は取得とビルドに 10 分ほどかかります）。Linux では既定 OFF で、試すときは次のようにします（X11 などの開発パッケージが必要、プラグインの画面を開く `vst3_probe_test_plugin` は xvfb では通りません）。
+
+```bash
+cmake -S . -B build/linux-juce -G Ninja -DDC_WITH_JUCE=ON && cmake --build build/linux-juce
+cd build/linux-juce && xvfb-run -a ctest -E vst3_probe_test_plugin
+```
+
+V7 の検証用プローブは今もプリセット `windows-juce` で動かせます。
 
 ```powershell
 .\scripts\vst3-probe.ps1 -SkipScan     # 取得・ビルド・ctest（vst3_* の 3 件）

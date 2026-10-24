@@ -1,6 +1,7 @@
 add_executable(dc_tests
     test_clocksync.cpp
     test_codec.cpp
+    test_fx.cpp
     test_integration.cpp
     test_lanmedia.cpp
     test_meter.cpp

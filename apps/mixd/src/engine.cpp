@@ -7,7 +7,29 @@
 #include <algorithm>
 #include <cstring>
 
+#if defined(_M_X64) || defined(__SSE2__)
+#include <xmmintrin.h>
+#define DC_HAVE_MXCSR 1
+#endif
+
 namespace dc::mixd {
+
+namespace {
+
+// Flush denormals to zero while rendering: the tails of reverb, delay and the filters decay into
+// denormal floats, which cost 10-100x more CPU each on x86 (and plugins expect a host to do this).
+class DenormalGuard {
+public:
+#ifdef DC_HAVE_MXCSR
+    DenormalGuard() : saved_(_mm_getcsr()) { _mm_setcsr(saved_ | 0x8040); } // FTZ | DAZ
+    ~DenormalGuard() { _mm_setcsr(saved_); }
+
+private:
+    unsigned saved_;
+#endif
+};
+
+} // namespace
 
 double qpcSecondsNow() {
     static const double freq = static_cast<double>(shm::qpcFrequency());
@@ -52,6 +74,7 @@ void Engine::adoptPending() {
 
 void Engine::render(const OutputPort* clockPort, float* out, int frames, int outChannels, double time) {
     const double start = qpcSecondsNow();
+    const DenormalGuard denormals;
     adoptPending();
     if (out) std::memset(out, 0, static_cast<std::size_t>(frames) * static_cast<std::size_t>(outChannels) * sizeof(float));
     const MixPlan* plan = current_;

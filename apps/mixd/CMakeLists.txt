@@ -17,6 +17,8 @@ add_library(dc_mixd_core STATIC
     src/dsp.cpp
     src/engine.cpp
     src/fake_backend.cpp
+    src/fx/builtin.cpp
+    src/fx_manager.cpp
     src/lan_peer_link.cpp
     src/lan_service.cpp
     src/lan_store.cpp
@@ -39,3 +41,10 @@ add_library(dc::mixd_core ALIAS dc_mixd_core)
 add_executable(mixd main.cpp)
 target_link_libraries(mixd PRIVATE dc::mixd_core)
 dc_apply_options(mixd)
+
+# VST3 plugins (lane A1) need JUCE; without it mixd runs with the built-in effects only.
+if(DC_WITH_JUCE)
+    add_subdirectory(vst3)
+    target_link_libraries(mixd PRIVATE dc::mixd_vst3)
+    target_compile_definitions(mixd PRIVATE DC_HAVE_VST3=1)
+endif()

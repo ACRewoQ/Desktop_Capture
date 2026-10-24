@@ -274,6 +274,7 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
         s.highcut = flag(tree, base + "/highcut/enabled");
         s.highcutHz = num(tree, base + "/highcut/freq_hz", 18000);
         s.meterId = static_cast<std::uint16_t>(num(tree, base + "/meter_id", id));
+        if (resources.fx) s.fx = (*resources.fx)[static_cast<std::size_t>(id)];
         for (int k = 1; k <= proto::kMaxTrackOutputs; ++k) {
             const auto d = destination(str(tree, base + "/out/" + std::to_string(k) + "/target"), id != 0);
             if (!d) continue;
