@@ -128,6 +128,7 @@ void Controller::registerMethods() {
     server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
     server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
     server_.registerMethod("/capture/report", [this](CallContext& ctx) { return captureReport(ctx); });
+    server_.registerMethod("/video/output/report", [this](CallContext& ctx) { return outputReport(ctx); });
     server_.registerMethod("/devices/refresh", [this](CallContext&) {
         devices_.refresh();
         return Result{};
@@ -296,6 +297,10 @@ void Controller::onClient(const control::ClientInfo& client, bool connected) {
     if (!isCapd(client)) return;
     captureClients_ += connected ? 1 : -1;
     if (connected || captureClients_ > 0) return;
+    server_.publishNow({{"/video/vcam/state", std::string("off")},
+                        {"/video/vcam/detail", std::string()},
+                        {"/video/monitor/state", std::string("off")},
+                        {"/video/monitor/detail", std::string()}});
     const auto state = server_.store().tree().getAs<std::string>("/capture/state").value_or("idle");
     if (state == "starting" || state == "recording" || state == "stopping") {
         recordTimer_.cancel();
@@ -330,7 +335,12 @@ Result Controller::captureReport(CallContext& ctx) {
         return error(ErrorCode::BadRequest, "state must be recording, idle or error");
     const auto& tree = server_.store().tree();
     const auto file = strArg(args, "file").value_or(tree.getAs<std::string>("/capture/file").value_or(""));
-    if (*state == "recording") {
+    if (*state == "recording" && tree.getAs<std::string>("/capture/state") == "recording" && strArg(args, "reason")) {
+        // A new file segment (GPU reset ...): the recording goes on, only the file changes.
+        const auto reason = *strArg(args, "reason");
+        server_.publishNow({{"/capture/file", file}}, {}, ctx.call.id, ctx.client.name);
+        server_.broadcastEventNow({"capture.segment", {{"file", file}, {"reason", reason}}});
+    } else if (*state == "recording") {
         recordStart_ = std::chrono::steady_clock::now();
         server_.publishNow({{"/capture/state", std::string("recording")},
                             {"/capture/file", file},
@@ -352,6 +362,22 @@ Result Controller::captureReport(CallContext& ctx) {
         server_.publishNow({{"/capture/state", std::string("error")}, {"/capture/error", message}}, {}, ctx.call.id,
                            ctx.client.name);
     }
+    return {};
+}
+
+Result Controller::outputReport(CallContext& ctx) {
+    if (ctx.client.role != ClientRole::Service) return error(ErrorCode::Unauthorized, "only the capture process reports");
+    const auto& args = ctx.call.args;
+    const auto output = strArg(args, "output");
+    if (!output || (*output != "vcam" && *output != "monitor"))
+        return error(ErrorCode::BadRequest, "output must be vcam or monitor");
+    const auto state = strArg(args, "state").value_or("");
+    const std::string base = "/video/" + *output;
+    const auto& schema = server_.store().schema();
+    const auto* spec = schema.find(base + "/state");
+    if (!spec || schema.validate(*spec, Value(state), false)) return error(ErrorCode::BadRequest, "unknown " + *output + " state: " + state);
+    server_.publishNow({{base + "/state", state}, {base + "/detail", strArg(args, "detail").value_or("")}}, {},
+                       ctx.call.id, ctx.client.name);
     return {};
 }
 

@@ -536,6 +536,38 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
             return t.getAs<std::string>("/capture/state") == "recording" && t.getAs<std::string>("/capture/file") == "C:/v/a.mkv" &&
                    t.getAs<std::int64_t>("/capture/elapsed_ms").value_or(0) > 0;
         }));
+        // a new file segment (GPU reset): the file changes, the elapsed time goes on
+        std::this_thread::sleep_for(300ms);
+        REQUIRE(capd.call("/capture/report", {{"state", std::string("recording")},
+                                              {"file", std::string("C:/v/a_2.mkv")},
+                                              {"reason", std::string("gpu_reset")}})
+                    .get()
+                    .code == proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) {
+            return t.getAs<std::string>("/capture/file") == "C:/v/a_2.mkv" && t.getAs<std::string>("/capture/state") == "recording";
+        }));
+        std::this_thread::sleep_for(300ms);
+        CHECK(waitFor([](const proto::ParamTree& t) { return t.getAs<std::int64_t>("/capture/elapsed_ms").value_or(0) >= 500; }));
+        // output states
+        CHECK(client.call("/video/output/report", {{"output", std::string("vcam")}, {"state", std::string("active")}})
+                  .get()
+                  .code == proto::ErrorCode::Unauthorized);
+        CHECK(capd.call("/video/output/report", {{"output", std::string("lan")}, {"state", std::string("active")}}).get().code ==
+              proto::ErrorCode::BadRequest);
+        CHECK(capd.call("/video/output/report", {{"output", std::string("vcam")}, {"state", std::string("bogus")}}).get().code ==
+              proto::ErrorCode::BadRequest);
+        REQUIRE(capd.call("/video/output/report", {{"output", std::string("vcam")}, {"state", std::string("waiting")}}).get().code ==
+                proto::ErrorCode::Ok);
+        REQUIRE(capd.call("/video/output/report", {{"output", std::string("monitor")},
+                                                   {"state", std::string("no_display")},
+                                                   {"detail", std::string("monitor not found: DISPLAY2")}})
+                    .get()
+                    .code == proto::ErrorCode::Ok);
+        CHECK(waitFor([](const proto::ParamTree& t) {
+            return t.getAs<std::string>("/video/vcam/state") == "waiting" &&
+                   t.getAs<std::string>("/video/monitor/state") == "no_display" &&
+                   t.getAs<std::string>("/video/monitor/detail") == "monitor not found: DISPLAY2";
+        }));
         CHECK(client.call("/capture/record/start").get().code == proto::ErrorCode::Conflict);
         REQUIRE(client.call("/capture/record/stop").get().code == proto::ErrorCode::Ok);
         CHECK(waitFor([](const proto::ParamTree& t) { return t.getAs<std::string>("/capture/state") == "stopping"; }));
@@ -551,7 +583,8 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
     }
     CHECK(waitFor([](const proto::ParamTree& t) {
         return t.getAs<std::string>("/capture/state") == "error" &&
-               t.getAs<std::string>("/capture/error") == "capture process disconnected";
+               t.getAs<std::string>("/capture/error") == "capture process disconnected" &&
+               t.getAs<std::string>("/video/monitor/state") == "off" && t.getAs<std::string>("/video/monitor/detail") == "";
     }));
 
     client.disconnect();
