@@ -176,7 +176,7 @@ void ControlServer::accept() {
         socket.set_option(tcp::no_delay(true));
         const auto id = nextSessionId_++;
         auto session = std::make_shared<Session>(*this, std::move(socket), id);
-        if (!session->info.loopback && !options_.allowRemote) {
+        if (!session->info.loopback && !options_.allowRemote && !options_.authorize) {
             session->start();
             session->send(Error{ErrorCode::Unauthorized, "remote connections are disabled"});
             session->closeAfterFlush();
@@ -186,6 +186,22 @@ void ControlServer::accept() {
         }
         accept();
     });
+}
+
+void ControlServer::disconnectIf(const std::function<bool(const ClientInfo&)>& which, const std::string& reason) {
+    auto copy = sessions_;
+    for (auto& [id, s] : copy)
+        if (s->ready && which(s->info)) {
+            s->send(Bye{reason});
+            s->closeAfterFlush();
+        }
+}
+
+std::vector<ClientInfo> ControlServer::clients() const {
+    std::vector<ClientInfo> out;
+    for (const auto& [id, s] : sessions_)
+        if (s->ready) out.push_back(s->info);
+    return out;
 }
 
 void ControlServer::removeSession(std::uint64_t id) {
@@ -231,6 +247,14 @@ void ControlServer::onMessage(const std::shared_ptr<Session>& s, Message msg) {
         [&](auto& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, Set>) {
+                if (s->info.role == ClientRole::Peer) {
+                    Result r;
+                    r.id = m.id;
+                    r.code = ErrorCode::Unauthorized;
+                    r.message = "a peer engine cannot change settings";
+                    s->send(r);
+                    return;
+                }
                 auto outcome = store_.applySet(m, s->info.name);
                 if (outcome.delta) emitDelta(*outcome.delta);
                 s->send(outcome.result);
@@ -258,6 +282,19 @@ void ControlServer::handleHello(const std::shared_ptr<Session>& s, const Hello& 
         s->closeAfterFlush();
         return;
     }
+    std::string token;
+    if (!s->info.loopback && !options_.allowRemote) {
+        // only remote controllers and peer engines come from the LAN, and only after pairing
+        AuthDecision d;
+        if (hello.role != ClientRole::Remote && hello.role != ClientRole::Peer) d.message = "this role must connect locally";
+        else d = options_.authorize(hello, s->info);
+        if (!d.allowed) {
+            s->send(Error{ErrorCode::Unauthorized, d.message.empty() ? "not paired" : d.message});
+            s->closeAfterFlush();
+            return;
+        }
+        token = d.token;
+    }
     if (hello.role == ClientRole::Remote) {
         std::size_t remotes = 0;
         for (const auto& [id, other] : sessions_)
@@ -270,6 +307,7 @@ void ControlServer::handleHello(const std::shared_ptr<Session>& s, const Hello& 
     }
     s->info.name = hello.clientName.empty() ? "client-" + std::to_string(s->info.connectionId) : hello.clientName;
     s->info.role = hello.role;
+    s->info.clientId = hello.clientId;
     s->meterPort = hello.meterPort;
     s->ready = true;
     ++readyClients_;
@@ -279,6 +317,7 @@ void ControlServer::handleHello(const std::shared_ptr<Session>& s, const Hello& 
     w.serverName = options_.serverName;
     w.serverId = options_.serverId;
     w.sessionId = options_.sessionId;
+    w.token = token;
     s->send(w);
     s->send(store_.snapshot());
     if (options_.onClient) options_.onClient(s->info, true);
@@ -293,7 +332,12 @@ const ControlServer::CallHandler* ControlServer::findHandler(const std::string& 
 void ControlServer::handleCall(const std::shared_ptr<Session>& s, const Call& call) {
     Result result;
     const CallHandler* handler = isValidPath(call.method) ? findHandler(call.method) : nullptr;
-    if (!handler) {
+    const bool peerAllowed = call.method == "/lan/subscribe" || call.method == "/lan/unsubscribe" ||
+                             call.method == "/session/resync";
+    if (s->info.role == ClientRole::Peer && !peerAllowed) {
+        result.code = ErrorCode::Unauthorized;
+        result.message = "a peer engine may only subscribe";
+    } else if (!handler) {
         result.code = ErrorCode::UnknownMethod;
         result.message = "unknown method " + call.method;
     } else {

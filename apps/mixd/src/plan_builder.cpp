@@ -134,7 +134,11 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
             case RouteTarget::Kind::VirtualMic:
                 if (int b = bus(t->id); b >= 0) return Destination{Destination::Kind::Bus, b};
                 return std::nullopt;
-            default: return std::nullopt; // none, LAN (lane N)
+            case RouteTarget::Kind::Lan:
+                if (int n = proto::lanStreamOf(*t); n > 0)
+                    if (int b = bus("lan:" + std::to_string(n)); b >= 0) return Destination{Destination::Kind::Bus, b};
+                return std::nullopt; // nobody receives the stream right now
+            default: return std::nullopt;
         }
     };
 
@@ -203,8 +207,16 @@ BuildResult buildPlan(const ParamTree& tree, const PortTable& ports, std::uint64
             s.inputChannel = static_cast<int>(num(tree, base + "/input/channel", 1)) - 1;
             if (!src.empty()) state = s.input >= 0 ? "ok" : "disconnected";
             s.inputDisconnected = !src.empty() && s.input < 0;
+        } else if (kind == "lan") {
+            // LAN stream "<peer id>/<n>": the LAN service opens a port for it while it can subscribe
+            const auto src = str(tree, base + "/input/source");
+            s.input = src.empty() ? -1 : input("lan:" + src);
+            s.inputChannel = static_cast<int>(num(tree, base + "/input/channel", 1)) - 1;
+            const bool playing = s.input >= 0 && plan->inputs[static_cast<std::size_t>(s.input)]->streaming.load();
+            if (!src.empty()) state = playing ? "ok" : "disconnected";
+            s.inputDisconnected = !src.empty() && !playing;
         } else if (kind != "none" && !kind.empty()) {
-            state = "disconnected"; // process / LAN / sampler inputs arrive in phase 3
+            state = "disconnected"; // process / sampler inputs arrive in phase 3
             s.inputDisconnected = true;
         }
         r.inputState[n] = state;
