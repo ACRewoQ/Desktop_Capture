@@ -58,7 +58,7 @@ public:
     int count() const { return static_cast<int>(rows_.size()); }
     bool canAdd() const;
     int maxTracks() const;
-    int trackIdAt(int row) const;
+    Q_INVOKABLE int trackIdAt(int row) const;
     int rowOfTrack(int trackId) const;
     // Edits not yet confirmed by the server (sent or waiting for the 60Hz slot).
     bool hasPendingEdits() const { return !overrides_.empty(); }
