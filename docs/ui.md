@@ -32,7 +32,15 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 
 編集はすぐ画面に出て、パラメーターごとに約 16ms 間隔で送る。エンジンが拒否すると元の値に戻り、トーストにエラーを出す。範囲・選択肢・型はスキーマ（libs/protocol）から取るので、ツリーに値がまだなくても既定値で描ける。
 
-設定の行には `SettingRow` / `InfoRow` と、`ParamSegments`（少ない選択肢）・`ParamPick`（一覧から選ぶ）・`ParamNumber`（キーパッド）・`ParamSwitch` を使う。
+設定の行には `SettingRow` / `InfoRow` と、`ParamSegments`（少ない選択肢）・`ParamPick`（一覧から選ぶ）・`ParamNumber`（キーパッド。`factor: 100` で割合を % で入力）・`ParamSwitch`・`ParamText`（文字。`multiline` で複数行）・`ParamColor`（色見本とパレット）・`SizePick`（幅と高さを一緒に）を使う。
+
+## 映像ページ
+
+`VideoPage` は 3 つのタブ（シーン・ソース・出力先）。名前や選択肢の一覧は `Video` シングルトン（`qml/Video.qml`）にまとめている。
+
+- シーン：シーンをタップすると「次」（`preview_scene`）になり、そのシーンを編集する。TAKE で本番と入れ替え。「…」または長押しで本番に出す・名前・並べ替え・削除。
+- キャンバス（`LayerCanvas`）：レイヤーの枠だけを描く（映像は capd が合成する）。タップで手前のレイヤーを選び、選んだレイヤーはドラッグで移動、右下のつまみで大きさを変える。端と中央に 10px で吸着。ダブルタップでレイヤーの設定。
+- 横幅 900px 未満では、キャンバス・シーン・レイヤーを縦に並べる。シーンのタブではキャンバスのドラッグと重ならないよう、横スワイプでのページ移動を止める。
 
 ## タッチ操作の約束
 
@@ -52,5 +60,5 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 |---|---|
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`menu`、`input`、`output`） |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)） |

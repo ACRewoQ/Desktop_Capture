@@ -277,6 +277,51 @@ private slots:
         QCOMPARE(tracks.data(tracks.index(0), ui::StripModel::FxCountRole).toInt(), 1);
     }
 
+    void videoMixer() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::ParamHub hub(c);
+        ui::ParamList layers;
+        layers.setPrefix(QStringLiteral("/video/scene/1/layer"));
+        layers.setOrderBy(QStringLiteral("position"));
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        QCOMPARE(hub.indices(QStringLiteral("/video/source")), QList<int>({1}));
+        QCOMPARE(layers.count(), 1);
+
+        // A second layer goes to the front: the list is ordered by position, not by number.
+        hub.call(QStringLiteral("/video/source/add"), {{QStringLiteral("kind"), QStringLiteral("color")}});
+        QVERIFY(ui::waitUntil([&] { return hub.indices(QStringLiteral("/video/source")).size() == 2; }, 2000));
+        hub.call(QStringLiteral("/video/scene/1/layer/add"), {{QStringLiteral("source"), 2}});
+        QVERIFY(ui::waitUntil([&] { return layers.count() == 2; }, 2000));
+        QCOMPARE(layers.numAt(0), 2);
+        QCOMPARE(layers.numAt(1), 1);
+        hub.call(QStringLiteral("/video/scene/1/layer/move"), {{QStringLiteral("layer"), 1}, {QStringLiteral("position"), 1}});
+        QVERIFY(ui::waitUntil([&] { return layers.numAt(0) == 1; }, 2000));
+
+        // A box preset is one Set of four floats (the JS numbers 0 and 1 become floats, not ints).
+        const QString b = QStringLiteral("/video/scene/1/layer/2");
+        hub.setMany({{b + "/x", 0.7}, {b + "/y", 0.7}, {b + "/width", 0.28}, {b + "/height", 1}});
+        ui::ParamValue height;
+        height.setPath(b + "/height");
+        QVERIFY(ui::waitUntil([&] { return !height.pending(); }, 2000));
+        QCOMPARE(c.tree().getAs<double>("/video/scene/1/layer/2/x").value_or(0), 0.7);
+        QCOMPARE(c.tree().getAs<double>("/video/scene/1/layer/2/height").value_or(0), 1.0);
+
+        // TAKE swaps preview and program.
+        hub.call(QStringLiteral("/video/scene/add"), {}, QJSValue());
+        QVERIFY(ui::waitUntil([&] { return hub.indices(QStringLiteral("/video/scene")).size() == 2; }, 2000));
+        hub.set(QStringLiteral("/video/mix/1/preview_scene"), 2);
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::int64_t>("/video/mix/1/preview_scene").value_or(0) == 2; }, 2000));
+        hub.call(QStringLiteral("/video/mix/1/take"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::int64_t>("/video/mix/1/program_scene").value_or(0) == 2; }, 2000));
+        QCOMPARE(c.tree().getAs<std::int64_t>("/video/mix/1/preview_scene").value_or(0), 1);
+
+        // Removing the source removes its layer.
+        hub.call(QStringLiteral("/video/source/remove"), {{QStringLiteral("source"), 2}});
+        QVERIFY(ui::waitUntil([&] { return layers.count() == 1; }, 2000));
+    }
+
     void reconnectsAfterEngineRestart() {
         std::uint16_t port = 0;
         auto h = std::make_unique<Harness>();
