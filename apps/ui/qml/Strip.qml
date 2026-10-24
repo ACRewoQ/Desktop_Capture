@@ -82,6 +82,9 @@ Rectangle {
             minHz: 20; maxHz: 2000
             onToggled: strip.model.toggleLowcut(strip.index)
             onHzMoved: (hz) => strip.model.setLowcutHz(strip.index, hz)
+            onHzEntry: Sheets.number.open({ title: strip.name + " ローカット", value: strip.lowcutHz, unit: "Hz",
+                                            min: 20, max: 2000, decimals: 0 },
+                                          v => strip.model.setLowcutHz(strip.index, v))
         }
         FilterButton {
             objectName: "highcut_" + strip.index
@@ -92,6 +95,9 @@ Rectangle {
             minHz: 1000; maxHz: 20000
             onToggled: strip.model.toggleHighcut(strip.index)
             onHzMoved: (hz) => strip.model.setHighcutHz(strip.index, hz)
+            onHzEntry: Sheets.number.open({ title: strip.name + " ハイカット", value: strip.highcutHz, unit: "Hz",
+                                            min: 1000, max: 20000, decimals: 0 },
+                                          v => strip.model.setHighcutHz(strip.index, v))
         }
     }
 
@@ -127,12 +133,27 @@ Rectangle {
         }
     }
 
-    Text {
+    // Volume in dB; a long press opens the keypad.
+    Rectangle {
         id: value
-        anchors { bottom: buttons.top; bottomMargin: 6; horizontalCenter: parent.horizontalCenter }
-        color: Theme.subText
-        font.pixelSize: 13
-        text: strip.model.dbText(strip.volumeDb) + " dB"
+        objectName: "volumeText_" + (strip.isMaster ? "master" : strip.index)
+        anchors { bottom: buttons.top; bottomMargin: 2; horizontalCenter: parent.horizontalCenter }
+        width: strip.width - 16
+        height: 30
+        radius: Theme.radius
+        color: valueTap.pressed ? Theme.controlPressed : "transparent"
+        Text {
+            anchors.centerIn: parent
+            color: Theme.subText
+            font.pixelSize: 13
+            text: strip.model.dbText(strip.volumeDb) + " dB"
+        }
+        TapHandler {
+            id: valueTap
+            onLongPressed: Sheets.number.open({ title: strip.name + " の音量", value: Math.max(-60, strip.volumeDb),
+                                                unit: "dB", min: -144, max: 12, decimals: 1 },
+                                              v => strip.model.setVolumeDb(strip.index, v))
+        }
     }
 
     Row {

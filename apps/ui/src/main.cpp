@@ -3,10 +3,11 @@
 // during development, over the control protocol.
 //
 //   dc-ui [--connect HOST[:PORT]] [--remote] [--fullscreen] [--backend default|d3d11|software]
-//         [--selftest] [--exercise MINUTES [--input ID|first] [--input-channel N] [--record]]
+//         [--page KEY] [--screenshot FILE [--size WxH]] [--selftest] [--exercise MINUTES [--input ID|first] [--input-channel N] [--record]]
 
 #include "connection.hpp"
 #include "exercise.hpp"
+#include "param_hub.hpp"
 #include "recorder.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
@@ -18,9 +19,11 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTimer>
+#include <QImage>
 
 #include <cstdio>
 #include <cstring>
@@ -75,6 +78,10 @@ int main(int argc, char** argv) {
         {"input", "With --exercise: input device of the first track (an id from /devices/input, or \"first\").", "id"},
         {"input-channel", "With --exercise: first channel of that device to use.", "n", "1"},
         {"record", "With --exercise: record from start to end through the record button's logic."},
+        {"page", "Page to show first (mixer, settings, ...).", "key"},
+        {"screenshot", "Save the window as PNG FILE once connected and drawn, then exit.", "file"},
+        {"size", "With --screenshot: window size.", "WxH", "1280x800"},
+        {"demo", "Open a sheet with sample content (number, text, menu, input, output) for screenshots.", "name"},
     });
     cli.process(app);
 
@@ -97,19 +104,38 @@ int main(int argc, char** argv) {
     dc::ui::StripModel tracks(connection, dc::ui::StripModel::Kind::Tracks);
     dc::ui::StripModel master(connection, dc::ui::StripModel::Kind::Master);
     dc::ui::Recorder recorder(connection);
+    dc::ui::ParamHub params(connection);
+    qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
+    qmlRegisterType<dc::ui::ParamList>("DcUi.Params", 1, 0, "ParamList");
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("connection"), &connection);
     engine.rootContext()->setContextProperty(QStringLiteral("tracks"), &tracks);
     engine.rootContext()->setContextProperty(QStringLiteral("master"), &master);
     engine.rootContext()->setContextProperty(QStringLiteral("recorder"), &recorder);
+    engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
+    engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));
+    engine.rootContext()->setContextProperty(QStringLiteral("startDemo"), cli.value("demo"));
     engine.load(QUrl(QStringLiteral("qrc:/DcUi/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
     if (!window) return 1;
 
     connection.start();
+    if (cli.isSet("screenshot")) {
+        const QStringList size = cli.value("size").split(QLatin1Char('x'));
+        window->resize(size.value(0).toInt(), size.value(1).toInt());
+        QTimer::singleShot(0, [&] {
+            dc::ui::waitUntil([&] { return connection.ready(); }, 5000);
+            dc::ui::waitUntil([] { return false; }, 800); // let the page settle
+            const QImage image = window->grabWindow();
+            const bool ok = image.save(cli.value("screenshot"));
+            print(QStringLiteral("%1 %2").arg(ok ? "saved" : "could not save", cli.value("screenshot")));
+            QGuiApplication::exit(ok ? 0 : 1);
+        });
+        return QGuiApplication::exec();
+    }
     if (exercise) {
         int frames = 0;
         QObject::connect(window, &QQuickWindow::frameSwapped, [&] { ++frames; });
@@ -141,6 +167,15 @@ int main(int argc, char** argv) {
         dc::ui::SelfTestOptions st;
         st.expectMeters = !cli.isSet("no-meters");
         int failures = dc::ui::runSelfTest(connection, tracks, master, recorder, print, st);
+        // Every page once, so that a broken page shows up as QML warnings below.
+        const QStringList pages = window->property("pageKeys").toStringList();
+        for (const QString& key : pages) {
+            window->setProperty("currentPage", key);
+            dc::ui::waitUntil([] { return false; }, 300);
+        }
+        window->setProperty("currentPage", QStringLiteral("mixer"));
+        print(QStringLiteral("%1 pages shown (%2)").arg(pages.size() > 1 ? "  OK  " : "  FAIL", pages.join(QLatin1Char(' '))));
+        if (pages.size() <= 1) ++failures;
         // The screen kept drawing while the models changed (catches the D3D11 first-frame freeze).
         const bool drawing = dc::ui::waitUntil([&] { return frames >= 10; }, 3000);
         print(QStringLiteral("%1 screen keeps drawing (%2 frames)").arg(drawing ? "  OK  " : "  FAIL", QString::number(frames)));

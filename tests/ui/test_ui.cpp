@@ -1,6 +1,7 @@
 // The UI's protocol client and models against the mock engine on a real TCP socket.
 
 #include "connection.hpp"
+#include "param_hub.hpp"
 #include "recorder.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
@@ -9,6 +10,8 @@
 
 #include "dc/control/client.hpp"
 
+#include <QJSEngine>
+#include <QSignalSpy>
 #include <QTest>
 
 #include <memory>
@@ -111,6 +114,87 @@ private slots:
                  proto::ErrorCode::Ok);
         QVERIFY(ui::waitUntil([&] { return tracks.trackIdAt(0) == 5; }, 2000));
         QCOMPARE(tracks.trackIdAt(1), 1);
+        other.disconnect();
+    }
+
+    // Param / ParamList / calls for the pages that are not strips.
+    void paramHubFollowsAndEdits() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::ParamHub hub(c);
+        ui::ParamValue mode;
+        mode.setPath(QStringLiteral("/system/audio_mode"));
+        ui::ParamValue block;
+        block.setPath(QStringLiteral("/system/block_size"));
+        ui::ParamList list;
+        list.setPrefix(QStringLiteral("/track"));
+        list.setOrderBy(QStringLiteral("position"));
+        // Schema facts are there before the engine answers.
+        QCOMPARE(block.type(), QStringLiteral("int"));
+        QCOMPARE(block.choices().size(), 5);
+        QCOMPARE(mode.value().toString(), QStringLiteral("shared")); // default until the snapshot
+        QVERIFY(!mode.exists());
+        QSignalSpy modeChanged(&mode, &ui::ParamValue::valueChanged);
+
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        QVERIFY(mode.exists());
+        QVERIFY(modeChanged.count() >= 1); // the snapshot
+        QCOMPARE(list.count(), 4);
+        QCOMPARE(hub.indices(QStringLiteral("/devices/input")).size(), 2);
+
+        // Edit: shown at once, confirmed by the engine, the int arrives as an int.
+        block.set(128.0);
+        QCOMPARE(block.value().toInt(), 128);
+        QVERIFY(block.pending());
+        QVERIFY(ui::waitUntil([&] { return !block.pending(); }, 2000));
+        QCOMPARE(c.tree().getAs<std::int64_t>("/system/block_size").value_or(0), std::int64_t{128});
+
+        // A rejected value goes back and is reported.
+        QSignalSpy failed(&hub, &ui::ParamHub::failed);
+        block.set(100);
+        QVERIFY(ui::waitUntil([&] { return failed.count() == 1 && !block.pending(); }, 2000));
+        QCOMPARE(block.value().toInt(), 128);
+
+        // Another client's change reaches the Param.
+        control::ControlClient::Options o;
+        o.port = h.port();
+        o.clientName = "other";
+        control::ControlClient other(o);
+        QVERIFY(other.connect(3s));
+        QCOMPARE(other.set({{"/system/audio_mode", std::string("exclusive")}}).get().code, proto::ErrorCode::Ok);
+        QVERIFY(ui::waitUntil([&] { return mode.value().toString() == QLatin1String("exclusive"); }, 2000));
+
+        // Lists follow added, removed and reordered entries.
+        QCOMPARE(other.call("/mixer/track/add").get().code, proto::ErrorCode::Ok);
+        QVERIFY(ui::waitUntil([&] { return list.count() == 5; }, 2000));
+        QCOMPARE(other.call("/mixer/track/move", {{"track", std::int64_t{5}}, {"position", std::int64_t{1}}}).get().code,
+                 proto::ErrorCode::Ok);
+        QVERIFY(ui::waitUntil([&] { return list.numAt(0) == 5; }, 2000));
+        QCOMPARE(other.call("/mixer/track/remove", {{"track", std::int64_t{2}}}).get().code, proto::ErrorCode::Ok);
+        QVERIFY(ui::waitUntil([&] { return list.count() == 4 && list.rowOf(2) < 0; }, 2000));
+
+        // A Param below a removed subtree notices.
+        ui::ParamValue name;
+        name.setPath(QStringLiteral("/track/3/name"));
+        QVERIFY(name.exists());
+        QCOMPARE(other.call("/mixer/track/remove", {{"track", std::int64_t{3}}}).get().code, proto::ErrorCode::Ok);
+        QVERIFY(ui::waitUntil([&] { return !name.exists(); }, 2000));
+
+        // setMany: one Set; call with a JS callback (method arguments become ints).
+        hub.setMany({{QStringLiteral("/track/1/name"), QStringLiteral("A")}, {QStringLiteral("/track/1/pan"), 0.5}});
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/track/1/name") == std::string("A"); }, 2000));
+        QCOMPARE(c.tree().getAs<double>("/track/1/pan").value_or(0), 0.5);
+        QJSEngine js;
+        js.globalObject().setProperty(QStringLiteral("result"), QJSValue());
+        QJSValue cb = js.evaluate(QStringLiteral("(function(ok, v) { result = [ok, v] })"));
+        hub.call(QStringLiteral("/mixer/track/add"), {{QStringLiteral("channels"), 1.0}}, cb);
+        QVERIFY(ui::waitUntil([&] { return js.globalObject().property("result").isArray(); }, 2000));
+        QJSValue result = js.globalObject().property("result");
+        QVERIFY(result.property(0).toBool());
+        const int added = result.property(1).toInt();
+        QVERIFY(added > 0);
+        QCOMPARE(c.tree().getAs<std::int64_t>("/track/" + std::to_string(added) + "/channels").value_or(0), std::int64_t{1});
         other.disconnect();
     }
 
