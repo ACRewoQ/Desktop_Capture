@@ -2,7 +2,9 @@
 
 // Device backend interface. The engine opens every device as its own stream: one output device runs
 // the engine (the clock), every other input and output is connected through a ClockBridge. The
-// Windows implementation is WASAPI (wasapi_backend.cpp); tests and Linux builds use FakeBackend.
+// Windows implementation is WASAPI plus ASIO (wasapi_backend.cpp, asio_backend.cpp); tests and Linux
+// builds use FakeBackend. Streams always speak 48 kHz: devices at other rates are converted inside
+// the stream (clocksync::RateConverter).
 
 #include <cstdint>
 #include <functional>
@@ -20,7 +22,17 @@ struct DeviceInfo {
     bool connected = false; // active; unplugged devices are listed with connected = false
     bool isDefault = false;
     bool virtualCable = false; // "CABLE Input" and friends: listed with api "vmic"
+    bool asio = false;         // an ASIO driver (input: all channels; output: one stereo pair)
+    int sampleRate = 0;        // the device's own rate, 0 = unknown
     bool operator==(const DeviceInfo&) const = default;
+};
+
+// An application whose audio can be captured (WASAPI process loopback of its process tree).
+struct ProcessInfo {
+    std::string exe;       // executable file name as Windows reports it ("chrome.exe")
+    std::uint32_t pid = 0; // root of the process tree with that name
+    std::string title;     // a window title of the root process, "" if none
+    bool operator==(const ProcessInfo&) const = default;
 };
 
 struct StreamConfig {
@@ -45,6 +57,8 @@ public:
     virtual std::uint64_t glitches() const = 0; // device-side dropouts seen by the stream
     // Exclusive mode was asked for but the device has no 48 kHz exclusive format: it runs shared.
     virtual bool sharedFallback() const { return false; }
+    // The rate the device runs at; not 48000 means the stream converts.
+    virtual int deviceRate() const { return 48000; }
     // Exclusive streams whose device signals less often than the period asked for (the Steinberg
     // UR22 driver wakes every 10 ms whatever the period): the frames per wake-up it really uses. The
     // stream reports failed() and the manager reopens it with this period.
@@ -63,6 +77,20 @@ public:
                                               std::string* error) = 0;
     virtual std::unique_ptr<Stream> openOutput(const DeviceInfo& device, const StreamConfig& cfg, OutputCallback cb,
                                                std::string* error) = 0;
+
+    // Applications with an audio session, one entry per executable name (the root process).
+    virtual std::vector<ProcessInfo> enumerateProcesses() { return {}; }
+    // The running process tree for an executable name (case-insensitive): its root, preferring a
+    // tree with an audio session, then the oldest. pid 0 = not running.
+    virtual ProcessInfo findProcess(const std::string& exe) { return {exe, 0, {}}; }
+    // Captures what the process tree plays (48 kHz stereo). The stream reports failed() once the
+    // process has exited.
+    virtual std::unique_ptr<Stream> openProcess(const ProcessInfo& process, InputCallback cb, std::string* error) {
+        if (error) *error = "process audio is not supported here";
+        (void)process;
+        (void)cb;
+        return nullptr;
+    }
 };
 
 // Runs an OutputCallback (with out = nullptr) at 48 kHz from a timer thread: the engine's clock when
@@ -70,7 +98,8 @@ public:
 std::unique_ptr<Stream> makeTimerClock(int blockFrames, OutputCallback cb);
 
 #ifdef _WIN32
-std::unique_ptr<DeviceBackend> makeWasapiBackend();
+// asio: also list and open the ASIO drivers (mixd --no-asio turns them off).
+std::unique_ptr<DeviceBackend> makeWasapiBackend(bool asio = true);
 #endif
 
 } // namespace dc::mixd

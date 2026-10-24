@@ -1,6 +1,9 @@
 // capd's portable parts: settings from the parameter tree, and the audio time line (shared memory -> recording).
 
 #include "audio_capture.hpp"
+#include "audio_encoder.hpp"
+#include "avsync.hpp"
+#include "muxer.hpp"
 #include "engine_follower.hpp"
 #include "mock_engine.hpp"
 #include "settings.hpp"
@@ -12,12 +15,21 @@
 #include "dc/shmaudio/ring.hpp"
 #include "dc/shmaudio/shared_memory.hpp"
 
+#include <catch2/catch_approx.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/log.h>
+}
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -321,4 +333,139 @@ TEST_CASE("capd records when the engine says so and reports back", "[capd]") {
     asio::post(io, [&] { io.stop(); });
     ioThread.join();
     std::filesystem::remove_all(dir);
+}
+
+// --- A/V sync check ---------------------------------------------------------------------------
+
+TEST_CASE("avsync: flashes, bursts and their pairing", "[capd][avsync]") {
+    std::vector<double> t;
+    std::vector<float> b;
+    for (int i = 0; i < 300; ++i) {
+        t.push_back(i / 60.0);
+        b.push_back(i % 120 >= 60 && i % 120 < 66 ? 0.9f : 0.05f); // white for 6 frames at 1 s, 3 s
+    }
+    const auto flashes = findFlashes(t, b);
+    REQUIRE(flashes.size() == 2);
+    CHECK(flashes[0] == Catch::Approx(1.0));
+    CHECK(flashes[1] == Catch::Approx(3.0));
+    CHECK(findFlashes(t, std::vector<float>(300, 0.5f)).empty()); // no contrast, no flashes
+
+    std::vector<float> a(48000 * 5, 0.0f);
+    for (double start : {0.0, 1.02, 3.03}) // the burst cut by the start of the file is ignored
+        for (int i = 0; i < 2400; ++i)
+            a[static_cast<std::size_t>(start * 48000) + static_cast<std::size_t>(i)] =
+                0.1f * static_cast<float>(std::sin(2 * 3.14159265 * 1000 * i / 48000.0));
+    const auto pulses = findPulses(a, 10.0, 48000);
+    REQUIRE(pulses.size() == 2);
+    CHECK(pulses[0] == Catch::Approx(11.02).margin(0.0005));
+
+    const auto pairs = pairEvents({1.0, 3.0, 9.0}, {1.02, 3.03, 5.0}, 0.5);
+    REQUIRE(pairs.size() == 2);
+    CHECK(pairs[1].offsetMs() == Catch::Approx(30.0));
+    const auto st = computeStats(pairs);
+    CHECK(st.meanMs == Catch::Approx(25.0));
+    CHECK(st.driftMs == Catch::Approx(10.0));
+}
+
+namespace {
+
+// Writes an MKV through capd's Muxer and AudioEncoder (the audio path of real recordings, AAC encoder
+// delay included) with MPEG-4 part 2 video at 30 fps: the top-left corner is white from each flash
+// time for 5 frames, and the audio has a 50 ms 1 kHz burst audioLagMs after each flash.
+bool writeSyncFile(const std::string& path, const std::vector<double>& flashTimes, double audioLagMs, double seconds,
+                   const std::string& audioCodec) {
+    av_log_set_level(AV_LOG_ERROR);
+    const AVCodec* vc = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+    if (!vc) return false;
+    Muxer mux(path, "mkv");
+    AVCodecContext* venc = avcodec_alloc_context3(vc);
+    venc->width = 320;
+    venc->height = 180;
+    venc->pix_fmt = AV_PIX_FMT_YUV420P;
+    venc->time_base = {1, 30};
+    venc->framerate = {30, 1};
+    venc->gop_size = 30;
+    venc->max_b_frames = 2; // decoded frames come out reordered: the analyser sorts by time
+    if (mux.needsGlobalHeader()) venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (avcodec_open2(venc, vc, nullptr) < 0) return false;
+    AudioStreamSettings as;
+    as.codec = audioCodec;
+    AudioEncoder aenc(as, mux.needsGlobalHeader());
+    const int vIndex = mux.addStream(venc);
+    const int aIndex = mux.addStream(aenc.context());
+    aenc.setSink([&](AVPacket* p) { mux.write(aIndex, p); });
+    mux.start();
+
+    AVFrame* f = av_frame_alloc();
+    f->format = venc->pix_fmt;
+    f->width = venc->width;
+    f->height = venc->height;
+    av_frame_get_buffer(f, 0);
+    AVPacket* pkt = av_packet_alloc();
+    auto drainVideo = [&] {
+        while (avcodec_receive_packet(venc, pkt) == 0) mux.write(vIndex, pkt);
+    };
+    const int frames = static_cast<int>(seconds * 30);
+    std::vector<float> pcm(1600 * 2);
+    for (int i = 0; i < frames; ++i) {
+        av_frame_make_writable(f);
+        bool white = false;
+        for (double ft : flashTimes)
+            white |= i >= static_cast<int>(std::lround(ft * 30)) && i < static_cast<int>(std::lround(ft * 30)) + 5;
+        for (int y = 0; y < f->height; ++y)
+            for (int x = 0; x < f->width; ++x)
+                f->data[0][y * f->linesize[0] + x] = static_cast<uint8_t>(white && x < 80 && y < 45 ? 235 : 16);
+        for (int p = 1; p <= 2; ++p)
+            for (int y = 0; y < f->height / 2; ++y)
+                std::memset(f->data[p] + y * f->linesize[p], 128, static_cast<size_t>(f->width / 2));
+        f->pts = i;
+        avcodec_send_frame(venc, f);
+        drainVideo();
+
+        // one video frame's worth of audio (1600 samples) per loop
+        for (int k = 0; k < 1600; ++k) {
+            const double t = (i * 1600 + k) / 48000.0;
+            float v = 0;
+            for (double ft : flashTimes) {
+                const double d = t - (ft + audioLagMs / 1000.0);
+                if (d >= 0 && d < 0.05) v = 0.1f * static_cast<float>(std::sin(2 * 3.14159265 * 1000 * d));
+            }
+            pcm[static_cast<size_t>(2 * k)] = pcm[static_cast<size_t>(2 * k + 1)] = v;
+        }
+        aenc.push(pcm, 1600);
+    }
+    avcodec_send_frame(venc, nullptr);
+    drainVideo();
+    aenc.finish();
+    mux.finish();
+    av_packet_free(&pkt);
+    av_frame_free(&f);
+    avcodec_free_context(&venc);
+    return !mux.failed();
+}
+
+} // namespace
+
+TEST_CASE("avsync reads the offset from a recording", "[capd][avsync]") {
+    const std::string codec = GENERATE(std::string("aac"), std::string("pcm"));
+    CAPTURE(codec);
+    const auto path = (std::filesystem::temp_directory_path() / ("dc_avsync_" + std::to_string(testPid()) + ".mkv")).string();
+    if (!writeSyncFile(path, {1.0, 3.0, 5.0, 7.0}, 40.0, 9.0, codec)) {
+        WARN("MPEG-4 encoder or Matroska muxer missing in this FFmpeg; skipped");
+        return;
+    }
+    AvSyncOptions o;
+    o.regionX = 0.05;
+    o.regionY = 0.05;
+    o.regionW = 0.1;
+    o.regionH = 0.1;
+    const auto r = analyzeAvSync(path, o);
+    if (!std::getenv("DC_KEEP")) std::filesystem::remove(path);
+    REQUIRE(r.error.empty());
+    CHECK(r.videoFrames == 270);
+    CHECK(r.flashes.size() == 4);
+    CHECK(r.pulses.size() == 4);
+    REQUIRE(r.stats.pairs == 4);
+    CHECK(r.stats.meanMs == Catch::Approx(40.0).margin(1.0));
+    CHECK(std::fabs(r.stats.driftMs) < 1.0);
 }

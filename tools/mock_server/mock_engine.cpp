@@ -1,7 +1,9 @@
 #include "mock_engine.hpp"
 
 #include "dc/protocol/constants.hpp"
+#include "dc/control/video_methods.hpp"
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/video.hpp"
 #include "dc/version.hpp"
 
 #include <algorithm>
@@ -119,7 +121,38 @@ void MockEngine::seed() {
     put("/capture/audio/2/source", std::string("track/1"));
     put("/capture/audio/3/source", std::string("track/2"));
 
+    // what capd would report on a PC with two monitors and a webcam
+    put("/video/devices/display/1/id", std::string("mock-display-1"));
+    put("/video/devices/display/1/name", std::string("Mock Monitor 27\""));
+    put("/video/devices/display/1/width", std::int64_t{2560});
+    put("/video/devices/display/1/height", std::int64_t{1440});
+    put("/video/devices/display/1/primary", true);
+    put("/video/devices/display/2/id", std::string("mock-display-2"));
+    put("/video/devices/display/2/name", std::string("Mock Monitor 24\""));
+    put("/video/devices/display/2/width", std::int64_t{1920});
+    put("/video/devices/display/2/height", std::int64_t{1080});
+    put("/video/devices/display/2/primary", false);
+    put("/video/devices/window/1/exe", std::string("game.exe"));
+    put("/video/devices/window/1/title", std::string("Mock Game"));
+    put("/video/devices/window/2/exe", std::string("browser.exe"));
+    put("/video/devices/window/2/title", std::string("Mock Browser"));
+    put("/video/devices/camera/1/id", std::string("mock-camera-1"));
+    put("/video/devices/camera/1/name", std::string("Mock USB Camera"));
+    put("/video/source/1/state", std::string("ok"));
+    put("/video/source/1/width", std::int64_t{2560});
+    put("/video/source/1/height", std::int64_t{1440});
+
+    // a few sampler pads that look loaded, so the pad screen has something to show
+    const char* const pads[] = {"Applause", "Airhorn", "Drum roll"};
+    for (int i = 0; i < 3; ++i) {
+        const std::string base = "/sampler/bank/1/pad/" + std::to_string(i + 1);
+        put(base + "/file", std::string("C:/Sounds/") + pads[i] + ".wav");
+        put(base + "/state", std::string("ready"));
+        put(base + "/duration_ms", std::int64_t{1500 + 500 * i});
+    }
+
     server_.publishNow(c);
+    server_.publishNow(videoDerived(server_.store().tree()));
 }
 
 void MockEngine::registerMethods() {
@@ -129,6 +162,53 @@ void MockEngine::registerMethods() {
     server_.registerMethod("/capture/record/start", [this](CallContext& ctx) { return startRecording(ctx); });
     server_.registerMethod("/capture/record/stop", [this](CallContext& ctx) { return stopRecording(ctx); });
     server_.registerMethod("/capture/report", [this](CallContext& ctx) { return captureReport(ctx); });
+    control::registerVideoMethods(server_);
+
+    // recorder and sampler: state only, no audio (protocol.md 5.4.2 / 5.4.3)
+    server_.registerMethod("/recorder/start", [this](CallContext& ctx) {
+        if (server_.store().tree().getAs<std::string>("/recorder/state") == "recording")
+            return error(ErrorCode::Conflict, "already recording");
+        const std::string folder = "C:/Users/mock/Music/Desktop Capture/take";
+        server_.publishNow({{"/recorder/state", std::string("recording")}, {"/recorder/folder", folder}}, {}, ctx.call.id,
+                           ctx.client.name);
+        Result r;
+        r.value = folder;
+        return r;
+    });
+    server_.registerMethod("/recorder/stop", [this](CallContext& ctx) {
+        if (server_.store().tree().getAs<std::string>("/recorder/state") != "recording")
+            return error(ErrorCode::Conflict, "not recording");
+        server_.publishNow({{"/recorder/state", std::string("idle")}}, {}, ctx.call.id, ctx.client.name);
+        return Result{};
+    });
+    auto padPath = [this](const CallContext& ctx) -> std::string {
+        const auto pad = intArg(ctx.call.args, "pad").value_or(0);
+        const auto bank = intArg(ctx.call.args, "bank")
+                              .value_or(server_.store().tree().getAs<std::int64_t>("/sampler/active_bank").value_or(1));
+        if (pad < 1 || pad > kSamplerPads || bank < 1 || bank > kSamplerBanks) return {};
+        return "/sampler/bank/" + std::to_string(bank) + "/pad/" + std::to_string(pad) + "/playing";
+    };
+    server_.registerMethod("/sampler/trigger", [this, padPath](CallContext& ctx) {
+        const auto path = padPath(ctx);
+        if (path.empty()) return error(ErrorCode::OutOfRange, "pad or bank out of range");
+        const bool playing = server_.store().tree().getAs<bool>(path).value_or(false);
+        server_.publishNow({{path, !playing}}, {}, ctx.call.id, ctx.client.name);
+        return Result{};
+    });
+    server_.registerMethod("/sampler/release", [this, padPath](CallContext& ctx) {
+        const auto path = padPath(ctx);
+        if (path.empty()) return error(ErrorCode::OutOfRange, "pad or bank out of range");
+        return Result{};
+    });
+    server_.registerMethod("/sampler/stop", [this](CallContext& ctx) {
+        std::vector<Change> c;
+        for (const auto& [path, v] : server_.store().tree().values())
+            if (path.rfind("/sampler/", 0) == 0 && path.size() > 8 && path.compare(path.size() - 8, 8, "/playing") == 0 &&
+                v == Value{true})
+                c.push_back({path, false});
+        server_.publishNow(c, {}, ctx.call.id, ctx.client.name);
+        return Result{};
+    });
 }
 
 std::vector<int> MockEngine::tracksInOrder() const {

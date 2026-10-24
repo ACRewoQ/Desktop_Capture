@@ -9,11 +9,18 @@ namespace dc::capd {
 
 namespace {
 
-// One textured quad per layer. The vertex shader makes the 4 corners from SV_VertexID, so there is no vertex buffer.
+// One textured (or solid) quad per layer. The vertex shader makes the 4 corners from SV_VertexID, so there is no
+// vertex buffer. Output is premultiplied alpha; the blend state is ONE / INV_SRC_ALPHA.
+// The chroma key follows OBS: distance of the pixel's CbCr from the key's CbCr; below `similarity` the pixel is
+// keyed out, `smoothness` widens the edge, and `spill` desaturates what is left of the key colour.
 constexpr char kShader[] = R"(
 cbuffer Layer : register(b0) {
     float4 dst;      // left, top, right, bottom in clip space
-    float4 params;   // x = opacity
+    float4 uv;       // u0, v0, u1, v1
+    float4 params;   // x = opacity, y = mode (0 opaque, 1 straight, 2 premultiplied, 3 solid), z = chroma on
+    float4 color;    // solid colour, straight alpha
+    float4 chroma;   // x, y = key Cb Cr; z = similarity; w = smoothness
+    float4 chroma2;  // x = spill
 };
 Texture2D tex : register(t0);
 SamplerState smp : register(s0);
@@ -24,19 +31,41 @@ VsOut vs_main(uint id : SV_VertexID) {
     float2 c = float2(id & 1, id >> 1);  // (0,0) (1,0) (0,1) (1,1)
     VsOut o;
     o.pos = float4(lerp(dst.x, dst.z, c.x), lerp(dst.y, dst.w, c.y), 0, 1);
-    o.uv = c;
+    o.uv = lerp(uv.xy, uv.zw, c);
     return o;
 }
 
 float4 ps_main(VsOut i) : SV_Target {
-    float4 c = tex.Sample(smp, i.uv);
-    return float4(c.rgb, params.x);  // desktop captures carry no meaningful alpha
+    float4 c;
+    if (params.y > 2.5) {
+        c = float4(color.rgb * color.a, color.a);
+    } else {
+        c = tex.Sample(smp, i.uv);
+        if (params.y < 0.5) c.a = 1;               // captures carry no meaningful alpha
+        if (params.y < 1.5) c.rgb *= c.a;          // to premultiplied
+    }
+    if (params.z > 0.5) {
+        float3 rgb = c.a > 0 ? c.rgb / c.a : float3(0, 0, 0);
+        float2 cbcr = float2(dot(rgb, float3(-0.1146, -0.3854, 0.5)), dot(rgb, float3(0.5, -0.4542, -0.0458)));
+        float base = distance(cbcr, chroma.xy) - chroma.z;
+        float mask = saturate(base / max(chroma.w, 0.0001));
+        float keep = pow(saturate(base / max(chroma2.x, 0.0001)), 1.5);
+        float lum = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+        rgb = lerp(float3(lum, lum, lum), rgb, keep);
+        float a = c.a * mask;
+        c = float4(rgb * a, a);
+    }
+    return c * params.x;
 }
 )";
 
 struct LayerConstants {
     float dst[4];
+    float uv[4];
     float params[4];
+    float color[4];
+    float chroma[4];
+    float chroma2[4];
 };
 
 ComPtr<ID3DBlob> compile(const char* entry, const char* target) {
@@ -51,12 +80,20 @@ ComPtr<ID3DBlob> compile(const char* entry, const char* target) {
     return code;
 }
 
+ComPtr<ID3D11Texture2D> createTarget(ID3D11Device* d, UINT w, UINT h, ComPtr<ID3D11RenderTargetView>* rtv,
+                                     ComPtr<ID3D11ShaderResourceView>* srv) {
+    auto tex = createBgraTexture(d, w, h);
+    if (rtv) DC_HR(d->CreateRenderTargetView(tex.Get(), nullptr, rtv->ReleaseAndGetAddressOf()));
+    if (srv) DC_HR(d->CreateShaderResourceView(tex.Get(), nullptr, srv->ReleaseAndGetAddressOf()));
+    return tex;
+}
+
 }  // namespace
 
 Compositor::Compositor(const Device& dev, UINT width, UINT height) : dev_(dev), width_(width), height_(height) {
     ID3D11Device* d = dev_.device.Get();
-    canvas_ = createBgraTexture(d, width_, height_);
-    DC_HR(d->CreateRenderTargetView(canvas_.Get(), nullptr, &rtv_));
+    canvas_ = createTarget(d, width_, height_, &canvasRtv_, nullptr);
+    scratch_ = createTarget(d, width_, height_, &scratchRtv_, &scratchSrv_);
 
     auto vsCode = compile("vs_main", "vs_5_0");
     auto psCode = compile("ps_main", "ps_5_0");
@@ -79,7 +116,7 @@ Compositor::Compositor(const Device& dev, UINT width, UINT height) : dev_(dev), 
     D3D11_BLEND_DESC bd{};
     auto& rt = bd.RenderTarget[0];
     rt.BlendEnable = TRUE;
-    rt.SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    rt.SrcBlend = D3D11_BLEND_ONE;
     rt.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
     rt.BlendOp = D3D11_BLEND_OP_ADD;
     rt.SrcBlendAlpha = D3D11_BLEND_ONE;
@@ -95,40 +132,53 @@ Compositor::Compositor(const Device& dev, UINT width, UINT height) : dev_(dev), 
     DC_HR(d->CreateRasterizerState(&rd, &raster_));
 }
 
-ID3D11ShaderResourceView* Compositor::viewFor(ID3D11Texture2D* texture) {
-    auto& view = views_[texture];
-    if (!view) {
-        // Sources recreate their texture when the monitor size changes; drop views of textures that are gone.
-        if (views_.size() > 16) {
-            views_.clear();
-            return viewFor(texture);
-        }
-        DC_HR(dev_.device->CreateShaderResourceView(texture, nullptr, &view));
-    }
-    return view.Get();
-}
-
-LayerDraw Compositor::fit(ID3D11Texture2D* texture, UINT srcW, UINT srcH) const {
-    LayerDraw l;
-    l.texture = texture;
-    if (srcW == 0 || srcH == 0) return l;
-    const float scale = std::min(float(width_) / float(srcW), float(height_) / float(srcH));
-    l.width = float(srcW) * scale;
-    l.height = float(srcH) * scale;
-    l.x = (float(width_) - l.width) / 2;
-    l.y = (float(height_) - l.height) / 2;
-    return l;
-}
-
-void Compositor::render(const std::vector<LayerDraw>& layers) {
+void Compositor::draw(const LayerDraw& l) {
+    if ((!l.view && !l.solid) || l.width <= 0 || l.height <= 0 || l.opacity <= 0) return;
     ID3D11DeviceContext* ctx = dev_.context.Get();
-    const float black[4] = {0, 0, 0, 1};
-    ctx->ClearRenderTargetView(rtv_.Get(), black);
+    D3D11_MAPPED_SUBRESOURCE m{};
+    DC_HR(ctx->Map(constants_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m));
+    LayerConstants c{};
+    c.dst[0] = l.x / float(width_) * 2 - 1;
+    c.dst[1] = 1 - l.y / float(height_) * 2;
+    c.dst[2] = (l.x + l.width) / float(width_) * 2 - 1;
+    c.dst[3] = 1 - (l.y + l.height) / float(height_) * 2;
+    c.uv[0] = l.u0;
+    c.uv[1] = l.v0;
+    c.uv[2] = l.u1;
+    c.uv[3] = l.v1;
+    c.params[0] = std::clamp(l.opacity, 0.0f, 1.0f);
+    c.params[1] = l.solid ? 3.0f : float(l.alpha);
+    c.params[2] = l.chroma ? 1.0f : 0.0f;
+    c.color[0] = l.color.r;
+    c.color[1] = l.color.g;
+    c.color[2] = l.color.b;
+    c.color[3] = l.color.a;
+    if (l.chroma) {
+        const auto k = argbToRgba(0xFF000000u | l.chromaColor);
+        c.chroma[0] = -0.1146f * k.r - 0.3854f * k.g + 0.5f * k.b;
+        c.chroma[1] = 0.5f * k.r - 0.4542f * k.g - 0.0458f * k.b;
+        c.chroma[2] = l.similarity;
+        c.chroma[3] = l.smoothness;
+        c.chroma2[0] = l.spill;
+    }
+    std::memcpy(m.pData, &c, sizeof c);
+    ctx->Unmap(constants_.Get(), 0);
+
+    ID3D11ShaderResourceView* srv = l.view;
+    ctx->PSSetShaderResources(0, 1, &srv);
+    ctx->Draw(4, 0);
+}
+
+void Compositor::render(Target target, Rgba bg, const std::vector<LayerDraw>& layers) {
+    ID3D11DeviceContext* ctx = dev_.context.Get();
+    ID3D11RenderTargetView* rtv = target == Target::Canvas ? canvasRtv_.Get() : scratchRtv_.Get();
+    const float clear[4] = {bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a};
+    ctx->ClearRenderTargetView(rtv, clear);
 
     D3D11_VIEWPORT vp{0, 0, float(width_), float(height_), 0, 1};
     ctx->RSSetViewports(1, &vp);
     ctx->RSSetState(raster_.Get());
-    ctx->OMSetRenderTargets(1, rtv_.GetAddressOf(), nullptr);
+    ctx->OMSetRenderTargets(1, &rtv, nullptr);
     ctx->OMSetBlendState(blend_.Get(), nullptr, 0xffffffff);
     ctx->IASetInputLayout(nullptr);
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -138,28 +188,49 @@ void Compositor::render(const std::vector<LayerDraw>& layers) {
     ctx->PSSetConstantBuffers(0, 1, constants_.GetAddressOf());
     ctx->PSSetSamplers(0, 1, sampler_.GetAddressOf());
 
-    for (const LayerDraw& l : layers) {
-        if (!l.texture || l.width <= 0 || l.height <= 0 || l.opacity <= 0) continue;
-        D3D11_MAPPED_SUBRESOURCE m{};
-        DC_HR(ctx->Map(constants_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m));
-        LayerConstants c{};
-        c.dst[0] = l.x / float(width_) * 2 - 1;
-        c.dst[1] = 1 - l.y / float(height_) * 2;
-        c.dst[2] = (l.x + l.width) / float(width_) * 2 - 1;
-        c.dst[3] = 1 - (l.y + l.height) / float(height_) * 2;
-        c.params[0] = std::clamp(l.opacity, 0.0f, 1.0f);
-        std::memcpy(m.pData, &c, sizeof c);
-        ctx->Unmap(constants_.Get(), 0);
+    for (const LayerDraw& l : layers) draw(l);
 
-        ID3D11ShaderResourceView* srv = viewFor(l.texture);
-        ctx->PSSetShaderResources(0, 1, &srv);
-        ctx->Draw(4, 0);
-    }
-
-    // Unbind so the source textures can be written by the capture sources again without hazards.
+    // Unbind so the source textures can be written by the sources again without hazards.
     ID3D11ShaderResourceView* none = nullptr;
     ctx->PSSetShaderResources(0, 1, &none);
     ctx->OMSetRenderTargets(0, nullptr, nullptr);
+}
+
+void Compositor::blendScratchOverCanvas(float opacity) {
+    ID3D11DeviceContext* ctx = dev_.context.Get();
+    D3D11_VIEWPORT vp{0, 0, float(width_), float(height_), 0, 1};
+    ctx->RSSetViewports(1, &vp);
+    ctx->RSSetState(raster_.Get());
+    ctx->OMSetRenderTargets(1, canvasRtv_.GetAddressOf(), nullptr);
+    ctx->OMSetBlendState(blend_.Get(), nullptr, 0xffffffff);
+    ctx->IASetInputLayout(nullptr);
+    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    ctx->VSSetShader(vs_.Get(), nullptr, 0);
+    ctx->PSSetShader(ps_.Get(), nullptr, 0);
+    ctx->VSSetConstantBuffers(0, 1, constants_.GetAddressOf());
+    ctx->PSSetConstantBuffers(0, 1, constants_.GetAddressOf());
+    ctx->PSSetSamplers(0, 1, sampler_.GetAddressOf());
+
+    LayerDraw l;
+    l.view = scratchSrv_.Get();
+    l.alpha = 2;  // the scratch canvas is premultiplied
+    l.width = float(width_);
+    l.height = float(height_);
+    l.opacity = opacity;
+    draw(l);
+
+    ID3D11ShaderResourceView* none = nullptr;
+    ctx->PSSetShaderResources(0, 1, &none);
+    ctx->OMSetRenderTargets(0, nullptr, nullptr);
+}
+
+void Compositor::freeze() {
+    if (!frozen_) frozen_ = createBgraTexture(dev_.device.Get(), width_, height_);
+    dev_.context->CopyResource(frozen_.Get(), canvas_.Get());
+}
+
+void Compositor::restoreFrozen() {
+    if (frozen_) dev_.context->CopyResource(canvas_.Get(), frozen_.Get());
 }
 
 }  // namespace dc::capd

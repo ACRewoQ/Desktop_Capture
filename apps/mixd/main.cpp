@@ -5,8 +5,8 @@
 //
 //   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
 //        [--media-port N] [--lan-store FILE] [--no-discovery]
-//        [--bridge-ms MS] [--test-tone HZ] [--plugin-cache FILE] [--no-plugins] [--quiet]
-//        [--list-devices] [--version]
+//        [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--plugin-cache FILE] [--no-plugins]
+//        [--quiet] [--list-devices] [--version]
 //   mixd --scan-plugin FILE --out JSON      (the VST3 scanner child process, started by mixd itself)
 //
 // With VST3 (DC_WITH_JUCE) the main thread runs JUCE's message loop (plugin creation and windows)
@@ -46,8 +46,8 @@ namespace {
 int usage() {
     std::cerr << "usage: mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices]\n"
                  "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
-                 "            [--bridge-ms MS] [--test-tone HZ] [--plugin-cache FILE] [--no-plugins] [--quiet]\n"
-                 "            [--list-devices] [--version]\n"
+                 "            [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio]\n"
+                 "            [--plugin-cache FILE] [--no-plugins] [--quiet] [--list-devices] [--version]\n"
                  "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
                  "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
                  "  --allow-remote  accept LAN clients without pairing (development only)\n"
@@ -56,8 +56,12 @@ int usage() {
                  "  --fake-devices  in-process test devices instead of WASAPI (always on outside Windows)\n"
                  "  --bridge-ms     minimum latency of the clock bridge to non-clock devices (default: automatic)\n"
                  "  --test-tone     add a -20 dBFS sine of HZ to the master (dropout tests)\n"
+                 "  --test-pulse    make the tone (1 kHz unless --test-tone) a 50 ms burst at every multiple of\n"
+                 "                  SEC seconds of QPC time (A/V sync check with dc-av-flash)\n"
+                 "  --no-asio       do not list or open ASIO drivers\n"
                  "  --plugin-cache  VST3 scan results file (default %APPDATA%\\DesktopCapture\\vst3-cache.json)\n"
-                 "  --no-plugins    no VST3 host (built-in effects only)\n";
+                 "  --no-plugins    no VST3 host (built-in effects only)\n"
+                 "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
 
@@ -74,7 +78,7 @@ int main(int argc, char** argv) {
     mixd::Controller::Options ctlOpt;
     mixd::LanService::Options lanOpt;
     lanOpt.storePath = mixd::LanStore::defaultPath();
-    bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, plugins = true;
+    bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, asioDrivers = true, plugins = true;
     std::string shmSuffix, pluginCache, scanFile, scanOut;
 
     for (int i = 1; i < argc; ++i) {
@@ -103,12 +107,16 @@ int main(int argc, char** argv) {
         else if (a == "--test-tone") {
             ctlOpt.build.testToneHz = std::stod(next());
             ctlOpt.build.testToneGain = 0.1f;
+        } else if (a == "--test-pulse") {
+            ctlOpt.build.testPulseSeconds = std::stod(next());
+            ctlOpt.build.testToneGain = 0.1f;
         } else if (a == "--quiet") quiet = true;
         else if (a == "--plugin-cache") pluginCache = next();
         else if (a == "--no-plugins") plugins = false;
         else if (a == "--scan-plugin") scanFile = next();
         else if (a == "--out") scanOut = next();
         else if (a == "--list-devices") list = true;
+        else if (a == "--no-asio") asioDrivers = false;
         else return usage();
     }
     if (!scanFile.empty()) {
@@ -128,14 +136,19 @@ int main(int argc, char** argv) {
         try {
             std::unique_ptr<mixd::DeviceBackend> backend;
 #ifdef _WIN32
-            if (!fake) backend = mixd::makeWasapiBackend();
+            if (!fake) backend = mixd::makeWasapiBackend(asioDrivers);
+#else
+            (void)asioDrivers;
 #endif
             if (!backend) backend = std::make_unique<mixd::FakeBackend>();
 
             if (list) {
                 for (const auto& d : backend->enumerate())
                     std::cout << (d.input ? "in  " : "out ") << (d.connected ? "ok   " : "gone ") << (d.isDefault ? "* " : "  ")
-                              << d.channels << "ch  " << d.name << "  [" << d.id << "]\n";
+                              << d.channels << "ch " << (d.sampleRate ? std::to_string(d.sampleRate) + "Hz  " : std::string("  "))
+                              << (d.asio ? "asio " : d.virtualCable ? "vmic " : "") << d.name << "  [" << d.id << "]\n";
+                for (const auto& p : backend->enumerateProcesses())
+                    std::cout << "app " << p.exe << "  pid " << p.pid << (p.title.empty() ? "" : "  \"" + p.title + "\"") << "\n";
                 return 0;
             }
 

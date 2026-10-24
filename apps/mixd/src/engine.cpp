@@ -93,7 +93,7 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
             else port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
             inputPtrs_[i] = buf;
         }
-        mixer_.process(*plan, n, inputPtrs_.data(), shm_);
+        mixer_.process(*plan, n, inputPtrs_.data(), shm_, start + done / kSampleRate);
 
         for (std::size_t b = 0; b < plan->buses.size(); ++b) {
             const float* l = mixer_.bus(static_cast<int>(b), 0);

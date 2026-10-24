@@ -9,6 +9,7 @@
     "msgpack",
     "catch2",
     "opus",
+    "libflac",
     {
       "name": "ffmpeg",
       "default-features": false,

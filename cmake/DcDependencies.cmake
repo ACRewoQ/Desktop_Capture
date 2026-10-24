@@ -38,6 +38,18 @@ else()
     target_link_libraries(dc_opus INTERFACE PkgConfig::DC_OPUS)
 endif()
 
+# --- libFLAC (mixd recorder) ---
+# vcpkg ships a CMake package (FLAC::FLAC); distro packages have pkg-config only.
+find_package(FLAC CONFIG QUIET)
+add_library(dc_flac INTERFACE)
+if(TARGET FLAC::FLAC)
+    target_link_libraries(dc_flac INTERFACE FLAC::FLAC)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(DC_FLAC REQUIRED IMPORTED_TARGET flac)
+    target_link_libraries(dc_flac INTERFACE PkgConfig::DC_FLAC)
+endif()
+
 # --- Catch2 (tests only) ---
 if(DC_BUILD_TESTS)
     find_package(Catch2 3 CONFIG REQUIRED)

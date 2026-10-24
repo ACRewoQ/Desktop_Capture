@@ -1,5 +1,5 @@
-// capd's normal mode: connected to the engine as a service client, it records when the engine says so and reports
-// back (docs/spec/protocol.md 5.4.1). The engine owns the settings and the state; capd only follows
+// capd's normal mode: connected to the engine as a service client, it runs the video mixer from the engine's tree
+// (/video/*, protocol.md 4.5) and records when the engine says so and reports back (docs/spec/protocol.md 5.4.1). The engine owns the settings and the state; capd only follows
 // /capture/state: "starting" -> record and report "recording", "stopping" -> finish and report "idle", a failure
 // -> report "error". The connection is retried every second; losing it stops a running recording (the engine marks
 // the recording as failed on its side).
@@ -7,10 +7,15 @@
 
 #include "recorder.hpp"
 
+#include "dc/protocol/messages.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace dc::control {
 class ControlClient;
@@ -19,6 +24,7 @@ class ControlClient;
 namespace dc::capd {
 
 #ifdef _WIN32
+class VideoEngine;
 class VideoMix;
 #endif
 
@@ -44,14 +50,20 @@ private:
     void stopRecording(bool report);
     void report(const std::string& state, const std::string& file, const std::string& error,
                 std::int64_t durationMs);
+    void followVideo();
 
     Options options_;
     std::unique_ptr<control::ControlClient> client_;
     std::int64_t nextConnectMs_ = 0;
     std::string lastState_;
 #ifdef _WIN32
-    std::unique_ptr<VideoMix> mix_;
+    std::unique_ptr<VideoEngine> video_;
+    std::shared_ptr<VideoMix> mix_;  // lease on the recorded mix while recording
+    std::uint64_t videoRev_ = 0;
 #endif
+    std::mutex videoCallsMutex_;  // reports from the video engine's threads, sent by run()
+    std::vector<std::pair<std::string, proto::Args>> videoCalls_;
+    std::atomic<bool> refreshWindows_{false};
     std::unique_ptr<Recorder> recorder_;
 };
 

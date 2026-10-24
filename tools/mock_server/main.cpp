@@ -4,6 +4,8 @@
 
 #include "mock_engine.hpp"
 
+#include "dc/control/video_methods.hpp"
+
 #include "dc/protocol/constants.hpp"
 #include "dc/version.hpp"
 
@@ -56,11 +58,14 @@ int main(int argc, char** argv) {
     try {
         asio::io_context io;
         dc::proto::ParamStore store;
+        dc::control::ControlServer* serverPtr = nullptr;
         dc::mock::MockEngine* enginePtr = nullptr;
-        opt.onDelta = [&enginePtr](const dc::proto::Delta& d) {
+        opt.onDelta = [&serverPtr, &enginePtr](const dc::proto::Delta& d) {
+            if (serverPtr) dc::control::followVideoDelta(*serverPtr, d);
             if (enginePtr) enginePtr->onDelta(d);
         };
         dc::control::ControlServer server(io, store, opt);
+        serverPtr = &server;
         dc::mock::MockEngine engine(io, server, mockOpt);
         enginePtr = &engine;
         server.start();

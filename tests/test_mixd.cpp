@@ -220,6 +220,7 @@ TEST_CASE("plan builder: routing, solo, input state, shared memory, device deman
     t.set("/track/2/input/kind", std::string("device"));
     t.set("/track/2/input/source", std::string("gone"));
     t.set("/track/3/input/kind", std::string("process"));
+    t.set("/track/3/input/source", std::string("Game.EXE")); // not running: no capture port
     t.set("/track/2/out/1/target", std::string("track/1"));
     t.set("/track/4/out/2/target", std::string("device/hp"));
     t.set("/master/out/1/target", std::string("device/spk"));
@@ -261,6 +262,11 @@ TEST_CASE("plan builder: routing, solo, input state, shared memory, device deman
     auto d = deviceDemand(t);
     CHECK(d.inputs == std::vector<std::string>{"gone", "mic"});
     CHECK(d.outputs == std::vector<std::string>{"usb", "spk", "hp"});
+    CHECK(d.processes == std::vector<std::string>{"game.exe"});
+
+    // the application runs: its capture port is found by the lower case name
+    ports.inputs[processPortKey("game.exe")] = port(processPortKey("game.exe"), 2);
+    CHECK(buildPlan(t, ports, 9).inputState.at(3) == "ok");
 
     SECTION("solo keeps the soloed track, what feeds it and what it feeds") {
         t.set("/track/1/solo", true);
@@ -562,4 +568,42 @@ TEST_CASE("mixd behind the control server: settings, tracks, input state, shared
     net.join();
     ctlPtr = nullptr;
     devices.stop();
+}
+
+TEST_CASE("test pulse: 50 ms bursts start at multiples of the QPC period", "[mixd]") {
+    Mixer m;
+    MixPlan plan;
+    plan.generation = 1;
+    plan.buses = {outPort("spk")};
+    plan.master.outputs = {{Destination::Kind::Bus, 0}};
+    plan.testToneGain = 0.1f;
+    plan.testToneHz = 1000;
+    plan.testPulseSeconds = 2.0;
+
+    // Settle the master's smoothing between bursts (t = 10.5 .. 11.5 s, silence expected).
+    const double blockSec = 256 / kSampleRate;
+    double t = 10.5;
+    for (int b = 0; b < 150; ++b, t += blockSec) {
+        m.process(plan, 256, nullptr, nullptr, t);
+        const float* l = m.bus(0, 0);
+        for (int i = 0; i < 256; ++i) REQUIRE(l[i] == 0.0f);
+    }
+    // Blocks around t = 12 s: the burst starts at the sample that crosses 12.0 and lasts 50 ms.
+    t = 12.0 - 100.5 / kSampleRate;
+    std::vector<float> got;
+    for (int b = 0; b < 16; ++b, t += blockSec) {
+        m.process(plan, 256, nullptr, nullptr, t);
+        got.insert(got.end(), m.bus(0, 0), m.bus(0, 0) + 256);
+    }
+    int first = -1, last = -1;
+    for (int i = 0; i < static_cast<int>(got.size()); ++i)
+        if (std::fabs(got[static_cast<std::size_t>(i)]) > 1e-6f) {
+            if (first < 0) first = i;
+            last = i;
+        }
+    CHECK(first == 101);
+    CHECK(last - first == Approx(0.05 * kSampleRate).margin(2));
+    float peak = 0;
+    for (float v : got) peak = std::max(peak, std::fabs(v));
+    CHECK(peak == Approx(0.1).margin(0.002));
 }
