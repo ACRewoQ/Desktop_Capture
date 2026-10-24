@@ -24,6 +24,8 @@ inline constexpr int kMaxLanStreams = 8;        // /lan/stream/1..8, output targ
 inline constexpr int kMaxLanSubscriptions = 32; // /lan/sub/#
 inline constexpr int kMaxLanPeers = 16;         // /lan/peers/#
 inline constexpr int kMaxPairedClients = 16;    // /remote/paired/#
+inline constexpr int kSamplerBanks = 8;
+inline constexpr int kSamplerPads = 16; // per bank
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 
