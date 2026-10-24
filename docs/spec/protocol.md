@@ -152,7 +152,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/mixer/track/move` | `track`:int, `position`:int | nil | P0 | 並び順の変更 |
 | `/capture/record/start` | なし | nil | P0 | 録画開始。録画中なら `conflict` |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止。録画中でなければ `conflict` |
-| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
+| `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int?, `reason`:str? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/recorder/start` | なし | str（テイクのフォルダー） | P3 | トラック別録音の開始（5.4.2） |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音の停止。録音中でなければ `conflict` |
 | `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
@@ -161,6 +161,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
 | `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
+| `/video/output/report` | `output`:str（`vcam` / `monitor`）, `state`:str, `detail`:str? | nil | P3 | capd から映像出力の状態を知らせる（5.4.4）。role = サービス以外は `unauthorized` |
 | `/remote/pairing/start` / `stop` | なし | str（6 桁）/ nil | P4 | ペアリング受付 |
 
 未実装・未知のメソッドは `unknown_method` を返します。
@@ -177,8 +178,9 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `report idle` | `/capture/state` = `idle`、`capture.stopped` | |
 | capd 側の失敗（エンコーダーを開けない、ディスク満杯で安全停止など） | `/capture/state` = `error`、`/capture/error` = `error` | `/capture/report` `state="error"`, `error` |
 | 録画中（`starting` / `recording` / `stopping`）に capd の接続が切れた | `/capture/state` = `error`、`/capture/error` = "capture process disconnected" | |
+| capd が録画中にファイルを切り替えた（GPU リセットなど、P3） | `/capture/file` を新しいファイルに。`/capture/elapsed_ms` は数え続け、`capture.started` は送らない。`capture.segment` `file`, `reason` | 前のファイルを閉じ、新しいファイルを開いて `/capture/report` `state="recording"`, `file`, `reason` |
 
-`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
+`reason` は、録画中（`/capture/state` = `recording`）の `report recording` に付けたときだけ「ファイルの切り替え」の意味になります（`gpu_reset` など。UI は表示に使うだけ）。`recording` でないときの `reason` は無視します。`state` に `recording` / `idle` / `error` 以外が来たら `bad_request` です。エンジンの共有メモリ音声は録画中でなくても常に書かれているので、capd は `starting` を見た時点から読み始められます。
 
 #### 5.4.2 トラック別録音（レコーダー）
 
@@ -200,6 +202,23 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 同時に鳴らせるのは 32 音まで。足りないときは一番古い音を止めます。
 - 再生中は `playing` が true になります（約 30Hz で更新）。再生中にファイルを差し替えるとその音は止まります。
 - `pad`・`bank` が範囲外なら `out_of_range` です。
+
+#### 5.4.4 映像出力の状態（仮想カメラ・全画面表示）
+
+仮想カメラ（`/video/vcam/*`）と全画面表示（`/video/monitor/*`）は capd が出します。capd は出力の状態が変わるたびに `/video/output/report` で知らせ、エンジンは `/video/<output>/state`・`/video/<output>/detail` に書きます（`detail` 省略 = `""`）。
+
+| `output` | `state` | 意味 |
+|---|---|---|
+| `vcam` | `off` | 出していない（`/video/vcam/mix` = 0、またはミックスがない） |
+| | `waiting` | 出しているが、カメラを開いているアプリがない |
+| | `active` | アプリがカメラを読んでいる |
+| | `unavailable` | 出せない（仮想カメラが未登録など）。`detail` に理由 |
+| `monitor` | `off` | 出していない（`/video/monitor/mix` = 0、またはミックスがない） |
+| | `active` | 表示中 |
+| | `no_display` | `/video/monitor/display` のモニターが見つからない。つながれば capd が自動で戻して `active` を送る |
+| | `error` | 表示できない。`detail` に理由。ほかの出力（録画・仮想カメラ）は止まらない |
+
+`output` か `state` が上の表にない値なら `bad_request` です。capd の接続が切れたら、エンジンは両方を `off`・`""` に戻します（capd は再接続したら今の状態を送り直します）。
 
 ### 5.5 Event（通知）
 

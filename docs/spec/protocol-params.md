@@ -135,6 +135,10 @@
 | `/video/vcam/resolution` | string | rw | 1080p / 720p | `"1080p"` | 仮想カメラの解像度 |
 | `/video/monitor/mix` | int | rw | 0 〜 4 | `0` | 全画面表示に出す映像ミックス（0 = なし） |
 | `/video/monitor/display` | string | rw |  | `""` | 全画面表示先のモニター ID |
+| `/video/vcam/state` | string | ro | off / waiting / active / unavailable | `"off"` | 仮想カメラの状態（waiting = カメラを開いたアプリがない、unavailable = 未登録など） |
+| `/video/vcam/detail` | string | ro |  | `""` | 仮想カメラの状態の説明（unavailable の理由など） |
+| `/video/monitor/state` | string | ro | off / active / no_display / error | `"off"` | 全画面表示の状態（no_display = モニターが見つからない。つながれば自動で戻る） |
+| `/video/monitor/detail` | string | ro |  | `""` | 全画面表示の状態の説明（error の内容など） |
 | `/video/preview/mix` | int | rw | 0 〜 4 | `1` | リモコンのプレビューに出す映像ミックス |
 | `/video/preview/width` | int | rw | 160 〜 1920 | `960` | プレビュー解像度（幅） |
 | `/video/preview/height` | int | rw | 90 〜 1080 | `540` | プレビュー解像度（高さ） |
@@ -163,7 +167,7 @@
 | `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |
 | `/capture/record/start` | なし | nil | P0 | 録画開始 |
 | `/capture/record/stop` | なし | nil | P0 | 録画停止 |
-| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ） |
+| `/capture/report` | state:string, file:string?, error:string?, duration_ms:int?, reason:string? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ。reason は録画中のファイル切り替え） |
 | `/recorder/start` | なし | string（テイクのフォルダー） | P3 | トラック別録音を開始。録音対象がなければ conflict |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音を停止 |
 | `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
@@ -179,6 +183,7 @@
 | `/master/fx/#/params` | offset:int?, count:int?, keys:string? | string（JSON 配列） | P3 | パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる |
 | `/plugins/scan` | rescan:bool? | nil | P3 | VST3 プラグインを探す（rescan = 前回の結果を使わずに全部） |
 | `/devices/refresh` | なし | nil | P2 | デバイス・プロセス一覧の更新 |
+| `/video/output/report` | output:string, state:string, detail:string? | nil | P3 | capd が出力（vcam / monitor）の状態をエンジンに知らせる（role = サービスの接続だけ） |
 | `/remote/pairing/start` | なし | string（6桁コード） | P4 | ペアリング受付開始 |
 | `/remote/pairing/stop` | なし | nil | P4 | ペアリング受付終了 |
 

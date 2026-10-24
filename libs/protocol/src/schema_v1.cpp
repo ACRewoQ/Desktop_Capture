@@ -173,6 +173,13 @@ Schema buildV1() {
     sc.add(e("/video/vcam/resolution", {"1080p", "720p"}, "1080p", "仮想カメラの解像度"));
     sc.add(i("/video/monitor/mix", 0, kMaxVideoMixes, 0, "全画面表示に出す映像ミックス（0 = なし）"));
     sc.add(s("/video/monitor/display", "", "全画面表示先のモニター ID"));
+    // what capd's outputs are doing (capd reports these with /video/output/report)
+    sc.add(e("/video/vcam/state", {"off", "waiting", "active", "unavailable"}, "off",
+             "仮想カメラの状態（waiting = カメラを開いたアプリがない、unavailable = 未登録など）", RO));
+    sc.add(s("/video/vcam/detail", "", "仮想カメラの状態の説明（unavailable の理由など）", RO));
+    sc.add(e("/video/monitor/state", {"off", "active", "no_display", "error"}, "off",
+             "全画面表示の状態（no_display = モニターが見つからない。つながれば自動で戻る）", RO));
+    sc.add(s("/video/monitor/detail", "", "全画面表示の状態の説明（error の内容など）", RO));
     sc.add(i("/video/preview/mix", 0, kMaxVideoMixes, 1, "リモコンのプレビューに出す映像ミックス"));
     sc.add(i("/video/preview/width", 160, 1920, 960, "プレビュー解像度（幅）"));
     sc.add(i("/video/preview/height", 90, 1080, 540, "プレビュー解像度（高さ）"));
@@ -206,8 +213,8 @@ Schema buildV1() {
     sc.addMethod({"/mixer/track/move", "track:int, position:int", "nil", "並び順を変える", "P0"});
     sc.addMethod({"/capture/record/start", "", "nil", "録画開始", "P0"});
     sc.addMethod({"/capture/record/stop", "", "nil", "録画停止", "P0"});
-    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?", "nil",
-                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ）", "P2"});
+    sc.addMethod({"/capture/report", "state:string, file:string?, error:string?, duration_ms:int?, reason:string?", "nil",
+                  "capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ。reason は録画中のファイル切り替え）", "P2"});
     sc.addMethod({"/recorder/start", "", "string（テイクのフォルダー）",
                   "トラック別録音を開始。録音対象がなければ conflict", "P3"});
     sc.addMethod({"/recorder/stop", "", "nil", "トラック別録音を停止", "P3"});
@@ -227,6 +234,8 @@ Schema buildV1() {
                   "パラメーターの名前・範囲・表示文字列を取得。VST3 は取得したものをツリーに載せる", "P3"});
     sc.addMethod({"/plugins/scan", "rescan:bool?", "nil", "VST3 プラグインを探す（rescan = 前回の結果を使わずに全部）", "P3"});
     sc.addMethod({"/devices/refresh", "", "nil", "デバイス・プロセス一覧の更新", "P2"});
+    sc.addMethod({"/video/output/report", "output:string, state:string, detail:string?", "nil",
+                  "capd が出力（vcam / monitor）の状態をエンジンに知らせる（role = サービスの接続だけ）", "P3"});
     sc.addMethod({"/remote/pairing/start", "", "string（6桁コード）", "ペアリング受付開始", "P4"});
     sc.addMethod({"/remote/pairing/stop", "", "nil", "ペアリング受付終了", "P4"});
 
