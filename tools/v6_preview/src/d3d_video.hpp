@@ -109,7 +109,9 @@ private:
 class FrameProbe {
 public:
     FrameProbe(ID3D11Device* device, int width, int height);
-    // Returns true if the barcode decodes to expectedId. detail gets the decoded id and a sample pixel.
+    // Returns true if the barcode decodes to expectedId plus the offset seen on the first frame (the LAN
+    // stream numbers frames from the first one sent, the pattern from the sender's start). detail gets
+    // the decoded id and a sample pixel.
     bool check(ID3D11DeviceContext* ctx, ID3D11Texture2D* src, std::uint64_t expectedId, std::string* detail);
     std::uint64_t ok() const { return ok_; }
     std::uint64_t bad() const { return bad_; }
@@ -119,6 +121,8 @@ private:
     int w_, h_;
     ComPtr<ID3D11Texture2D> staging_;
     std::uint64_t ok_ = 0, bad_ = 0;
+    bool haveOffset_ = false;
+    std::uint64_t offset_ = 0;  // barcode - expectedId, mod 2^24
     std::string last_;
 };
 
