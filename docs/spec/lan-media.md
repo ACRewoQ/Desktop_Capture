@@ -139,7 +139,7 @@ Windows ファイアウォールが受信側の UDP 47810 を止める場合は�
 
 ## 6. エンジンへの組み込み（P3）
 
-- **購読**：制御プロトコルの 10 章（`/lan/subscribe`、`/lan/sub/#`）。送信ストリームの設定は `/lan/stream/#`、受信バッファ目標は `/track/#/input/lan_buffer_ms`。映像は capd が UDP 47811 から、`/lan/sub/#` に並ぶ `video/preview`・`video/lan` の購読者へ送る（`proto::lanSubscriptions`）。
+- **購読**：制御プロトコルの 10 章（`/lan/subscribe`、`/lan/sub/#`）。送信ストリームの設定は `/lan/stream/#`、受信バッファ目標は `/track/#/input/lan_buffer_ms`。映像は capd が `/lan/sub/#` に並ぶ購読者へ送る（`video/preview` は UDP 47811 から、`video/lan` は UDP 47812 から。`proto::lanSubscriptions`、`docs/capd.md`「プレビューと LAN 映像の送出」）。
 - **mDNS での検出とペアリング**：制御プロトコルの 8 章。mixd の `discovery`（Windows の DnsServiceRegister / Browse / Resolve）、`lan_store`（`%APPDATA%\DesktopCapture\mixd-lan.txt`）。
 - **DSCP（QoS）マーキング**：Windows では qWAVE API が要るので、必要になったら追加する。
 
@@ -180,10 +180,11 @@ Windows ファイアウォールが受信側の UDP 47810 を止める場合は�
 
 遅延は送出から組み立て完了まで（エンコード・デコード・表示は含まない）。有線では伝送の追加遅延は 5 ms 以下です。損失があると次のキーフレームまで止まるので、止まりの長さはほぼ「往復時間 + キーフレームの送出時間」で決まります。
 
-### 7.4 実機で試す道具（capd が映像ミックスを送るまで）
+### 7.4 実機で試す道具
 
 ```powershell
-# エンジン PC（mixd 起動済み）：テストパターンを LAN 映像として、mixd の購読者へ送る
+# エンジン PC（mixd・capd 起動済み）：capd が映像ミックス（/video/preview/mix、既定 1）を送る。
+# capd を使わずにテストパターンを送るときは（capd を止めてから）
 dc-v6-bench --send-lan 127.0.0.1
 # エンジン PC：ペアリングを始め、表示された 6 桁を見る側に入力する
 dc-cli call /remote/pairing/start
@@ -192,4 +193,4 @@ dc-v6-preview --engine 192.168.1.10 --pair 123456
 dc-v6-preview --engine 192.168.1.10
 ```
 
-見る側は空いている UDP ポートで受け、`/lan/subscribe` でエンジンに知らせます。Windows ファイアウォールの確認が出たら「プライベート ネットワーク」を許可してください（mixd の TCP 47800・UDP 47810、送る側の UDP 47811、見る側）。
+見る側は空いている UDP ポートで受け、`/lan/subscribe` でエンジンに知らせます。Windows ファイアウォールの確認が出たら「プライベート ネットワーク」を許可してください（mixd の TCP 47800・UDP 47810、送る側の UDP 47811・47812、見る側）。

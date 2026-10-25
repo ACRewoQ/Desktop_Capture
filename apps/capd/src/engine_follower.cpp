@@ -7,8 +7,11 @@
 
 #ifdef _WIN32
 #include "fullscreen_output.hpp"
+#include "lan_video_output.hpp"
 #include "vcam_output.hpp"
 #include "video_mix.hpp"
+
+#include "dc/lanmedia/video_link.hpp"
 #endif
 
 #include <chrono>
@@ -59,6 +62,12 @@ std::pair<std::string, std::string> monitorState(const FullscreenOutput::Stats& 
 
 EngineFollower::EngineFollower(Options options) : options_(std::move(options)) {
     if (options_.port == 0) options_.port = proto::kDefaultControlPort;
+#ifdef _WIN32
+    preview_.output = "preview";
+    preview_.port = lan::kDefaultVideoPort;
+    lanOut_.output = "lan";
+    lanOut_.port = static_cast<std::uint16_t>(lan::kDefaultVideoPort + 1);
+#endif
 }
 
 EngineFollower::~EngineFollower() {
@@ -71,6 +80,7 @@ EngineFollower::~EngineFollower() {
     if (vcam_.out) vcam_.out->detach();
     drop(vcam_);
     drop(monitor_);
+    dropLanStreams();
     video_.reset();
 #endif
 }
@@ -80,6 +90,7 @@ bool EngineFollower::ensureConnected() {
     if (client_) {
         std::cout << "engine connection lost\n" << std::flush;
         stopRecording(false);  // the engine marks the recording as failed when capd disconnects
+        dropLanStreams();      // the engine drops the subscriptions too
         client_.reset();
         lastState_.clear();
     }
@@ -131,6 +142,7 @@ void EngineFollower::followVideo() {
     }
     if (refreshWindows_.exchange(false)) video_->refreshDeviceLists(true);
     followOutputs();
+    followLanStreams();
 #endif
     std::vector<std::pair<std::string, proto::Args>> calls;
     {
@@ -186,6 +198,112 @@ void EngineFollower::followOutputs() {
     } else reportOutput("monitor", "off", "");
 #endif
 }
+
+void EngineFollower::followLanStreams() {
+#ifdef _WIN32
+    const auto tree = client_->tree();
+    followLan(preview_, tree);
+    followLan(lanOut_, tree);
+#endif
+}
+
+void EngineFollower::dropLanStreams() {
+#ifdef _WIN32
+    dropLan(preview_);
+    dropLan(lanOut_);
+#endif
+}
+
+#ifdef _WIN32
+// The encoder runs only while somebody watches: the lease (and with it the mix, when no other output uses it) is
+// taken when the first viewer subscribes and given back when the last one leaves.
+void EngineFollower::followLan(LanHost& h, const proto::ParamTree& tree) {
+    const LanStreamConfig config = lanStreamConfig(tree, h.output);
+    auto to = lanDestinations(tree, config.stream);
+    const std::size_t viewers = to.size();
+    const bool want = config.mix > 0 && viewers > 0;
+    if (want && !h.socket && nowMs() >= h.retryMs) {
+        lan::VideoOutput::Options o;
+        o.port = h.port;
+        try {
+            h.socket = std::make_unique<lan::VideoOutput>(o);
+        } catch (const std::exception& e) {
+            try {  // the port is taken (another sender on this PC): any free port, viewers answer to it
+                o.port = 0;
+                h.socket = std::make_unique<lan::VideoOutput>(o);
+            } catch (const std::exception&) {
+                std::cout << h.output << ": cannot open a UDP socket: " << e.what() << "\n" << std::flush;
+                h.retryMs = nowMs() + 5000;
+            }
+        }
+        if (h.socket && h.socket->localPort() != h.port)
+            std::cout << h.output << ": UDP " << h.port << " is taken, sending from " << h.socket->localPort() << "\n"
+                      << std::flush;
+    }
+    if (h.socket) h.socket->setDestinations(std::move(to));
+    if (viewers != h.viewers) {
+        std::cout << h.output << ": " << viewers << " viewer(s)\n" << std::flush;
+        h.viewers = viewers;
+    }
+
+    const bool stale = h.out && h.out->stale();
+    if (stale) {
+        const std::string err = h.out->error();
+        std::cout << h.output << ": " << (err.empty() ? "the GPU was reset, starting a new stream" : "encoder failed: " + err)
+                  << "\n"
+                  << std::flush;
+        h.retryMs = nowMs() + (err.empty() ? 500 : 5000);
+    }
+    if (!want || config != h.config || stale) {
+        if (h.lease && h.consumer) h.lease->removeConsumer(h.consumer);
+        h.consumer = 0;
+        h.out.reset();
+        h.lease.reset();
+    }
+    if (config != h.config) h.retryMs = 0;
+    h.config = config;
+    if (!want || h.out || !h.socket || nowMs() < h.retryMs) {
+        if (h.out && nowMs() >= h.nextLogMs) {
+            h.nextLogMs = nowMs() + 30000;
+            const auto st = h.out->stats();
+            const auto net = h.socket->stats();
+            std::cout << h.output << ": " << st.frames << " frames (" << st.keyframes << " forced key), "
+                      << st.poolEmpty << " dropped, " << net.datagrams << " datagrams, "
+                      << static_cast<double>(net.bytes) / 1e6 << " MB, keyframe requests " << net.keyframeRequests
+                      << ", rtt " << net.rttMs << " ms\n"
+                      << std::flush;
+        }
+        return;
+    }
+    h.lease = video_->acquire(config.mix);  // null while the mix does not exist: tried again on the next pass
+    if (!h.lease) return;
+    try {
+        h.out = std::make_unique<LanVideoOutput>(*h.socket, config, h.lease->device());
+    } catch (const std::exception& e) {
+        std::cout << h.output << ": cannot open an encoder: " << e.what() << "\n" << std::flush;
+        h.lease.reset();
+        h.retryMs = nowMs() + 5000;
+        return;
+    }
+    for (const auto& line : h.out->log()) std::cout << "  " << line << "\n";
+    std::cout << h.output << ": mix " << config.mix << " as " << h.out->description() << " from UDP "
+              << h.socket->localPort() << "\n"
+              << std::flush;
+    h.nextLogMs = nowMs() + 30000;
+    auto* out = h.out.get();
+    h.consumer = h.lease->addFrameConsumer([out](const MixFrame& f) { out->onFrame(f); });
+}
+
+void EngineFollower::dropLan(LanHost& h) {
+    if (h.lease && h.consumer) h.lease->removeConsumer(h.consumer);
+    h.consumer = 0;
+    h.out.reset();
+    h.lease.reset();
+    if (h.socket) h.socket->setDestinations({});
+    h.viewers = 0;
+    h.config = {};
+}
+#endif
 
 void EngineFollower::reportOutput(const std::string& output, const std::string& state, const std::string& detail) {
     auto& last = reportedOutputs_[output];

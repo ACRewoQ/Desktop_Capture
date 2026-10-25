@@ -12,9 +12,10 @@ add_library(capd_core STATIC
     src/muxer.cpp
     src/recorder.cpp
     src/engine_follower.cpp
+    src/lan_stream.cpp
     src/avsync.cpp)
 target_include_directories(capd_core PUBLIC src)
-target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc::clocksync dc_ffmpeg Threads::Threads)
+target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::lanmedia dc::shmaudio dc::clocksync dc_ffmpeg Threads::Threads)
 if(WIN32)
     target_sources(capd_core PRIVATE
         src/d3d.cpp
@@ -29,7 +30,8 @@ if(WIN32)
         src/text_renderer.cpp
         src/mix_test.cpp
         src/vcam_output.cpp
-        src/fullscreen_output.cpp)
+        src/fullscreen_output.cpp
+        src/lan_video_output.cpp)
     target_link_libraries(capd_core PUBLIC dc_vcam_sender d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32 d2d1 dwrite
                                               windowscodecs dwmapi mfplat mfreadwrite mf mfuuid)
 endif()
