@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <set>
 
@@ -36,6 +37,18 @@ Result error(ErrorCode code, std::string message) {
 std::optional<std::string> strArg(const Args& args, const char* key) {
     if (auto it = args.find(key); it != args.end())
         if (auto* v = std::get_if<std::string>(&it->second)) return *v;
+    return std::nullopt;
+}
+
+// A pairing code or id typed on a command line may arrive as a number ("012345" -> 12345).
+std::optional<std::string> textArg(const Args& args, const char* key, int digits = 0) {
+    if (auto s = strArg(args, key)) return s;
+    if (auto it = args.find(key); it != args.end())
+        if (auto* v = std::get_if<std::int64_t>(&it->second); v && *v >= 0) {
+            auto t = std::to_string(*v);
+            if (static_cast<int>(t.size()) < digits) t.insert(0, std::size_t(digits) - t.size(), '0');
+            return t;
+        }
     return std::nullopt;
 }
 
@@ -232,7 +245,7 @@ Result LanService::pairingStop(CallContext&) {
 }
 
 Result LanService::unpair(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
+    const auto id = textArg(ctx.call.args, "id");
     if (!id || !store_.removePaired(*id)) return error(ErrorCode::NotFound, "not paired");
     server_->disconnectIf([&](const control::ClientInfo& c) { return c.clientId == *id && !c.loopback; }, "unpaired");
     publishPaired();
@@ -511,6 +524,7 @@ void LanService::onDatagram(std::span<const std::uint8_t> d, const lan::UdpTrans
 }
 
 void LanService::pumpLoop() {
+    lan::raiseThreadPriority();
     double nextReport = 0;
     while (pumpRunning_) {
         {
@@ -611,10 +625,11 @@ void LanService::onLinkStatus(const std::string& key, const PeerLinkStatus& stat
     if (!p || !p->conn) return;
     const bool namesChanged = !(p->link.streams == status.streams) || p->link.connected != status.connected ||
                               p->link.refused != status.refused || p->link.serverName != status.serverName;
+    const bool justConnected = status.connected && !p->link.connected;
     p->link = status;
     if (!status.serverName.empty()) p->name = status.serverName;
-    if (status.connected && opts_.verbose && namesChanged)
-        std::cout << "LAN: connected to peer " << p->name << " (" << key << ")" << std::endl;
+    if (justConnected && opts_.verbose)
+        std::cout << "LAN: connected to peer " << (p->name.empty() ? p->host : p->name) << " (" << key << ")" << std::endl;
     if (namesChanged) publishPeers();
     reconcileInputs();
 }
@@ -652,8 +667,8 @@ void LanService::publishPeers() {
 }
 
 Result LanService::peerPair(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
-    const auto code = strArg(ctx.call.args, "code");
+    const auto id = textArg(ctx.call.args, "id");
+    const auto code = textArg(ctx.call.args, "code", 6);
     if (!id || !code) return error(ErrorCode::BadRequest, "id and code are required");
     Peer* p = findPeer(*id);
     if (!p || p->host.empty()) return error(ErrorCode::NotFound, "no such peer (or its address is unknown)");
@@ -687,7 +702,7 @@ Result LanService::peerPair(CallContext& ctx) {
 }
 
 Result LanService::peerForget(CallContext& ctx) {
-    const auto id = strArg(ctx.call.args, "id");
+    const auto id = textArg(ctx.call.args, "id");
     Peer* p = id ? findPeer(*id) : nullptr;
     if (!p) return error(ErrorCode::NotFound, "no such peer");
     store_.removePeerToken(*id);
@@ -756,9 +771,23 @@ void LanService::tick() {
 
     bool stateChanged = false;
     std::map<std::string, double> delay;
+    const bool logStats = opts_.verbose && now >= nextStatsLog_;
+    if (logStats) nextStatsLog_ = now + 30;
     for (auto& [key, in] : inputs_) {
         if (!in.port) continue;
         const auto st = in.port->lan->stats();
+        if (logStats && st.received > 0) {
+            // for diagnosis: how the receive buffer follows the network
+            char line[320];
+            std::snprintf(line, sizeof line,
+                          "LAN in %s: fill %.1f / target %.1f ms, lateness peak %.1f ms, ratio %.6f, late %llu, "
+                          "concealed %llu, lost %llu, skips %llu, insertions %llu, resyncs %llu",
+                          key.c_str(), st.fillMs, st.targetMs, st.latenessPeakMs, st.ratio,
+                          static_cast<unsigned long long>(st.late), static_cast<unsigned long long>(st.concealed),
+                          static_cast<unsigned long long>(st.lost), static_cast<unsigned long long>(st.skips),
+                          static_cast<unsigned long long>(st.insertions), static_cast<unsigned long long>(st.resyncs));
+            std::cout << line << std::endl;
+        }
         const bool playing = st.state == lan::AudioReceiver::State::Running;
         if (in.port->streaming.exchange(playing) != playing) stateChanged = true;
         delay[key.substr(4)] = playing ? std::round(st.fillMs * 10.0) / 10.0 : 0.0;

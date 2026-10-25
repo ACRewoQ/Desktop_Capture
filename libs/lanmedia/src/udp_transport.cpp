@@ -2,9 +2,22 @@
 
 #include "dc/shmaudio/clock.hpp"
 
+#ifdef _WIN32
+#include <windows.h>
+#include <avrt.h>
+#endif
+
 namespace dc::lan {
 
 double nowSeconds() { return double(shm::nowQpc()) / double(shm::qpcFrequency()); }
+
+void raiseThreadPriority() {
+#ifdef _WIN32
+    DWORD task = 0;
+    if (HANDLE h = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task)) AvSetMmThreadPriority(h, AVRT_PRIORITY_HIGH);
+    else SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+#endif
+}
 
 UdpTransport::UdpTransport(Options options) : opts_(std::move(options)), socket_(io_) {
     const Endpoint local(asio::ip::make_address(opts_.bindAddress), opts_.port);
@@ -32,7 +45,10 @@ void UdpTransport::start(Handler handler) {
     if (running_.exchange(true)) return;
     handler_ = std::move(handler);
     receiveNext();
-    thread_ = std::thread([this] { io_.run(); });
+    thread_ = std::thread([this] {
+        raiseThreadPriority(); // arrival times are stamped here
+        io_.run();
+    });
 }
 
 void UdpTransport::stop() {

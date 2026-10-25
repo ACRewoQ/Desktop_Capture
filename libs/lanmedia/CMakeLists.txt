@@ -14,4 +14,7 @@ add_library(dc_lanmedia
 add_library(dc::lanmedia ALIAS dc_lanmedia)
 target_include_directories(dc_lanmedia PUBLIC include)
 target_link_libraries(dc_lanmedia PUBLIC dc::clocksync dc_asio PRIVATE dc::shmaudio dc_opus)
+if(WIN32)
+    target_link_libraries(dc_lanmedia PRIVATE avrt)
+endif()
 dc_apply_options(dc_lanmedia)

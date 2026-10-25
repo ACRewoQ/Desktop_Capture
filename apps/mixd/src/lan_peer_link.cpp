@@ -94,7 +94,9 @@ void PeerLink::run() {
         if (client) {
             if (dirty_.exchange(false)) {
                 const auto tree = client->tree();
+                // the peer's own name for itself; "" there means its computer name, which it sends in Welcome
                 status.serverName = tree.getAs<std::string>("/lan/name").value_or("");
+                if (status.serverName.empty()) status.serverName = client->welcome().serverName;
                 for (int n = 1; n <= proto::kMaxLanStreams; ++n) {
                     const auto base = "/lan/stream/" + std::to_string(n);
                     auto& s = status.streams[std::size_t(n - 1)];

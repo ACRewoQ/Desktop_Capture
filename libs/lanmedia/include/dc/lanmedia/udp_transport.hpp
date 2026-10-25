@@ -18,6 +18,10 @@ namespace dc::lan {
 // engine uses for its device timestamps.
 double nowSeconds();
 
+// Gives the calling thread audio priority (Windows: MMCSS "Pro Audio"), so that a busy PC (a game)
+// does not delay the threads that send and stamp the LAN audio packets by tens of ms. No-op elsewhere.
+void raiseThreadPriority();
+
 // One UDP socket for all media streams of a process: receives on its own thread and hands each
 // datagram, with its arrival time, to the handler (which dispatches by stream id); sends from any
 // thread. IPv4.
