@@ -74,6 +74,7 @@ private:
     proto::Result startRecording(control::CallContext& ctx);
     proto::Result stopRecording(control::CallContext& ctx);
     proto::Result captureReport(control::CallContext& ctx);
+    proto::Result outputReport(control::CallContext& ctx);
     void scheduleRecordingClock();
 
     // per-track recording (recorder.hpp)

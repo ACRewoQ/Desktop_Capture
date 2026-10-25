@@ -2,6 +2,7 @@
 
 #include "dc/protocol/schema.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 #ifdef _WIN32
@@ -68,6 +69,8 @@ std::optional<RecordSettings> settingsFromTree(const proto::ParamTree& tree, std
         AudioStreamSettings a;
         a.slot = *slot;
         a.label = source;
+        // Players list audio tracks by title: use the mixer's name for it ("Master", "Mic", "Game"), if it has one.
+        read(tree, *slot == 0 ? std::string("/master/name") : "/track/" + std::to_string(*slot) + "/name", a.title);
         read(tree, base + "/codec", a.codec);
         readInt(tree, base + "/bitrate_kbps", a.bitrateKbps);
         s.audio.push_back(a);
@@ -125,6 +128,19 @@ std::string recordingPath(const RecordSettings& s, std::time_t when) {
     std::string dir = s.directory.empty() ? defaultVideoDirectory() : s.directory;
     if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
     return dir + file + "." + (s.container == "mp4" ? "mp4" : "mkv");
+}
+
+std::uint64_t diskReserveBytes(const RecordSettings& s) {
+    std::uint64_t kbps = 0;
+    if (s.withVideo) {
+        // CQP has no bitrate: assume a generous one for the size (about 0.2 bit per pixel and frame).
+        kbps += s.video.rateControl == "cqp"
+                    ? static_cast<std::uint64_t>(double(s.video.width) * s.video.height * s.video.fps * 0.2 / 1000)
+                    : static_cast<std::uint64_t>(std::max(0, s.video.bitrateKbps)) * 3 / 2;  // VBR peaks
+    }
+    for (const auto& a : s.audio) kbps += a.codec == "pcm" ? 2304 : static_cast<std::uint64_t>(std::max(0, a.bitrateKbps));
+    const std::uint64_t thirtySeconds = kbps * 1000 / 8 * 30;
+    return std::max<std::uint64_t>(thirtySeconds, 256ull << 20);
 }
 
 std::string effectiveCodec(const VideoSettings& v, bool* changed) {

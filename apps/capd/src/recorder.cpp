@@ -22,6 +22,21 @@ extern "C" {
 
 namespace dc::capd {
 
+namespace {
+
+std::optional<std::uint64_t> filesystemFreeSpace(const std::string& path) {
+    std::error_code ec;
+    auto p = std::filesystem::path(std::u8string(path.begin(), path.end())).parent_path();
+    if (p.empty()) p = ".";
+    const auto info = std::filesystem::space(p, ec);
+    if (ec) return std::nullopt;
+    return static_cast<std::uint64_t>(info.available);
+}
+
+std::string megabytes(std::uint64_t bytes) { return std::to_string(bytes >> 20) + " MB"; }
+
+}  // namespace
+
 #ifdef _WIN32
 Recorder::Recorder(const RecordSettings& s, VideoMix* mix, std::string path, std::string shmSuffix)
     : settings_(s), path_(std::move(path)), shmSuffix_(std::move(shmSuffix)), mix_(mix) {}
@@ -55,6 +70,13 @@ void Recorder::start() {
         throw std::runtime_error("cannot create folder " + std::string(u8.begin(), u8.end()) + ": " + ec.message());
     }
 
+    if (!freeSpace_) freeSpace_ = filesystemFreeSpace;
+    reserveBytes_ = diskReserveBytes(settings_);
+    if (const auto free = freeSpace_(path_); free && *free < 2 * reserveBytes_) {
+        throw std::runtime_error("not enough free disk space for recording (" + megabytes(*free) + " free, " +
+                                 megabytes(2 * reserveBytes_) + " needed)");
+    }
+
     muxer_ = std::make_unique<Muxer>(path_, settings_.container);
     const bool globalHeader = muxer_->needsGlobalHeader();
 
@@ -64,6 +86,7 @@ void Recorder::start() {
         bool changed = false;
         v.codec = effectiveCodec(v, &changed);
         if (changed) log_.push_back("H.264 above 2560x1440 uses most of the encoder; recording in HEVC instead");
+        videoDevice_ = mix_->device().device.Get();
         videoEncoder_ = openVideoEncoder(mix_->device(), v, globalHeader, &log_);
         converter_ = std::make_unique<Converter>(mix_->device(), static_cast<UINT>(v.width),
                                                  static_cast<UINT>(v.height), static_cast<UINT>(v.fps));
@@ -77,7 +100,8 @@ void Recorder::start() {
     std::vector<std::uint32_t> slots;
     for (const auto& a : settings_.audio) {
         auto enc = std::make_unique<AudioEncoder>(a, globalHeader);
-        audioStreams_.push_back(muxer_->addStream(enc->context(), a.label.c_str()));
+        const std::string title = a.title.empty() ? a.label : a.title;
+        audioStreams_.push_back(muxer_->addStream(enc->context(), title.c_str()));
         log_.push_back("audio " + std::to_string(audioStreams_.size()) + ": " + a.label + " -> " + enc->description());
         audioEncoders_.push_back(std::move(enc));
         slots.push_back(a.slot);
@@ -97,8 +121,12 @@ void Recorder::start() {
         const std::int64_t freq = shm::qpcFrequency();
         const std::int64_t fps = settings_.video.fps;
         const auto keyEvery = static_cast<std::int64_t>(settings_.forceKeyframeSeconds * double(fps));
-        consumerId_ = mix_->addConsumer([this, freq, fps, keyEvery](ID3D11Texture2D* canvas, std::int64_t,
-                                                                    std::int64_t qpc) {
+        consumerId_ = mix_->addFrameConsumer([this, freq, fps, keyEvery](const MixFrame& f) {
+            // After a GPU reset the canvas lives on a new device this encoder cannot use: the follower starts a
+            // new file (segment) on it.
+            if (f.device->device.Get() != videoDevice_) return;
+            ID3D11Texture2D* canvas = f.canvas;
+            const std::int64_t qpc = f.qpc;
             if (qpc < startQpc_) return;
             // Frame number on the recording's time line; a mix faster than the recording skips ticks.
             const auto pts = static_cast<std::int64_t>(
@@ -187,6 +215,20 @@ Recorder::Status Recorder::status() const {
     if (s.error.empty()) {
         std::lock_guard lock(audioErrorMutex_);
         s.error = audioError_;
+    }
+    {
+        std::lock_guard lock(diskMutex_);
+        const std::int64_t now = shm::nowQpc();
+        if (running_ && freeSpace_ && now >= nextDiskCheckQpc_) {
+            nextDiskCheckQpc_ = now + shm::qpcFrequency();
+            if (const auto free = freeSpace_(path_)) {
+                diskFree_ = *free;
+                if (*free < reserveBytes_ && diskError_.empty())
+                    diskError_ = "disk almost full (" + megabytes(*free) + " free): recording stopped";
+            }
+        }
+        s.diskFreeBytes = diskFree_;
+        if (s.error.empty()) s.error = diskError_;
     }
     return s;
 }

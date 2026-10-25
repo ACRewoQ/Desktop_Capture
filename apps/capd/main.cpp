@@ -7,6 +7,8 @@
 //   capd record [options]         record until Ctrl+C or --seconds
 //   capd mixtest [--out DIR] [--media FILE]   video mixer self-test (Windows)
 //   capd probe FILE               streams of a recording: codec, packets, first/last time (checks A/V alignment)
+//   capd vcam [options]           feed the virtual camera from a monitor (or a stamped test pattern)
+//   capd fullscreen [options]     show a monitor's picture full screen on another (or the same) monitor
 //   capd avsync FILE [options]    A/V offset from dc-av-flash flashes and mixd --test-pulse bursts (G2)
 //
 
@@ -16,10 +18,16 @@
 #include "src/settings.hpp"
 
 #ifdef _WIN32
+#include "src/fullscreen_output.hpp"
 #include "src/mix_test.hpp"
+#include "src/vcam_output.hpp"
 #include "src/video_encoder.hpp"
 #include "src/video_mix.hpp"
 #include "src/video_source.hpp"
+
+#include "dc/vcam/pattern.hpp"
+#include "dc/vcam/pixels.hpp"
+#include "dc/vcam/sender.hpp"
 
 #include <mfapi.h>
 #endif
@@ -27,6 +35,7 @@
 #include "dc/protocol/defaults.hpp"
 
 #include "dc/protocol/constants.hpp"
+#include "dc/shmaudio/clock.hpp"
 #include "dc/shmaudio/layout.hpp"
 #include "dc/version.hpp"
 
@@ -69,6 +78,9 @@ usage:
   capd list
   capd record [options]
   capd probe FILE
+  capd vcam [--seconds S] [--resolution 1080p|720p] [--source wgc|dda] [--monitor N] [--test-pattern]
+  capd fullscreen --display ID [--seconds S] [--monitor N] [--mix-size WxH] [--mix-fps N]
+                          ID: \\.\DISPLAY2 or an index from "capd list"; --monitor is the captured one
   capd mixtest [--out DIR] [--media FILE]   video mixer self-test: pixels of scenes, transitions, sources
   capd avsync FILE [--region X,Y,W,H] [--audio-stream N] [--csv FILE]
 
@@ -148,6 +160,180 @@ int cmdList() {
         std::cout << "  " << name << "  " << status << "\n";
     }
     return 0;
+}
+#endif
+
+#ifdef _WIN32
+// The video mixer with the start tree (mix 1 shows one monitor), adjusted by the command-line options.
+struct MonitorMix {
+    std::unique_ptr<VideoEngine> engine;
+    std::shared_ptr<VideoMix> mix;
+};
+MonitorMix monitorMix(const MixSettings& ms) {
+    dc::proto::ParamTree tree;
+    for (const auto& c : dc::proto::globalDefaults()) tree.set(c.path, c.value);
+    tree.set("/video/source/1/display/method", ms.source);
+    if (ms.monitor >= 0) {
+        const auto displays = listDisplays();
+        if (ms.monitor >= static_cast<int>(displays.size())) throw std::runtime_error("no such monitor number");
+        tree.set("/video/source/1/display/id", displays[static_cast<size_t>(ms.monitor)].id);
+    }
+    tree.set("/video/mix/1/width", std::int64_t{ms.width});
+    tree.set("/video/mix/1/height", std::int64_t{ms.height});
+    tree.set("/video/mix/1/fps", std::int64_t{ms.fps});
+    MonitorMix m;
+    m.engine = std::make_unique<VideoEngine>();
+    m.engine->update(tree);
+    m.mix = m.engine->acquire(1);
+    if (!m.mix) throw std::runtime_error("the video mixer has no mix 1");
+    return m;
+}
+
+// Feeds the virtual camera for a while: from a monitor through the same path as the engine-driven output, or with
+// --test-pattern a CPU-drawn picture carrying the stamp dc-vcam-probe reads (fps, drops, latency).
+int cmdVcam(const std::vector<std::string>& args) {
+    double seconds = 0;
+    std::string resolution = "1080p";
+    bool pattern = false;
+    MixSettings ms;
+    ms.fps = 60;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error("missing value for " + a);
+            return args[++i];
+        };
+        if (a == "--seconds") seconds = std::atof(next().c_str());
+        else if (a == "--resolution") resolution = next();
+        else if (a == "--source") ms.source = next();
+        else if (a == "--monitor") ms.monitor = std::atoi(next().c_str());
+        else if (a == "--test-pattern") pattern = true;
+        else throw std::runtime_error("unknown option " + a);
+    }
+    const auto kind = dc::vcam::systemCameraKind();
+    std::cout << "virtual camera: " << (kind == dc::vcam::CameraKind::MediaFoundation ? "Media Foundation (Windows 11)"
+                                                                                     : "DirectShow (Windows 10)")
+              << (seconds > 0 ? "" : ", Ctrl+C to stop") << "\n"
+              << std::flush;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto done = [&] {
+        return g_stop || (seconds > 0 && std::chrono::steady_clock::now() - t0 >= std::chrono::duration<double>(seconds));
+    };
+
+    if (pattern) {
+        dc::vcam::Sender sender(kind);
+        const int w = 1920, h = 1080;
+        std::vector<std::uint8_t> frame(std::size_t(w) * h * 4), nv12(std::size_t(w) * h * 3 / 2);
+        const std::int64_t freq = dc::shm::qpcFrequency();
+        std::uint32_t index = 0;
+        std::int64_t next = dc::shm::nowQpc();
+        auto nextPrint = t0 + std::chrono::seconds(1);
+        while (!done()) {
+            const std::int64_t now = dc::shm::nowQpc();
+            dc::vcam::draw_test_pattern_bgra(frame.data(), w, h, w * 4, {now, index++});
+            if (kind == dc::vcam::CameraKind::MediaFoundation) {
+                // NV12 as capd's real output sends it, so the source's copy path is what gets measured.
+                dc::vcam::bgra_to_nv12(frame.data(), w, h, w * 4, nv12.data(), w, nv12.data() + std::size_t(w) * h, w, w, h);
+                sender.sendNv12(nv12.data(), w, nv12.data() + std::size_t(w) * h, w, w, h, now);
+            } else {
+                sender.sendBgra(frame.data(), w * 4, w, h, now);
+            }
+            if (std::chrono::steady_clock::now() >= nextPrint) {
+                nextPrint += std::chrono::seconds(1);
+                const auto st = sender.status();
+                std::cout << "frame " << index << " | " << (st.attached ? "attached" : "waiting for a camera app")
+                          << (st.consumer ? ", app reading" : "") << (st.error.empty() ? "" : " | " + st.error) << "\n"
+                          << std::flush;
+            }
+            next += freq / VcamOutput::kFps;
+            const std::int64_t wait = next - dc::shm::nowQpc();
+            if (wait > 0) std::this_thread::sleep_for(std::chrono::microseconds(wait * 1'000'000 / freq));
+            else if (wait < -freq / VcamOutput::kFps) next = dc::shm::nowQpc();
+        }
+        sender.detach();
+        std::cout << "RESULT vcam pattern frames=" << index << "\n";
+        return 0;
+    }
+
+    VcamOutput out(resolution);
+    auto video = monitorMix(ms);
+    auto& mix = *video.mix;
+    std::cout << "source: " << mix.sourceDescription() << ", camera " << out.width() << "x" << out.height() << "\n";
+    const int consumer =
+        mix.addFrameConsumer([&](const MixFrame& f) { out.onFrame(f.canvas, *f.device, f.generation, f.qpc); });
+    auto nextPrint = t0 + std::chrono::seconds(1);
+    std::string error;
+    while (!done()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!mix.error().empty()) {
+            error = mix.error();
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= nextPrint) {
+            nextPrint += std::chrono::seconds(1);
+            const auto st = out.stats();
+            std::cout << "frames " << st.frames << ", skipped " << st.skipped << " | " << st.state << "\n" << std::flush;
+        }
+    }
+    mix.removeConsumer(consumer);
+    video = {};
+    out.detach();
+    const auto st = out.stats();
+    std::cout << "RESULT vcam frames=" << st.frames << " skipped=" << st.skipped << " error=\"" << error << "\"\n";
+    return error.empty() ? 0 : 3;
+}
+#endif
+
+#ifdef _WIN32
+int cmdFullscreen(const std::vector<std::string>& args) {
+    double seconds = 0;
+    std::string display;
+    MixSettings ms;
+    ms.fps = 60;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= args.size()) throw std::runtime_error("missing value for " + a);
+            return args[++i];
+        };
+        if (a == "--seconds") seconds = std::atof(next().c_str());
+        else if (a == "--display") display = next();
+        else if (a == "--monitor") ms.monitor = std::atoi(next().c_str());
+        else if (a == "--source") ms.source = next();
+        else if (a == "--mix-size") {
+            if (!parseSize(next(), ms.width, ms.height)) throw std::runtime_error("bad --mix-size");
+        } else if (a == "--mix-fps") ms.fps = std::max(1, std::atoi(next().c_str()));
+        else throw std::runtime_error("unknown option " + a);
+    }
+    FullscreenOutput out(display, nullptr);
+    auto video = monitorMix(ms);
+    auto& mix = *video.mix;
+    std::cout << "source: " << mix.sourceDescription() << " -> full screen on " << (display.empty() ? "(primary)" : display)
+              << (seconds > 0 ? "" : ", Ctrl+C to stop") << "\n"
+              << std::flush;
+    const int consumer =
+        mix.addFrameConsumer([&](const MixFrame& f) { out.onFrame(f.canvas, *f.device, f.generation, f.qpc); });
+    const auto t0 = std::chrono::steady_clock::now();
+    auto nextPrint = t0 + std::chrono::seconds(1);
+    std::string error;
+    while (!g_stop && (seconds <= 0 || std::chrono::steady_clock::now() - t0 < std::chrono::duration<double>(seconds))) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!mix.error().empty()) {
+            error = mix.error();
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= nextPrint) {
+            nextPrint += std::chrono::seconds(1);
+            const auto st = out.stats();
+            std::cout << "presented " << st.frames << ", skipped " << st.skipped << " | " << st.state << "\n" << std::flush;
+        }
+    }
+    mix.removeConsumer(consumer);
+    video = {};
+    const auto st = out.stats();
+    std::cout << "RESULT fullscreen frames=" << st.frames << " skipped=" << st.skipped << " state=\"" << st.state
+              << "\" error=\"" << error << "\"\n";
+    return error.empty() ? 0 : 3;
 }
 #endif
 
@@ -231,7 +417,7 @@ int cmdServe(const std::vector<std::string>& args) {
 
 int cmdRecord(const std::vector<std::string>& args) {
     RecordSettings s;
-    s.audio.push_back({0, "master", "aac", 192});
+    s.audio.push_back({0, "master", "", "aac", 192});
     std::string output, shmSuffix, audioCodec = "aac";
     int audioBitrate = 192;
     double seconds = 0;
@@ -273,7 +459,7 @@ int cmdRecord(const std::vector<std::string>& args) {
                 for (const auto& src : split(list, ',')) {
                     const auto slot = slotForSource(src);
                     if (!slot) throw std::runtime_error("bad audio source " + src + " (master or track/<n>)");
-                    s.audio.push_back({*slot, src, "aac", 192});
+                    s.audio.push_back({*slot, src, "", "aac", 192});
                 }
             }
         } else if (a == "--audio-codec") audioCodec = next();
@@ -302,24 +488,9 @@ int cmdRecord(const std::vector<std::string>& args) {
 
 #ifdef _WIN32
     // The video mixer with the start tree (mix 1 shows one monitor), adjusted by the options.
-    std::unique_ptr<VideoEngine> video;
-    std::shared_ptr<VideoMix> mix;
-    if (s.withVideo) {
-        dc::proto::ParamTree tree;
-        for (const auto& c : dc::proto::globalDefaults()) tree.set(c.path, c.value);
-        tree.set("/video/source/1/display/method", s.mix.source);
-        if (s.mix.monitor >= 0) {
-            const auto displays = listDisplays();
-            if (s.mix.monitor >= static_cast<int>(displays.size())) throw std::runtime_error("no such monitor number");
-            tree.set("/video/source/1/display/id", displays[static_cast<size_t>(s.mix.monitor)].id);
-        }
-        tree.set("/video/mix/1/width", std::int64_t{s.mix.width});
-        tree.set("/video/mix/1/height", std::int64_t{s.mix.height});
-        tree.set("/video/mix/1/fps", std::int64_t{s.mix.fps});
-        video = std::make_unique<VideoEngine>();
-        video->update(tree);
-        mix = video->acquire(1);
-    }
+    MonitorMix video;
+    if (s.withVideo) video = monitorMix(s.mix);
+    auto& mix = video.mix;
     Recorder rec(s, mix.get(), path, shmSuffix);
 #else
     Recorder rec(s, path, shmSuffix);
@@ -368,7 +539,7 @@ int cmdRecord(const std::vector<std::string>& args) {
     const auto fin = rec.stop();
 #ifdef _WIN32
     mix.reset();
-    video.reset();
+    video.engine.reset();
 #endif
     if (error.empty()) error = fin.error;
     char res[600];
@@ -454,6 +625,8 @@ int main(int argc, char** argv) {
         args.erase(args.begin());
 #ifdef _WIN32
         if (cmd == "list") return cmdList();
+        if (cmd == "vcam") return cmdVcam(args);
+        if (cmd == "fullscreen") return cmdFullscreen(args);
 #endif
         if (cmd == "record") return cmdRecord(args);
 #ifdef _WIN32

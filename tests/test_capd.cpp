@@ -6,6 +6,7 @@
 #include "muxer.hpp"
 #include "engine_follower.hpp"
 #include "mock_engine.hpp"
+#include "recorder.hpp"
 #include "settings.hpp"
 
 #include "dc/control/client.hpp"
@@ -18,6 +19,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -29,6 +31,7 @@ extern "C" {
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +76,7 @@ TEST_CASE("recording settings come from the engine's tree", "[capd]") {
     tree.set("/capture/audio/3/codec", std::string("pcm"));
     tree.set("/video/mix/2/width", std::int64_t{2560});
     tree.set("/video/mix/2/height", std::int64_t{1440});
+    tree.set("/track/5/name", std::string("Game"));
 
     std::string err;
     auto s = settingsFromTree(tree, &err);
@@ -89,6 +93,8 @@ TEST_CASE("recording settings come from the engine's tree", "[capd]") {
     CHECK(s->audio[1].slot == 5);
     CHECK(s->audio[1].label == "track/5");
     CHECK(s->audio[1].codec == "pcm");
+    CHECK(s->audio[0].title.empty());  // no /master/name in this tree
+    CHECK(s->audio[1].title == "Game");
 
     tree.set("/capture/mix", std::int64_t{0});
     CHECK_FALSE(settingsFromTree(tree, &err));
@@ -148,8 +154,8 @@ struct FakeEngine {
         for (;;) {
             const std::uint64_t frame = writer.framesWritten();
             const std::int64_t blockQpc =
-                baseQpc + static_cast<std::int64_t>(static_cast<double>(frame) * double(f) / shm::kSampleRate);
-            if (blockQpc + f * kBlock / shm::kSampleRate > qpc) return;
+                baseQpc + static_cast<std::int64_t>(static_cast<double>(frame) * double(f) / rate);
+            if (blockQpc + static_cast<std::int64_t>(double(f) * kBlock / rate) > qpc) return;
             std::vector<float> st(kBlock * 2), mono(kBlock);
             for (std::uint32_t i = 0; i < kBlock; ++i) {
                 st[i * 2] = st[i * 2 + 1] = static_cast<float>(frame + i);
@@ -157,13 +163,22 @@ struct FakeEngine {
             }
             writer.write(0, st.data(), kBlock, 2);
             writer.write(1, mono.data(), kBlock, 1);
-            writer.commit(kBlock, blockQpc);
+            // Timestamp noise as a real engine's callback times have it (uniform +-jitterMs).
+            const auto noise = static_cast<std::int64_t>(jitterMs * 1e-3 * double(f) *
+                                                         (double(std::rand()) / RAND_MAX * 2 - 1));
+            writer.commit(kBlock, blockQpc + noise);
         }
     }
     static constexpr std::uint32_t kBlock = 480;
     shm::AudioRingWriter writer;
     std::int64_t baseQpc = 0;
+    double rate = shm::kSampleRate;  // the engine device's real sample rate measured in QPC time
+    double jitterMs = 0;
 };
+
+// A skip or repeat changes the step by a whole frame; the float sums of the 64-tap interpolator over a ramp that
+// large wobble by a few millionths of its value.
+float rampTolerance(float value) { return 0.05f + 1e-5f * std::fabs(value); }
 
 struct Collected {
     std::vector<float> master, track;  // left channel per frame
@@ -203,9 +218,11 @@ TEST_CASE("audio follows the recording's time line across engine stops and resta
         cap.pump(now, AudioCapture::kLagFrames);
     }
     REQUIRE(out.master.size() > 48000);
+    // The clock correction resamples (ratio within a few ppm of 1 here), so the ramp comes back within a small
+    // fraction of a step (rampTolerance).
     CHECK(std::fabs(out.master[0] - 24000.0f) <= 1.0f);
-    for (std::size_t i = 1; i < out.master.size(); ++i) REQUIRE(out.master[i] == out.master[i - 1] + 1.0f);
-    CHECK(out.track[100] == -out.master[100]);
+    for (std::size_t i = 1; i < out.master.size(); ++i) REQUIRE(std::fabs(out.master[i] - out.master[i - 1] - 1.0f) < rampTolerance(out.master[i]));
+    CHECK(std::fabs(out.track[100] + out.master[100]) < 0.01f);
     CHECK(out.trackRight[100] == out.track[100]);  // mono track copied to both channels
     CHECK(cap.stats().silenceFrames == 0);
     CHECK(cap.stats().engineConnected);
@@ -246,6 +263,52 @@ TEST_CASE("audio follows the recording's time line across engine stops and resta
     }
     CHECK(aligned > 30000);
 
+    mem.reset();
+}
+
+TEST_CASE("audio follows an engine clock that drifts from QPC without jumps", "[capd]") {
+    const std::string suffix = ".capd-drift." + std::to_string(testPid());
+    std::string err;
+    auto mem = shm::SharedMemory::create(shm::kLayout.totalBytes, suffix, &err);
+    REQUIRE(mem.valid());
+
+    // The engine's device runs 600 ppm fast (and its timestamps jitter by 1 ms): in 3 minutes it gets 108 ms ahead of QPC. Re-aligning at 40 ms (P2)
+    // would skip audio twice; the resampler must follow instead.
+    const double ppm = 600;
+    const std::int64_t f = shm::qpcFrequency();
+    const std::int64_t base = shm::nowQpc();
+    FakeEngine engine(mem.data());
+    engine.baseQpc = base;
+    engine.rate = shm::kSampleRate * (1 + ppm * 1e-6);
+    engine.jitterMs = 1.0;
+    engine.runUntil(base + f);
+
+    std::vector<float> master;
+    AudioCapture cap({0}, suffix);
+    const std::int64_t start = base + f / 2;
+    cap.begin(start, [&](const std::vector<std::span<const float>>& s, std::uint32_t frames) {
+        for (std::uint32_t i = 0; i < frames; ++i) master.push_back(s[0][i * 2]);
+    });
+    std::int64_t now = base + f;
+    double worstMs = 0;
+    for (int step = 0; step < 18000; ++step) {  // 180 s in 10 ms steps
+        now += f / 100;
+        engine.runUntil(now);
+        cap.pump(now, AudioCapture::kLagFrames);
+        if (step > 3000) worstMs = std::max(worstMs, std::fabs(cap.stats().driftMs));
+    }
+    const auto st = cap.stats();
+    CHECK(st.resyncs == 1);  // the first alignment only
+    CHECK(st.silenceFrames == 0);
+    CHECK(std::fabs(st.ratio - (1 + ppm * 1e-6)) < 50e-6);
+    CHECK(worstMs < 2.0);
+    // Continuous: each output frame advances the ramp by the ratio (no skip, no repeat).
+    REQUIRE(master.size() > 48000 * 170);
+    for (std::size_t i = 1; i < master.size(); ++i) REQUIRE(std::fabs(master[i] - master[i - 1] - 1.0f) < rampTolerance(master[i]));
+    // Aligned: the engine frame heard at output frame p was recorded at p's time.
+    const std::size_t p = master.size() - 1;
+    const double recordedAt = double(base - start) / double(f) + double(master[p]) / engine.rate;
+    CHECK(std::fabs(recordedAt - double(p) / 48000.0) < 0.002);
     mem.reset();
 }
 
@@ -332,6 +395,93 @@ TEST_CASE("capd records when the engine says so and reports back", "[capd]") {
     work.reset();
     asio::post(io, [&] { io.stop(); });
     ioThread.join();
+    std::filesystem::remove_all(dir);
+}
+
+// --- disk space (design doc "保存先のディスク": stop safely while the file can still be finalized) ---
+
+TEST_CASE("the disk reserve covers 30 seconds of the recording, at least 256 MB", "[capd]") {
+    RecordSettings s;
+    s.audio.push_back({0, "master", "", "aac", 192});
+    s.video.bitrateKbps = 100000;  // VBR peaks at 150 Mbit/s: 30 s = 563 MB plus the audio
+    CHECK(diskReserveBytes(s) == (150000ull + 192) * 1000 / 8 * 30);
+    s.video.bitrateKbps = 8000;
+    CHECK(diskReserveBytes(s) == 256ull << 20);
+    s.withVideo = false;
+    CHECK(diskReserveBytes(s) == 256ull << 20);
+}
+
+TEST_CASE("a recording refuses to start on a nearly full disk and stops before it fills up", "[capd]") {
+    const auto dir = std::filesystem::temp_directory_path() / ("capd-disk-" + std::to_string(testPid()));
+    std::filesystem::create_directories(dir);
+    RecordSettings s;
+    s.withVideo = false;
+    s.audio.push_back({0, "master", "", "aac", 192});
+    const std::string path = (dir / "rec.mp4").string();
+    s.container = "mp4";
+    const std::uint64_t reserve = diskReserveBytes(s);
+
+    {
+        Recorder rec(s, path, ".capd-disk-none");
+        rec.setFreeSpaceProbe([&](const std::string&) { return std::optional<std::uint64_t>(reserve); });
+        CHECK_THROWS_WITH(rec.start(), Catch::Matchers::ContainsSubstring("not enough free disk space"));
+    }
+
+    std::atomic<std::uint64_t> free{reserve * 4};
+    Recorder rec(s, path, ".capd-disk-none");
+    rec.setFreeSpaceProbe([&](const std::string&) { return std::optional<std::uint64_t>(free.load()); });
+    rec.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rec.status().error.empty());
+    CHECK(rec.status().diskFreeBytes == reserve * 4);
+    free = reserve - 1;
+    std::string error;
+    for (int i = 0; i < 40 && error.empty(); ++i) {  // checked once a second
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        error = rec.status().error;
+    }
+    CHECK_THAT(error, Catch::Matchers::ContainsSubstring("disk almost full"));
+    const auto fin = rec.stop();
+    CHECK_THAT(fin.error, Catch::Matchers::ContainsSubstring("disk almost full"));
+
+    // The MP4 was finalized (its index is at the end): it opens and has the audio stream.
+    AVFormatContext* fmt = nullptr;
+    REQUIRE(avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) == 0);
+    CHECK(avformat_find_stream_info(fmt, nullptr) >= 0);
+    CHECK(fmt->nb_streams == 1);
+    avformat_close_input(&fmt);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("audio streams carry the track names and only the first one is played by default", "[capd]") {
+    const auto dir = std::filesystem::temp_directory_path() / ("capd-titles-" + std::to_string(testPid()));
+    std::filesystem::create_directories(dir);
+    for (const std::string container : {"mkv", "mp4"}) {
+        RecordSettings s;
+        s.withVideo = false;
+        s.container = container;
+        s.audio.push_back({0, "master", "Master", "aac", 192});
+        s.audio.push_back({3, "track/3", "", "opus", 96});
+        const std::string path = (dir / ("rec." + container)).string();
+        Recorder rec(s, path, ".capd-titles-none");
+        rec.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        REQUIRE(rec.stop().error.empty());
+
+        AVFormatContext* fmt = nullptr;
+        REQUIRE(avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) == 0);
+        REQUIRE(fmt->nb_streams == 2);
+        const char* key = container == "mp4" ? "handler_name" : "title";
+        const AVDictionaryEntry* t0 = av_dict_get(fmt->streams[0]->metadata, key, nullptr, 0);
+        const AVDictionaryEntry* t1 = av_dict_get(fmt->streams[1]->metadata, key, nullptr, 0);
+        REQUIRE(t0);
+        REQUIRE(t1);
+        CHECK(std::string(t0->value) == "Master");
+        CHECK(std::string(t1->value) == "track/3");
+        CHECK((fmt->streams[0]->disposition & AV_DISPOSITION_DEFAULT) != 0);
+        CHECK((fmt->streams[1]->disposition & AV_DISPOSITION_DEFAULT) == 0);
+        avformat_close_input(&fmt);
+    }
     std::filesystem::remove_all(dir);
 }
 

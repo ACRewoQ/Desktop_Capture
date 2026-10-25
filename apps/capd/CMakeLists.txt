@@ -14,7 +14,7 @@ add_library(capd_core STATIC
     src/engine_follower.cpp
     src/avsync.cpp)
 target_include_directories(capd_core PUBLIC src)
-target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc_ffmpeg Threads::Threads)
+target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc::clocksync dc_ffmpeg Threads::Threads)
 if(WIN32)
     target_sources(capd_core PRIVATE
         src/d3d.cpp
@@ -27,8 +27,10 @@ if(WIN32)
         src/video_source.cpp
         src/source_mf.cpp
         src/text_renderer.cpp
-        src/mix_test.cpp)
-    target_link_libraries(capd_core PUBLIC d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32 d2d1 dwrite
+        src/mix_test.cpp
+        src/vcam_output.cpp
+        src/fullscreen_output.cpp)
+    target_link_libraries(capd_core PUBLIC dc_vcam_sender d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32 d2d1 dwrite
                                               windowscodecs dwmapi mfplat mfreadwrite mf mfuuid)
 endif()
 dc_apply_options(capd_core)
