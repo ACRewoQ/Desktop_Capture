@@ -153,6 +153,7 @@ public:
     int height() const override { return capture_ ? int(capture_->height()) : 0; }
     SourceStatus status() const override { return status_; }
     std::uint64_t recoveries() const override { return recoveries_ + (capture_ ? capture_->recoveries() : 0); }
+    std::int64_t frameQpc() const override { return capture_ ? capture_->frameQpc() : 0; }
 
 protected:
     static bool deviceLost(HRESULT hr) {

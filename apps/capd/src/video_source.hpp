@@ -40,6 +40,8 @@ public:
     virtual SourceStatus status() const = 0;
     virtual std::string description() const = 0;
     virtual std::uint64_t recoveries() const { return 0; }
+    // QPC time the OS captured the newest picture at (monitor and window capture); 0 = unknown.
+    virtual std::int64_t frameQpc() const { return 0; }
 };
 
 // Shared services for sources (Direct2D / DirectWrite for text, the "no signal" picture). One per device.

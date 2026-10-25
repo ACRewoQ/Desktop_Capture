@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -110,6 +112,9 @@ struct VideoMix::Shared {
     std::unique_ptr<TextRenderer> text;
     VideoConfig cfg;  // the video thread's copy
     std::map<int, SourceSlot> sources;
+    // DC_CAPD_FRAME_LOG=<file>: one CSV line per tick and capture source, how old the picture on the canvas is
+    // (for A/V offset steps: capture latency vs the tick schedule).
+    FILE* frameLog = nullptr;
 
     std::atomic<bool> running{false};
     std::thread thread;
@@ -308,6 +313,17 @@ void VideoMix::Shared::tick(Mix& m, std::int64_t index, std::int64_t due) {
         if (auto* fc = std::get_if<VideoMix::FrameConsumer>(&c)) (*fc)(f);
         else std::get<VideoMix::Consumer>(c)(f.canvas, f.tick, f.qpc);
     }
+    if (frameLog) {
+        const double freq = double(shm::qpcFrequency());
+        const double lateMs = double(shm::nowQpc() - due) * 1000.0 / freq;
+        for (const auto& [sid, slot] : sources) {
+            const std::int64_t fq = slot.source ? slot.source->frameQpc() : 0;
+            if (!fq) continue;
+            std::fprintf(frameLog, "%d,%lld,%lld,%d,%lld,%.3f,%.3f\n", m.cfg.id, static_cast<long long>(index),
+                         static_cast<long long>(due), sid, static_cast<long long>(fq), double(due - fq) * 1000.0 / freq,
+                         lateMs);
+        }
+    }
 }
 
 void VideoMix::Shared::pass(std::int64_t now) {
@@ -449,6 +465,10 @@ void VideoMix::Shared::run() {
     if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
     const std::int64_t freq = shm::qpcFrequency();
     std::int64_t nextReport = 0;
+    if (const char* path = std::getenv("DC_CAPD_FRAME_LOG"); path && *path) {
+        frameLog = std::fopen(path, "w");
+        if (frameLog) std::fprintf(frameLog, "mix,tick,due_qpc,source,frame_qpc,age_ms,tick_late_ms\n");
+    }
 
     while (running) {
         if (!devOk) {
@@ -502,6 +522,8 @@ void VideoMix::Shared::run() {
     }
     sources.clear();
     text.reset();
+    if (frameLog) std::fclose(frameLog);
+    frameLog = nullptr;
     if (timer) CloseHandle(timer);
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     if (SUCCEEDED(co)) CoUninitialize();
