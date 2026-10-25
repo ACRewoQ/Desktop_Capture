@@ -1,6 +1,7 @@
 // capd's normal mode: connected to the engine as a service client, it runs the video mixer from the engine's tree
 // (/video/*, protocol.md 4.5), feeds the virtual camera and the full-screen output (/video/vcam, /video/monitor,
-// reported with /video/output/report, 5.4.4) and records when the engine says so and reports back
+// reported with /video/output/report, 5.4.4), sends the remote preview and the LAN video output to their viewers
+// (/video/preview, /video/lan and the /lan/sub/# subscriptions, chapter 10) and records when the engine says so and reports back
 // (docs/spec/protocol.md 5.4.1). After a GPU reset the recording goes on in a new file (report recording with
 // reason "gpu_reset"). The engine owns the settings and the state; capd only follows
 // /capture/state: "starting" -> record and report "recording", "stopping" -> finish and report "idle", a failure
@@ -8,6 +9,7 @@
 // the recording as failed on its side).
 #pragma once
 
+#include "lan_stream.hpp"
 #include "recorder.hpp"
 
 #include "dc/protocol/messages.hpp"
@@ -24,6 +26,9 @@
 namespace dc::control {
 class ControlClient;
 }
+namespace dc::lan {
+class VideoOutput;
+}
 
 namespace dc::capd {
 
@@ -32,6 +37,7 @@ class VideoEngine;
 class VideoMix;
 class VcamOutput;
 class FullscreenOutput;
+class LanVideoOutput;
 #endif
 
 class EngineFollower {
@@ -59,6 +65,8 @@ private:
     void followVideo();
     void followOutputs();
     void reportOutput(const std::string& output, const std::string& state, const std::string& detail);
+    void followLanStreams();
+    void dropLanStreams();
     bool openRecorder(const std::string& path);
     void checkSegment();
 
@@ -82,6 +90,22 @@ private:
     };
     OutputHost<VcamOutput> vcam_;
     OutputHost<FullscreenOutput> monitor_;
+    // a LAN video stream: its socket (kept while capd runs), and while somebody watches, a lease and the output
+    struct LanHost {
+        const char* output = "";  // "preview" | "lan"
+        std::uint16_t port = 0;   // UDP port of its socket
+        std::unique_ptr<lan::VideoOutput> socket;
+        LanStreamConfig config;
+        std::size_t viewers = 0;
+        std::shared_ptr<VideoMix> lease;
+        std::unique_ptr<LanVideoOutput> out;
+        int consumer = 0;
+        std::int64_t retryMs = 0;  // after a failure, the next attempt
+        std::int64_t nextLogMs = 0;
+    };
+    LanHost preview_, lanOut_;
+    void followLan(LanHost& h, const proto::ParamTree& tree);
+    void dropLan(LanHost& h);
     const void* recordDevice_ = nullptr;  // the device the running recording encodes on
     bool segmentPending_ = false;         // a GPU reset closed the file; the next one starts on the new device
     std::int64_t segmentSinceMs_ = 0;
