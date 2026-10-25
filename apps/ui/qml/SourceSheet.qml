@@ -115,7 +115,7 @@ Sheet {
         label: "状態"
         value: Video.stateText(srcState.value) + (Video.sizeText(width_.value, height_.value) ? "  " + Video.sizeText(width_.value, height_.value) : "")
         valueColor: Video.stateColor(srcState.value)
-        note: srcState.value === "error" ? srcError.value : srcState.value === "none" ? "どのミックスの本番・次のシーンにも出ていません" : ""
+        note: srcState.value === "error" ? srcError.value : srcState.value === "none" ? "今は取り込んでいません（録画や出力先で映像を使っている間だけ取り込みます）" : ""
     }
     SettingRow {
         label: "名前"
