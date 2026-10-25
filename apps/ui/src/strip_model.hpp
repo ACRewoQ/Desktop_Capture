@@ -47,6 +47,9 @@ public:
         LevelLRole,
         LevelRRole,
         ClipRole,
+        CueRole,
+        RecordRole,
+        FxCountRole,
     };
 
     StripModel(Connection& connection, Kind kind, QObject* parent = nullptr);
@@ -59,6 +62,7 @@ public:
     bool canAdd() const;
     int maxTracks() const;
     Q_INVOKABLE int trackIdAt(int row) const;
+    Q_INVOKABLE QString inputTextAt(int row) const { return row >= 0 && row < count() ? inputText(row) : QString(); }
     int rowOfTrack(int trackId) const;
     // Edits not yet confirmed by the server (sent or waiting for the 60Hz slot).
     bool hasPendingEdits() const { return !overrides_.empty(); }
@@ -75,6 +79,8 @@ public:
     Q_INVOKABLE void setPan(int row, double pan);
     Q_INVOKABLE void toggleMute(int row);
     Q_INVOKABLE void toggleSolo(int row);
+    Q_INVOKABLE void toggleCue(int row);
+    Q_INVOKABLE void toggleRecord(int row);
     Q_INVOKABLE void toggleLowcut(int row);
     Q_INVOKABLE void toggleHighcut(int row);
     Q_INVOKABLE void setLowcutHz(int row, double hz);

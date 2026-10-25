@@ -24,6 +24,8 @@ add_library(dc_ui_core STATIC
     src/param_hub.hpp
     src/recorder.cpp
     src/recorder.hpp
+    src/route_choices.cpp
+    src/route_choices.hpp
     src/selftest.cpp
     src/selftest.hpp
     src/strip_model.cpp
@@ -45,9 +47,14 @@ set(DC_UI_QML
     TopBar.qml
     NavRail.qml
     RecordButton.qml
+    PairingPanel.qml
     # pages
     MixerPage.qml
     SettingsPage.qml
+    VideoPage.qml
+    CapturePage.qml
+    SamplerPage.qml
+    LanPage.qml
     # mixer
     Strip.qml
     Fader.qml
@@ -56,8 +63,22 @@ set(DC_UI_QML
     FilterButton.qml
     ToggleButton.qml
     AddTrackTile.qml
-    StripMenu.qml
+    TrackPanel.qml
+    MasterPanel.qml
+    TargetList.qml
+    FxPanel.qml
+    FxEditor.qml
     SourcePicker.qml
+    # video
+    Video.qml
+    VideoScenes.qml
+    VideoSources.qml
+    VideoOutputs.qml
+    LayerCanvas.qml
+    LayerSheet.qml
+    SourceSheet.qml
+    # sampler
+    PadSheet.qml
     # shared parts
     MenuButton.qml
     Toast.qml
@@ -74,13 +95,19 @@ set(DC_UI_QML
     ParamSwitch.qml
     ParamNumber.qml
     ParamPick.qml
+    ParamSlider.qml
+    ParamText.qml
+    ParamColor.qml
+    SizePick.qml
+    SegmentTabs.qml
+    ColorSheet.qml
 )
 list(TRANSFORM DC_UI_QML PREPEND qml/ OUTPUT_VARIABLE DC_UI_QML_FILES)
 # Served next to the module's qmldir (qrc:/DcUi/Main.qml), so that the Theme singleton resolves.
 foreach(f IN LISTS DC_UI_QML)
     set_source_files_properties(qml/${f} PROPERTIES QT_RESOURCE_ALIAS ${f})
 endforeach()
-set_source_files_properties(qml/Theme.qml qml/Sheets.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/Theme.qml qml/Sheets.qml qml/Video.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(dc-ui
     URI DcUi
     VERSION 1.0

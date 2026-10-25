@@ -14,6 +14,11 @@ Item {
     Param { id: xruns; path: "/system/xruns" }
     Param { id: version; path: "/system/version" }
     ParamList { id: outputs; prefix: "/devices/output" }
+    ParamList { id: plugins; prefix: "/plugins" }
+    Param { id: scanState; path: "/plugins/scan/state" }
+    Param { id: scanProgress; path: "/plugins/scan/progress" }
+    Param { id: scanCurrent; path: "/plugins/scan/current" }
+    Param { id: extraDirs; path: "/plugins/extra_dirs" }
 
     function outputName(id) {
         for (let i = 0; i < outputs.count; ++i) {
@@ -75,6 +80,91 @@ Item {
                         }
                         return list
                     }
+                }
+            }
+
+            SettingSection { text: "デバイス" }
+            Repeater {
+                model: [{ prefix: "/devices/input", label: "入力" }, { prefix: "/devices/output", label: "出力" }]
+                delegate: Column {
+                    id: group
+                    required property var modelData
+                    width: column.width
+                    ParamList { id: devices; prefix: group.modelData.prefix }
+                    Repeater {
+                        model: devices
+                        delegate: InfoRow {
+                            id: dev
+                            required property string base
+                            Param { id: devName; path: dev.base + "/name" }
+                            Param { id: devApi; path: dev.base + "/api" }
+                            Param { id: devRate; path: dev.base + "/sample_rate" }
+                            Param { id: devChannels; path: dev.base + "/channels" }
+                            Param { id: devConnected; path: dev.base + "/connected" }
+                            label: group.modelData.label + ": " + devName.value
+                            note: [devApi.value === "asio" ? "ASIO" : devApi.value === "vmic" ? "仮想ケーブル" : "WASAPI",
+                                   devChannels.value + " ch",
+                                   devRate.value > 0 ? (devRate.value / 1000) + " kHz" : ""].filter(x => x).join(" · ")
+                            value: devConnected.value ? "接続中" : "切断中"
+                            valueColor: devConnected.value ? Theme.ok : Theme.mute
+                        }
+                    }
+                }
+            }
+            Item { width: 1; height: 8 }
+            MenuButton {
+                objectName: "refreshDevices"
+                width: 220
+                height: Theme.touch
+                label: "一覧を更新"
+                onTapped: params.call("/devices/refresh")
+            }
+
+            SettingSection { text: "VST3 プラグイン" }
+            InfoRow {
+                label: "見つかったプラグイン"
+                note: scanState.value === "scanning" ? "スキャン中 " + Math.round(scanProgress.value * 100) + " %  " + scanCurrent.value : ""
+                value: plugins.count + " 個"
+            }
+            SettingRow {
+                label: "追加の VST3 フォルダー"
+                note: "標準の場所（Common Files\\VST3）のほかに探すフォルダー。; で区切る"
+                controlWidth: 300
+                Rectangle {
+                    width: parent.width
+                    height: Theme.touch
+                    radius: Theme.radius
+                    color: dirsTap.pressed ? Theme.controlPressed : Theme.control
+                    Text {
+                        anchors { left: parent.left; right: parent.right; margins: 12; verticalCenter: parent.verticalCenter }
+                        elide: Text.ElideMiddle
+                        color: extraDirs.value ? "white" : Theme.subText
+                        font.pixelSize: 14
+                        text: extraDirs.value || "なし"
+                    }
+                    TapHandler {
+                        id: dirsTap
+                        onTapped: Sheets.text.open("追加の VST3 フォルダー", extraDirs.value, t => extraDirs.set(t))
+                    }
+                }
+            }
+            Item { width: 1; height: 8 }
+            Row {
+                spacing: 8
+                MenuButton {
+                    objectName: "scanPlugins"
+                    width: 220
+                    height: Theme.touch
+                    label: "新しいものを探す"
+                    active: scanState.value !== "scanning"
+                    onTapped: params.call("/plugins/scan")
+                }
+                MenuButton {
+                    width: 220
+                    height: Theme.touch
+                    label: "全部調べ直す"
+                    active: scanState.value !== "scanning"
+                    onTapped: params.call("/plugins/scan", { rescan: true })
                 }
             }
 

@@ -24,7 +24,9 @@ Item {
             radius: 4
             color: point.active ? Theme.accent : "#6f7883"
         }
-        Rectangle { x: parent.width / 2 - 1; width: 2; height: parent.height; color: "#888" }
+        // Centre marks above and below the label, so that they do not cross it.
+        Rectangle { x: parent.width / 2 - 1; width: 2; height: 4; color: "#888" }
+        Rectangle { x: parent.width / 2 - 1; y: parent.height - 4; width: 2; height: 4; color: "#888" }
     }
     Text {
         anchors.centerIn: track

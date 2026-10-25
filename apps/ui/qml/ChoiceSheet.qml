@@ -1,7 +1,8 @@
 import QtQuick
 
 // Picks one entry from a list: open(title, choices, callback) with choices as
-// [{label, detail?, selected?, ...}]; callback(choice) runs with the tapped entry.
+// [{label, detail?, selected?, disabled?, ...}] or {header} lines between groups; callback(choice) runs
+// with the tapped entry.
 Sheet {
     id: root
     property var choices: []
@@ -23,22 +24,32 @@ Sheet {
         delegate: Rectangle {
             required property var modelData
             required property int index
-            objectName: "choice_" + index
+            readonly property bool isHeader: modelData.header !== undefined
+            objectName: isHeader ? "" : "choice_" + index
             width: parent ? parent.width : 0
-            height: modelData.detail ? 56 : 48
+            height: isHeader ? 30 : modelData.detail ? 56 : 48
             radius: Theme.radius
-            color: tap.pressed ? Theme.controlPressed : Theme.control
+            color: isHeader ? "transparent" : tap.pressed ? Theme.controlPressed : Theme.control
             border.width: modelData.selected ? 2 : 0
             border.color: Theme.accent
             opacity: modelData.disabled ? 0.45 : 1
+            Text {
+                visible: parent.isHeader
+                anchors { left: parent.left; bottom: parent.bottom; bottomMargin: 4 }
+                color: Theme.accent
+                font.pixelSize: 13
+                font.bold: true
+                text: modelData.header || ""
+            }
             Column {
+                visible: !parent.isHeader
                 anchors { verticalCenter: parent.verticalCenter; left: parent.left; right: parent.right; margins: 12 }
                 Text {
                     width: parent.width
                     elide: Text.ElideRight
                     color: "white"
                     font.pixelSize: 15
-                    text: modelData.label
+                    text: modelData.label || ""
                 }
                 Text {
                     width: parent.width
@@ -51,7 +62,7 @@ Sheet {
             }
             TapHandler {
                 id: tap
-                enabled: !modelData.disabled
+                enabled: !parent.isHeader && !modelData.disabled
                 onTapped: {
                     const cb = root.callback
                     const c = modelData

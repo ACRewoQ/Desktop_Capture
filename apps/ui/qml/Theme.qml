@@ -20,6 +20,7 @@ QtObject {
     readonly property color solo: "#fdd835"
     readonly property color filter: "#26a69a"
     readonly property color record: "#e53935"
+    readonly property color cue: "#8e5bd0"
     readonly property color ok: "#66bb6a"
     readonly property color warn: "#ffca28"
     readonly property int stripWidth: 108

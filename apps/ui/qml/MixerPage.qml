@@ -6,7 +6,10 @@ Item {
     readonly property bool swipeable: false // the strips scroll sideways
 
     function openDemo(name) {
-        if (name === "menu") stripMenu.open(0, tracks.count > 0 ? "Track" : "")
+        if (name === "menu") trackPanel.open(0, "Track")
+        else if (name === "master") masterPanel.open()
+        else if (name === "fx") fxPanel.open("/track/1", "Track")
+        else if (name === "fxedit") fxEditor.open("/track/1/fx/1")
         else if (name === "input") sourcePicker.openInput(0, "Track")
         else if (name === "output") sourcePicker.openOutput()
     }
@@ -23,7 +26,8 @@ Item {
             height: list.height
             model: tracks
             scroller: list
-            onMenuRequested: (row, name) => stripMenu.open(row, name)
+            onMenuRequested: (row, name) => trackPanel.open(row, name)
+            onFxRequested: (base, name) => fxPanel.open(base, name)
         }
         footer: AddTrackTile { height: list.height }
 
@@ -48,14 +52,23 @@ Item {
             height: masterStrip.height
             model: master
             isMaster: true
-            onOutputRequested: sourcePicker.openOutput()
+            onOutputRequested: masterPanel.open()
+            onFxRequested: (base, name) => fxPanel.open(base, name)
         }
     }
 
-    StripMenu {
-        id: stripMenu
+    TrackPanel {
+        id: trackPanel
+        objectName: "trackPanel"
         onInputRequested: (row, name) => sourcePicker.openInput(row, name)
     }
+    MasterPanel { id: masterPanel; objectName: "masterPanel" }
+    FxPanel {
+        id: fxPanel
+        objectName: "fxPanel"
+        onEditRequested: (slot) => fxEditor.open(slot)
+    }
+    FxEditor { id: fxEditor; objectName: "fxEditor" }
 
     SourcePicker { id: sourcePicker; objectName: "sourcePicker" }
 }

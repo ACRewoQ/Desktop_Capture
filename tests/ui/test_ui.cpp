@@ -3,6 +3,7 @@
 #include "connection.hpp"
 #include "param_hub.hpp"
 #include "recorder.hpp"
+#include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
 
@@ -196,6 +197,160 @@ private slots:
         QVERIFY(added > 0);
         QCOMPARE(c.tree().getAs<std::int64_t>("/track/" + std::to_string(added) + "/channels").value_or(0), std::int64_t{1});
         other.disconnect();
+    }
+
+    void routeAndInputChoices() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::StripModel tracks(c, ui::StripModel::Kind::Tracks);
+        ui::RouteChoices routes(c);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        auto values = [](const QVariantList& list) {
+            QStringList v;
+            for (const auto& e : list)
+                if (e.toMap().contains("value")) v << e.toMap().value("value").toString();
+            return v;
+        };
+        const QStringList out = values(routes.targetChoices("out", 1));
+        QVERIFY(out.contains("master"));
+        QVERIFY(out.contains("track/2"));
+        QVERIFY(!out.contains("track/1")); // not itself
+        QVERIFY(out.contains("device/out-spk"));
+        QVERIFY(out.contains("lan/8"));
+        QVERIFY(!values(routes.targetChoices("send", 1)).contains("master"));
+        const QStringList cue = values(routes.targetChoices("cue"));
+        QVERIFY(cue.contains("device/out-spk"));
+        QVERIFY(!cue.contains("lan/1"));
+        QCOMPARE(routes.targetText("master"), QStringLiteral("マスター"));
+        QCOMPARE(routes.targetText("device/out-spk"), QStringLiteral("Mock Speakers"));
+        QCOMPARE(routes.targetText("track/1"), QStringLiteral("Mic"));
+        QCOMPARE(routes.targetText("lan/2"), QStringLiteral("LAN 2"));
+
+        // Inputs: devices, applications and the sampler; the current one is marked.
+        const QVariantList inputs = tracks.inputChoices(1); // "Game" plays game.exe
+        int selected = 0;
+        bool sampler = false;
+        for (const auto& e : inputs) {
+            const auto m = e.toMap();
+            if (m.value("selected").toBool()) {
+                ++selected;
+                QCOMPARE(m.value("kind").toString(), QStringLiteral("process"));
+                QCOMPARE(m.value("source").toString(), QStringLiteral("game.exe"));
+            }
+            sampler |= m.value("kind").toString() == QLatin1String("sampler") && m.value("source").toString() == "3";
+        }
+        QCOMPARE(selected, 1);
+        QVERIFY(sampler);
+        tracks.setInput(1, "sampler", "3", 1);
+        QVERIFY(ui::waitUntil([&] { return tracks.inputTextAt(1) == QStringLiteral("サンプラー B3"); }, 2000));
+    }
+
+    void effectChain() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::StripModel tracks(c, ui::StripModel::Kind::Tracks);
+        ui::ParamHub hub(c);
+        ui::ParamList fxSlots;
+        fxSlots.setPrefix(QStringLiteral("/track/1/fx"));
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        QCOMPARE(hub.builtinEffects().size(), 6);
+        hub.call(QStringLiteral("/track/1/fx/add"), {{QStringLiteral("type"), QStringLiteral("comp")}});
+        hub.call(QStringLiteral("/track/1/fx/add"), {{QStringLiteral("type"), QStringLiteral("eq4")}});
+        QVERIFY(ui::waitUntil([&] { return fxSlots.count() == 2; }, 2000));
+        QCOMPARE(tracks.data(tracks.index(0), ui::StripModel::FxCountRole).toInt(), 2);
+        ui::ParamValue firstName;
+        firstName.setPath(QStringLiteral("/track/1/fx/1/name"));
+        QCOMPARE(firstName.value().toString(), QStringLiteral("コンプレッサー"));
+        // Slots are renumbered on move: the Param at slot 1 now shows the EQ.
+        hub.call(QStringLiteral("/track/1/fx/move"), {{QStringLiteral("from"), 2}, {QStringLiteral("to"), 1}});
+        QVERIFY(ui::waitUntil([&] { return firstName.value().toString() == QStringLiteral("4バンドEQ"); }, 2000));
+        // A parameter edit within the built-in range.
+        ui::ParamValue gain;
+        gain.setPath(QStringLiteral("/track/1/fx/1/param/low_gain_db"));
+        gain.set(6.5);
+        QVERIFY(ui::waitUntil([&] { return !gain.pending(); }, 2000));
+        QCOMPARE(c.tree().getAs<double>("/track/1/fx/1/param/low_gain_db").value_or(0), 6.5);
+        hub.call(QStringLiteral("/track/1/fx/remove"), {{QStringLiteral("index"), 1}});
+        QVERIFY(ui::waitUntil([&] { return fxSlots.count() == 1; }, 2000));
+        QCOMPARE(tracks.data(tracks.index(0), ui::StripModel::FxCountRole).toInt(), 1);
+    }
+
+    void videoMixer() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::ParamHub hub(c);
+        ui::ParamList layers;
+        layers.setPrefix(QStringLiteral("/video/scene/1/layer"));
+        layers.setOrderBy(QStringLiteral("position"));
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        QCOMPARE(hub.indices(QStringLiteral("/video/source")), QList<int>({1}));
+        QCOMPARE(layers.count(), 1);
+
+        // A second layer goes to the front: the list is ordered by position, not by number.
+        hub.call(QStringLiteral("/video/source/add"), {{QStringLiteral("kind"), QStringLiteral("color")}});
+        QVERIFY(ui::waitUntil([&] { return hub.indices(QStringLiteral("/video/source")).size() == 2; }, 2000));
+        hub.call(QStringLiteral("/video/scene/1/layer/add"), {{QStringLiteral("source"), 2}});
+        QVERIFY(ui::waitUntil([&] { return layers.count() == 2; }, 2000));
+        QCOMPARE(layers.numAt(0), 2);
+        QCOMPARE(layers.numAt(1), 1);
+        hub.call(QStringLiteral("/video/scene/1/layer/move"), {{QStringLiteral("layer"), 1}, {QStringLiteral("position"), 1}});
+        QVERIFY(ui::waitUntil([&] { return layers.numAt(0) == 1; }, 2000));
+
+        // A box preset is one Set of four floats (the JS numbers 0 and 1 become floats, not ints).
+        const QString b = QStringLiteral("/video/scene/1/layer/2");
+        hub.setMany({{b + "/x", 0.7}, {b + "/y", 0.7}, {b + "/width", 0.28}, {b + "/height", 1}});
+        ui::ParamValue height;
+        height.setPath(b + "/height");
+        QVERIFY(ui::waitUntil([&] { return !height.pending(); }, 2000));
+        QCOMPARE(c.tree().getAs<double>("/video/scene/1/layer/2/x").value_or(0), 0.7);
+        QCOMPARE(c.tree().getAs<double>("/video/scene/1/layer/2/height").value_or(0), 1.0);
+
+        // TAKE swaps preview and program.
+        hub.call(QStringLiteral("/video/scene/add"), {}, QJSValue());
+        QVERIFY(ui::waitUntil([&] { return hub.indices(QStringLiteral("/video/scene")).size() == 2; }, 2000));
+        hub.set(QStringLiteral("/video/mix/1/preview_scene"), 2);
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::int64_t>("/video/mix/1/preview_scene").value_or(0) == 2; }, 2000));
+        hub.call(QStringLiteral("/video/mix/1/take"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::int64_t>("/video/mix/1/program_scene").value_or(0) == 2; }, 2000));
+        QCOMPARE(c.tree().getAs<std::int64_t>("/video/mix/1/preview_scene").value_or(0), 1);
+
+        // Removing the source removes its layer.
+        hub.call(QStringLiteral("/video/source/remove"), {{QStringLiteral("source"), 2}});
+        QVERIFY(ui::waitUntil([&] { return layers.count() == 1; }, 2000));
+    }
+
+    void samplerAndRecorder() {
+        Harness h;
+        ui::Connection c(options(h.port()));
+        ui::ParamHub hub(c);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+
+        // A pad press as the sampler page sends it; the pad's playing flag follows.
+        ui::ParamValue playing;
+        playing.setPath(QStringLiteral("/sampler/bank/1/pad/1/playing"));
+        QVERIFY(ui::waitUntil([&] { return hub.value(QStringLiteral("/sampler/bank/1/pad/1/state")).toString() == QStringLiteral("ready"); }, 2000));
+        hub.call(QStringLiteral("/sampler/trigger"), {{QStringLiteral("pad"), 1}, {QStringLiteral("bank"), 1}});
+        QVERIFY(ui::waitUntil([&] { return playing.value().toBool(); }, 2000));
+        hub.call(QStringLiteral("/sampler/stop"));
+        QVERIFY(ui::waitUntil([&] { return !playing.value().toBool(); }, 2000));
+
+        // Per-track recording: arm one track, start and stop from the capture page's button.
+        hub.set(QStringLiteral("/track/1/record/enabled"), true);
+        ui::ParamValue state;
+        state.setPath(QStringLiteral("/recorder/state"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<bool>("/track/1/record/enabled").value_or(false); }, 2000));
+        hub.call(QStringLiteral("/recorder/start"));
+        QVERIFY(ui::waitUntil([&] { return state.value().toString() == QStringLiteral("recording"); }, 2000));
+        hub.call(QStringLiteral("/recorder/stop"));
+        QVERIFY(ui::waitUntil([&] { return state.value().toString() == QStringLiteral("idle"); }, 2000));
+
+        // A recording audio stream takes a track.
+        hub.set(QStringLiteral("/capture/audio/4/source"), QStringLiteral("track/2"));
+        QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/capture/audio/4/source").value_or("") == "track/2"; }, 2000));
     }
 
     void reconnectsAfterEngineRestart() {

@@ -1,6 +1,7 @@
 #include "strip_model.hpp"
 
 #include "connection.hpp"
+#include "route_choices.hpp"
 
 #include "dc/protocol/schema.hpp"
 
@@ -112,18 +113,37 @@ QString StripModel::inputText(int row) const {
         }
     };
     if (kind_ == Kind::Master) {
-        const std::string target = text(row, "out/1/target").toStdString();
-        if (target.empty()) return QStringLiteral("出力なし");
-        if (startsWith(target, "device/") || startsWith(target, "vmic/"))
-            return deviceName("output", target.substr(target.find('/') + 1));
-        return QString::fromStdString(target);
+        // First used output, and how many more.
+        QString first;
+        int more = 0;
+        for (int i = 1; i <= kMaxTrackOutputs; ++i) {
+            const QString target = text(row, ("out/" + std::to_string(i) + "/target").c_str());
+            if (target.isEmpty()) continue;
+            if (first.isEmpty()) first = RouteChoices::describe(tree, target);
+            else ++more;
+        }
+        if (first.isEmpty()) return QStringLiteral("出力なし");
+        return more ? QStringLiteral("%1 他%2").arg(first).arg(more) : first;
     }
     const QString kind = text(row, "input/kind");
     const std::string source = text(row, "input/source").toStdString();
     if (kind == QLatin1String("device")) return deviceName("input", source);
     if (kind == QLatin1String("process")) return QStringLiteral("アプリ: %1").arg(QString::fromStdString(source));
-    if (kind == QLatin1String("lan")) return QStringLiteral("LAN: %1").arg(QString::fromStdString(source));
-    if (kind == QLatin1String("sampler")) return QStringLiteral("サンプラー");
+    if (kind == QLatin1String("lan")) {
+        // "<peer id>/<n>" -> "<peer name> LAN <n>"
+        const auto slash = source.rfind('/');
+        const std::string peerId = source.substr(0, slash);
+        QString peer = QString::fromStdString(peerId);
+        for (int i = 1;; ++i) {
+            const std::string base = "/lan/peers/" + std::to_string(i);
+            const auto id = tree.getAs<std::string>(base + "/id");
+            if (!id) break;
+            if (*id == peerId) peer = QString::fromStdString(tree.getAs<std::string>(base + "/name").value_or(peerId));
+        }
+        return QStringLiteral("LAN: %1 %2").arg(peer, slash == std::string::npos ? QString() : QString::fromStdString(source.substr(slash + 1)));
+    }
+    if (kind == QLatin1String("sampler"))
+        return source.empty() ? QStringLiteral("サンプラー") : QStringLiteral("サンプラー B%1").arg(QString::fromStdString(source));
     return QStringLiteral("入力なし");
 }
 
@@ -152,6 +172,13 @@ QVariant StripModel::data(const QModelIndex& index, int role) const {
     case LevelLRole: return meters_[static_cast<std::size_t>(row)].level[0];
     case LevelRRole: return meters_[static_cast<std::size_t>(row)].level[1];
     case ClipRole: return meters_[static_cast<std::size_t>(row)].clip;
+    case CueRole: return kind_ == Kind::Tracks && flag(row, "cue");
+    case RecordRole: return flag(row, "record/enabled");
+    case FxCountRole: {
+        int n = 0;
+        while (n < kMaxFxPerTrack && value(row, ("fx/" + std::to_string(n + 1) + "/type").c_str())) ++n;
+        return n;
+    }
     default: return {};
     }
 }
@@ -162,7 +189,8 @@ QHash<int, QByteArray> StripModel::roleNames() const {
             {FaderRole, "fader"},       {PanRole, "pan"},             {MuteRole, "mute"},
             {SoloRole, "solo"},         {LowcutOnRole, "lowcutOn"},   {LowcutHzRole, "lowcutHz"},
             {HighcutOnRole, "highcutOn"}, {HighcutHzRole, "highcutHz"}, {LevelLRole, "levelL"},
-            {LevelRRole, "levelR"},     {ClipRole, "clip"}};
+            {LevelRRole, "levelR"},     {ClipRole, "clip"},
+            {CueRole, "cue"},           {RecordRole, "recordArmed"}, {FxCountRole, "fxCount"}};
 }
 
 double StripModel::faderToDb(double fader) {
@@ -263,6 +291,13 @@ void StripModel::toggleSolo(int row) {
     edit(row, "solo", !flag(row, "solo"));
 }
 
+void StripModel::toggleCue(int row) {
+    if (kind_ == Kind::Master) return;
+    edit(row, "cue", !flag(row, "cue"));
+}
+
+void StripModel::toggleRecord(int row) { edit(row, "record/enabled", !flag(row, "record/enabled")); }
+
 void StripModel::toggleLowcut(int row) { edit(row, "lowcut/enabled", !flag(row, "lowcut/enabled")); }
 
 void StripModel::toggleHighcut(int row) { edit(row, "highcut/enabled", !flag(row, "highcut/enabled")); }
@@ -287,33 +322,95 @@ QVariantList StripModel::inputChoices(int row) const {
     const QString curSource = text(row, "input/source");
     const int curChannel = static_cast<int>(number(row, "input/channel", 1));
     const int trackChannels = static_cast<int>(number(row, "channels", 2));
+    bool currentListed = curKind == QLatin1String("none") || curKind.isEmpty();
     auto entry = [&](const QString& label, const QString& detail, const QString& kind, const QString& source,
                      int channel) {
-        const bool selected = curKind == kind && (kind == QLatin1String("none") ||
-                                                  (curSource == source && curChannel == channel));
+        bool selected = curKind == kind;
+        if (selected && kind == QLatin1String("process")) selected = curSource.compare(source, Qt::CaseInsensitive) == 0;
+        else if (selected && kind == QLatin1String("device")) selected = curSource == source && curChannel == channel;
+        else if (selected && kind != QLatin1String("none")) selected = curSource == source;
+        if (selected && kind != QLatin1String("none")) currentListed = true;
         out.push_back(QVariantMap{{"label", label},   {"detail", detail},   {"kind", kind},
                                   {"source", source}, {"channel", channel}, {"selected", selected}});
     };
+    auto header = [&](const QString& t) { out.push_back(QVariantMap{{"header", t}}); };
+
     entry(QStringLiteral("入力なし"), QString(), QStringLiteral("none"), QString(), 1);
+
+    // Devices: multi-channel ones per channel (mono track) or per pair (stereo track).
+    bool first = true;
     for (int i = 1;; ++i) {
         const std::string devBase = "/devices/input/" + std::to_string(i);
         const auto id = tree.getAs<std::string>(devBase + "/id");
         if (!id) break;
+        if (first) header(QStringLiteral("入力デバイス"));
+        first = false;
         const QString source = QString::fromStdString(*id);
         const QString name = QString::fromStdString(tree.getAs<std::string>(devBase + "/name").value_or(*id));
         const int channels = static_cast<int>(tree.getAs<std::int64_t>(devBase + "/channels").value_or(2));
-        const QString gone = tree.getAs<bool>(devBase + "/connected").value_or(true) ? QString() : QStringLiteral("切断中");
+        QStringList notes;
+        const std::string api = tree.getAs<std::string>(devBase + "/api").value_or("");
+        if (api == "asio") notes << QStringLiteral("ASIO");
+        if (api == "vmic") notes << QStringLiteral("仮想ケーブル");
+        if (!tree.getAs<bool>(devBase + "/connected").value_or(true)) notes << QStringLiteral("切断中");
         if (channels <= trackChannels) {
-            entry(name, gone, QStringLiteral("device"), source, 1);
+            entry(name, notes.join(QStringLiteral(" · ")), QStringLiteral("device"), source, 1);
             continue;
         }
         for (int ch = 1; ch + trackChannels - 1 <= channels; ch += trackChannels) {
-            const QString chText = trackChannels == 1 ? QStringLiteral("ch %1").arg(ch)
-                                                      : QStringLiteral("ch %1-%2").arg(ch).arg(ch + 1);
-            entry(name, gone.isEmpty() ? chText : chText + QStringLiteral(" · ") + gone, QStringLiteral("device"),
-                  source, ch);
+            QStringList d = notes;
+            d.prepend(trackChannels == 1 ? QStringLiteral("ch %1").arg(ch) : QStringLiteral("ch %1-%2").arg(ch).arg(ch + 1));
+            entry(name, d.join(QStringLiteral(" · ")), QStringLiteral("device"), source, ch);
         }
     }
+
+    // Applications that play sound (one line per executable).
+    first = true;
+    for (int i = 1;; ++i) {
+        const std::string base = "/devices/process/" + std::to_string(i);
+        const auto exe = tree.getAs<std::string>(base + "/exe");
+        if (!exe) break;
+        if (first) header(QStringLiteral("アプリの音"));
+        first = false;
+        const QString title = QString::fromStdString(tree.getAs<std::string>(base + "/title").value_or(""));
+        entry(title.isEmpty() ? QString::fromStdString(*exe) : title, QString::fromStdString(*exe),
+              QStringLiteral("process"), QString::fromStdString(*exe), 1);
+    }
+    // A chosen application that is not running stays visible.
+    if (curKind == QLatin1String("process") && !currentListed) {
+        if (first) header(QStringLiteral("アプリの音"));
+        first = false;
+        entry(curSource, QStringLiteral("起動していません"), QStringLiteral("process"), curSource, 1);
+    }
+
+    // Streams of the other PCs on the LAN (known while connected to them).
+    first = true;
+    for (int i = 1;; ++i) {
+        const std::string base = "/lan/peers/" + std::to_string(i);
+        const auto peerId = tree.getAs<std::string>(base + "/id");
+        if (!peerId) break;
+        const QString peer = QString::fromStdString(tree.getAs<std::string>(base + "/name").value_or(*peerId));
+        for (int n = 1; n <= kMaxLanStreams; ++n) {
+            const std::string sb = base + "/stream/" + std::to_string(n);
+            const auto name = tree.getAs<std::string>(sb + "/name");
+            if (!name) continue;
+            if (first) header(QStringLiteral("LAN（別の PC）"));
+            first = false;
+            const bool active = tree.getAs<bool>(sb + "/active").value_or(false);
+            entry(QStringLiteral("%1 · %2").arg(peer, name->empty() ? QStringLiteral("LAN %1").arg(n) : QString::fromStdString(*name)),
+                  active ? QStringLiteral("送信中") : QStringLiteral("音なし"), QStringLiteral("lan"),
+                  QStringLiteral("%1/%2").arg(QString::fromStdString(*peerId)).arg(n), 1);
+        }
+    }
+    if (curKind == QLatin1String("lan") && !currentListed) {
+        if (first) header(QStringLiteral("LAN（別の PC）"));
+        entry(QStringLiteral("LAN %1").arg(curSource), QStringLiteral("相手が見つかりません"), QStringLiteral("lan"), curSource, 1);
+    }
+
+    header(QStringLiteral("サンプラー"));
+    entry(QStringLiteral("サンプラー（全バンク）"), QString(), QStringLiteral("sampler"), QString(), 1);
+    for (int b = 1; b <= kSamplerBanks; ++b)
+        entry(QStringLiteral("サンプラー バンク %1").arg(b), QString(), QStringLiteral("sampler"), QString::number(b), 1);
     return out;
 }
 

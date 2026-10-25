@@ -17,6 +17,10 @@ Window {
     // key: used by --page and the self test; keep: stays loaded while hidden.
     readonly property var pages: [
         { key: "mixer", label: "ミキサー", file: "MixerPage.qml", keep: true },
+        { key: "video", label: "映像", file: "VideoPage.qml", keep: false },
+        { key: "sampler", label: "サンプラー", file: "SamplerPage.qml", keep: false },
+        { key: "capture", label: "録画", file: "CapturePage.qml", keep: false },
+        { key: "lan", label: "LAN", file: "LanPage.qml", keep: false },
         { key: "settings", label: "設定", file: "SettingsPage.qml", keep: false },
     ]
     readonly property var pageKeys: pages.map(p => p.key)
@@ -25,7 +29,7 @@ Window {
         const l = pageRepeater.count > 0 ? pageRepeater.itemAt(pageKeys.indexOf(currentPage)) : null
         return l ? l.item : null
     }
-    readonly property bool sheetShown: numberSheet.shown || choiceSheet.shown || textSheet.shown
+    readonly property bool sheetShown: numberSheet.shown || choiceSheet.shown || textSheet.shown || colorSheet.shown
 
     function showPage(key) { if (pageKeys.indexOf(key) >= 0) currentPage = key }
     function stepPage(d) {
@@ -93,22 +97,32 @@ Window {
         MouseArea { anchors.fill: parent } // swallow touches while disconnected
         Text {
             anchors.centerIn: parent
+            visible: !connection.needsPairing
             color: Theme.text
             font.pixelSize: 20
             text: connection.statusText + "\n" + connection.address
             horizontalAlignment: Text.AlignHCenter
+        }
+        PairingPanel {
+            objectName: "pairingPanel"
+            anchors.centerIn: parent
+            visible: connection.needsPairing
+            message: connection.pairingMessage
+            onEntered: (code) => connection.pair(code)
         }
     }
 
     NumberSheet { id: numberSheet; objectName: "numberSheet" }
     ChoiceSheet { id: choiceSheet; objectName: "choiceSheet" }
     TextSheet { id: textSheet; objectName: "textSheet" }
+    ColorSheet { id: colorSheet; objectName: "colorSheet" }
     Toast { id: toast; z: 200 }
 
     Component.onCompleted: {
         Sheets.number = numberSheet
         Sheets.choice = choiceSheet
         Sheets.text = textSheet
+        Sheets.color = colorSheet
         Sheets.toast = toast
         if (startPage) showPage(startPage)
         if (startDemo) demoTimer.start()
@@ -127,6 +141,8 @@ Window {
             numberSheet.open({ title: "Mic の音量", value: -6, unit: "dB", min: -144, max: 12, decimals: 1 }, null)
         else if (name === "text")
             textSheet.open("トラックの名前", "Mic", null)
+        else if (name === "color")
+            colorSheet.open({ title: "文字色", value: 0xffffd54f, alpha: true }, null)
         else if (currentItem && currentItem.openDemo)
             currentItem.openDemo(name)
     }
