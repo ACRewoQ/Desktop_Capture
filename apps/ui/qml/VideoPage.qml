@@ -1,8 +1,9 @@
 import QtQuick
 import DcUi.Params
 
-// The video mixer (protocol.md 4.5): scenes and their layers, the sources, and which mix goes to
-// which output. capd does the capture and compositing; this page only edits the tree.
+// The video mixer (protocol.md 4.5): scenes and their layers, the sources, which mix goes to which
+// output, and the live preview. capd does the capture and compositing; this page edits the tree and
+// shows capd's preview stream.
 Item {
     id: page
     // The canvas takes sideways drags, and so do sliders in the sheets.
@@ -27,6 +28,7 @@ Item {
         else if (name === "source") { view = "sources"; sourceSheet.open(1) }
         else if (name === "outputs") view = "outputs"
         else if (name === "sources") view = "sources"
+        else if (name === "preview") view = "preview"
         else if (name === "textsource") {
             view = "sources"
             params.call("/video/source/add", { kind: "text", name: "テロップ" }, (ok, n) => { if (ok) sourceSheet.open(n) })
@@ -40,7 +42,7 @@ Item {
         SegmentTabs {
             id: tabs
             objectName: "videoTabs"
-            model: [{ key: "scenes", label: "シーン" }, { key: "sources", label: "ソース" }, { key: "outputs", label: "出力先" }]
+            model: [{ key: "scenes", label: "シーン" }, { key: "sources", label: "ソース" }, { key: "outputs", label: "出力先" }, { key: "preview", label: "プレビュー" }]
             current: page.view
             onSelected: (key) => page.view = key
         }
@@ -62,7 +64,9 @@ Item {
     Loader {
         id: body
         anchors { top: header.bottom; topMargin: 12; left: parent.left; right: parent.right; bottom: parent.bottom }
-        sourceComponent: page.view === "scenes" ? scenesView : page.view === "sources" ? sourcesView : outputsView
+        // Only the shown view exists: the preview subscribes to capd's stream only while it is up.
+        sourceComponent: page.view === "scenes" ? scenesView : page.view === "sources" ? sourcesView
+                         : page.view === "preview" ? previewView : outputsView
     }
     Component {
         id: scenesView
@@ -78,6 +82,11 @@ Item {
     Component {
         id: outputsView
         VideoOutputs { onMixPicked: (n) => { page.mix = n; page.view = "scenes" } }
+    }
+
+    Component {
+        id: previewView
+        VideoPreview {}
     }
 
     LayerSheet { id: layerSheet; objectName: "layerSheet" }

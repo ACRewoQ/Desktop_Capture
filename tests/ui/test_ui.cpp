@@ -2,6 +2,7 @@
 
 #include "connection.hpp"
 #include "param_hub.hpp"
+#include "preview_stream.hpp"
 #include "recorder.hpp"
 #include "route_choices.hpp"
 #include "selftest.hpp"
@@ -10,12 +11,16 @@
 #include "mock_engine.hpp"
 
 #include "dc/control/client.hpp"
+#include "dc/lanmedia/video_link.hpp"
 
 #include <QJSEngine>
 #include <QSignalSpy>
 #include <QTest>
 
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -27,12 +32,15 @@ namespace {
 // Mock engine on its own thread, like dc-mock-server.
 class Harness {
 public:
-    explicit Harness(std::uint16_t port = 0, std::uint64_t session = 77) {
+    // setup: register extra methods (what the mock engine does not have) before the server starts.
+    explicit Harness(std::uint16_t port = 0, std::uint64_t session = 77,
+                     const std::function<void(control::ControlServer&)>& setup = {}) {
         control::ControlServer::Options opt;
         opt.port = port;
         opt.serverName = "test-mock";
         opt.sessionId = session;
         server_ = std::make_unique<control::ControlServer>(io_, store_, opt);
+        if (setup) setup(*server_);
         mock::MockEngine::Options mo;
         mo.meterInterval = 10ms;
         engine_ = std::make_unique<mock::MockEngine>(io_, *server_, mo);
@@ -83,6 +91,79 @@ private slots:
         QStringList log;
         const int failures = ui::runSelfTest(c, tracks, master, recorder, [&](const QString& l) { log << l; });
         QVERIFY2(failures == 0, qPrintable(log.join('\n')));
+    }
+
+    void previewSubscribesOnlyWhileWatched() {
+        // mixd's side of protocol.md 10: records the subscription, number 7.
+        std::mutex m;
+        int subscribes = 0, unsubscribes = 0;
+        std::string stream;
+        std::int64_t port = 0;
+        Harness h(0, 77, [&](control::ControlServer& s) {
+            s.registerMethod("/lan/subscribe", [&](control::CallContext& ctx) {
+                std::lock_guard lock(m);
+                ++subscribes;
+                stream = std::get<std::string>(ctx.call.args.at("stream"));
+                port = std::get<std::int64_t>(ctx.call.args.at("port"));
+                proto::Result r;
+                r.value = std::int64_t{7};
+                return r;
+            });
+            s.registerMethod("/lan/unsubscribe", [&](control::CallContext& ctx) {
+                std::lock_guard lock(m);
+                if (std::get<std::int64_t>(ctx.call.args.at("id")) == 7) ++unsubscribes;
+                return proto::Result{};
+            });
+        });
+        ui::Connection c(options(h.port()));
+        ui::PreviewStream preview(c);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        ui::waitUntil([] { return false; }, 100);
+        QVERIFY(!preview.subscribed());  // nobody watching: capd does not encode
+        QCOMPARE(subscribes, 0);
+        QVERIFY(preview.statusText().isEmpty());
+
+        std::atomic<int> frames{0};
+        std::atomic<bool> firstIsKey{false};
+        const int sink = preview.attach([&](const ui::PreviewStream::Frame& f) {
+            if (frames++ == 0) firstIsKey = f.keyframe;
+        });
+        QVERIFY(ui::waitUntil([&] { return preview.subscribed(); }, 2000));
+        QCOMPARE(preview.subscription(), 7);
+        {
+            std::lock_guard lock(m);
+            QCOMPARE(subscribes, 1);
+            QCOMPARE(stream, std::string("video/preview"));
+            QCOMPARE(port, std::int64_t{preview.localPort()});
+        }
+        QVERIFY(preview.statusText().startsWith(QStringLiteral("映像を待って")));
+
+        // capd's side: the stream to the subscriber's port, starting mid-GOP (the viewer asks for a keyframe).
+        lan::VideoOutput::Options oo;
+        oo.bindAddress = "127.0.0.1";
+        oo.port = 0;
+        lan::VideoOutput out(oo);
+        out.setDestinations({lan::UdpTransport::Endpoint(asio::ip::make_address("127.0.0.1"), preview.localPort())});
+        std::vector<std::uint8_t> au(5000, 0x42);
+        for (int f = 0; f < 40; ++f) {
+            out.send(au, f > 0 && out.keyframeWanted(), lan::nowSeconds());
+            ui::waitUntil([] { return false; }, 5);
+        }
+        QVERIFY(ui::waitUntil([&] { return frames >= 20; }, 2000));
+        QVERIFY(firstIsKey);
+        QVERIFY(ui::waitUntil([&] { return preview.receiving(); }, 2000));
+        QVERIFY2(preview.statusText().isEmpty(), qPrintable(preview.statusText()));
+        QVERIFY(preview.infoText().contains(QStringLiteral("受信")));
+
+        // The viewer leaves: unsubscribed, and its sink is not called any more.
+        preview.detach(sink);
+        QVERIFY(!preview.subscribed());
+        QVERIFY(ui::waitUntil([&] { std::lock_guard lock(m); return unsubscribes == 1; }, 2000));
+        const int before = frames;
+        out.send(au, true, lan::nowSeconds());
+        ui::waitUntil([] { return false; }, 100);
+        QCOMPARE(int(frames), before);
     }
 
     void otherClientsChangesShow() {

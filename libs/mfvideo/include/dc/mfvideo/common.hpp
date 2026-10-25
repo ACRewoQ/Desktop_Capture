@@ -1,4 +1,5 @@
-// Shared helpers for the V6 preview playback verification (Windows only).
+// Shared helpers of the Media Foundation / D3D11 video code (Windows only; written for the P1/V6
+// verification, hence the namespace).
 #pragma once
 
 #include <windows.h>

@@ -12,7 +12,7 @@
 //                                           on the engine PC is the sender until capd sends the real mix
 //   --fullscreen                            borderless full screen
 
-#include "common.hpp"
+#include "dc/mfvideo/common.hpp"
 #include "lan_link.hpp"
 #include "options.hpp"
 #include "pipeline.hpp"

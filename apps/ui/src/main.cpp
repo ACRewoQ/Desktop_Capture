@@ -8,6 +8,8 @@
 #include "connection.hpp"
 #include "exercise.hpp"
 #include "param_hub.hpp"
+#include "preview_stream.hpp"
+#include "preview_video.hpp"
 #include "recorder.hpp"
 #include "route_choices.hpp"
 #include "selftest.hpp"
@@ -131,8 +133,10 @@ int main(int argc, char** argv) {
     dc::ui::Recorder recorder(connection);
     dc::ui::ParamHub params(connection);
     dc::ui::RouteChoices routes(connection);
+    dc::ui::PreviewStream preview(connection);
     qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
     qmlRegisterType<dc::ui::ParamList>("DcUi.Params", 1, 0, "ParamList");
+    qmlRegisterType<dc::ui::PreviewVideo>("DcUi.Preview", 1, 0, "PreviewVideo");
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("connection"), &connection);
@@ -141,6 +145,7 @@ int main(int argc, char** argv) {
     engine.rootContext()->setContextProperty(QStringLiteral("recorder"), &recorder);
     engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
     engine.rootContext()->setContextProperty(QStringLiteral("routes"), &routes);
+    engine.rootContext()->setContextProperty(QStringLiteral("previewStream"), &preview);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
     engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));
     engine.rootContext()->setContextProperty(QStringLiteral("startDemo"), cli.value("demo"));

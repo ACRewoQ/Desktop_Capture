@@ -10,8 +10,8 @@
 // D3D11 texture bridge).
 #pragma once
 
-#include "common.hpp"
-#include "mf_codec.hpp"
+#include "dc/mfvideo/common.hpp"
+#include "dc/mfvideo/mf_codec.hpp"
 
 #include <d3d11_1.h>
 #include <dxgi1_2.h>

@@ -1,4 +1,4 @@
-#include "mf_codec.hpp"
+#include "dc/mfvideo/mf_codec.hpp"
 
 #include <codecapi.h>
 #include <d3d11.h>
