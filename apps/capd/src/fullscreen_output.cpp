@@ -1,6 +1,7 @@
 #include "fullscreen_output.hpp"
 
 #include "converter.hpp"
+#include "video_source.hpp"
 
 #include <cstdlib>
 
@@ -34,13 +35,13 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }  // namespace
 
 std::optional<RECT> findMonitorRect(const std::string& id) {
-    const auto monitors = enumerateMonitors();
-    if (monitors.empty()) return std::nullopt;
-    for (const auto& m : monitors)
-        if (id.empty() ? m.primary : m.deviceName == id) return m.desktop;
+    if (auto m = findMonitor(id)) return m->desktop;
+    // An index from "capd list" (handy on the command line).
     if (!id.empty() && id.find_first_not_of("0123456789") == std::string::npos) {
+        const auto displays = listDisplays();
         const auto index = static_cast<std::size_t>(std::atoi(id.c_str()));
-        if (index < monitors.size()) return monitors[index].desktop;
+        if (index < displays.size())
+            if (auto m = findMonitor(displays[index].id)) return m->desktop;
     }
     return std::nullopt;
 }

@@ -8,7 +8,9 @@ namespace dc::mixd {
 namespace {
 
 constexpr double kRetrySeconds = 3.0;
+constexpr double kProcessScanSeconds = 5.0; // how often the list of applications with audio is renewed
 constexpr int kSharedPeriod = 480; // WASAPI shared mode engine period (10 ms)
+constexpr double kVirtualBridgeMs = 50; // V2: virtual devices stall for tens of ms now and then
 
 std::size_t nextPow2(std::size_t v) {
     std::size_t p = 1;
@@ -137,14 +139,16 @@ int DeviceManager::clockPeriod() const {
     return config_.exclusive ? config_.blockFrames : kSharedPeriod;
 }
 
-clocksync::ClockBridge::Config DeviceManager::bridgeConfig(int channels, int devicePeriod) const {
+clocksync::ClockBridge::Config DeviceManager::bridgeConfig(int channels, int devicePeriod, bool virtualDevice) const {
     clocksync::ClockBridge::Config c;
     c.channels = channels;
     // room for one period of each side twice over plus 2 ms; V2 showed USB and virtual devices
-    // sometimes stall for tens of ms, --bridge-ms raises the floor for those
+    // sometimes stall for tens of ms, --bridge-ms raises the floor for those (virtual cables always
+    // get 50 ms)
     const int clock = config_.exclusive ? config_.blockFrames : kSharedPeriod;
+    const double floorMs = std::max(options_.bridgeMinMs, virtualDevice ? kVirtualBridgeMs : 0.0);
     const double target = std::max(2.0 * (devicePeriod + std::max(clock, clockPeriod())) + 96.0,
-                                   options_.bridgeMinMs * kSampleRate / 1000.0);
+                                   floorMs * kSampleRate / 1000.0);
     c.targetFrames = static_cast<std::size_t>(target);
     c.fifoFrames = nextPow2(std::max<std::size_t>(16384, c.targetFrames * 4));
     c.maxBlockFrames = 8192;
@@ -196,7 +200,8 @@ bool DeviceManager::openInput(const DeviceInfo& d, std::string* error) {
         },
         error);
     if (!stream) return false;
-    *holder = std::make_shared<InputPort>(d.id, stream->channels(), bridgeConfig(stream->channels(), stream->periodFrames()));
+    *holder = std::make_shared<InputPort>(d.id, stream->channels(),
+                                          bridgeConfig(stream->channels(), stream->periodFrames(), d.virtualCable));
     if (!stream->start(error)) return false;
     (*holder)->streaming = true;
     OpenStream s{std::move(stream), d, *holder, nullptr, false};
@@ -243,7 +248,7 @@ bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* e
     }
     auto stream = backend_.openOutput(d, configFor("out:" + d.id), std::move(cb), error);
     if (!stream) return false;
-    auto port = std::make_shared<OutputPort>(d.id, bridgeConfig(2, asClock ? 0 : stream->periodFrames()));
+    auto port = std::make_shared<OutputPort>(d.id, bridgeConfig(2, asClock ? 0 : stream->periodFrames(), d.virtualCable && !asClock));
     *holder = port;
     if (asClock) {
         // only one thread may render the engine: stop the previous clock before starting this one
@@ -267,6 +272,89 @@ bool DeviceManager::openOutput(const DeviceInfo& d, bool asClock, std::string* e
     return true;
 }
 
+bool DeviceManager::openProcess(const ProcessInfo& p, std::string* error) {
+    const std::string key = "proc:" + lowerExe(p.exe);
+    auto holder = std::make_shared<std::shared_ptr<InputPort>>();
+    auto stream = backend_.openProcess(
+        p,
+        [holder](const float* frames, int count, double time, bool discontinuity) {
+            auto& port = *holder;
+            if (discontinuity) port->bridge.producerDiscontinuity();
+            port->bridge.push(frames, static_cast<std::size_t>(count), time);
+        },
+        error);
+    if (!stream) return false;
+    DeviceInfo d;
+    d.id = processPortKey(p.exe);
+    d.name = lowerExe(p.exe);
+    d.input = true;
+    d.channels = stream->channels();
+    d.connected = true;
+    *holder = std::make_shared<InputPort>(d.id, stream->channels(), bridgeConfig(stream->channels(), stream->periodFrames()));
+    if (!stream->start(error)) return false;
+    (*holder)->streaming = true;
+    OpenStream s{std::move(stream), d, *holder, nullptr, false, true};
+    {
+        std::lock_guard lock(statsMutex_);
+        statStreams_.push_back({s.stream.get(), d.id + " pid " + std::to_string(p.pid) + " in"});
+        statInputs_.push_back(s.input);
+    }
+    streams_[key] = std::move(s);
+    return true;
+}
+
+void DeviceManager::reconcileProcesses(const DeviceDemand& demand, std::vector<std::string>& errors) {
+    for (const auto& exe : demand.processes) {
+        const std::string key = "proc:" + exe;
+        if (streams_.count(key) || !retryAllowed(key)) continue;
+        const ProcessInfo p = backend_.findProcess(exe);
+        if (p.pid == 0) {
+            lastFailure_[key] = qpcSecondsNow(); // look again in a few seconds
+            continue;
+        }
+        std::string err;
+        if (openProcess(p, &err)) {
+            lastFailure_.erase(key);
+        } else {
+            lastFailure_[key] = qpcSecondsNow();
+            errors.push_back(exe + ": " + err);
+        }
+    }
+}
+
+void DeviceManager::trackAvailability(const DeviceDemand& demand, std::vector<Event>& events) {
+    std::map<std::string, bool> now;
+    std::map<std::string, std::pair<std::string, std::string>> what; // key -> (id, kind)
+    auto connected = [&](const std::string& id, bool input) {
+        return std::any_of(devices_.begin(), devices_.end(),
+                           [&](const DeviceInfo& d) { return d.id == id && d.input == input && d.connected; });
+    };
+    for (const auto& id : demand.inputs) {
+        now["in:" + id] = connected(id, true);
+        what["in:" + id] = {id, "input"};
+    }
+    for (const auto& id : demand.outputs) {
+        now["out:" + id] = connected(id, false);
+        what["out:" + id] = {id, "output"};
+    }
+    for (const auto& exe : demand.processes) {
+        const auto it = streams_.find("proc:" + exe);
+        now["proc:" + exe] = it != streams_.end() && !it->second.stream->failed();
+        what["proc:" + exe] = {exe, "process"};
+    }
+    for (const auto& [key, present] : now) {
+        const auto prev = available_.find(key);
+        // the first look only records the state: a device that is missing from the start was never lost
+        if (prev != available_.end() && prev->second != present) {
+            const auto& [id, kind] = what[key];
+            const auto name = names_.find(id);
+            events.push_back({present ? "device.restored" : "device.lost", id,
+                              kind == "process" || name == names_.end() ? id : name->second, kind});
+        }
+    }
+    available_ = std::move(now);
+}
+
 void DeviceManager::reconcile() {
     DeviceDemand demand;
     bool refresh = false;
@@ -279,7 +367,14 @@ void DeviceManager::reconcile() {
     }
     bool anyFailed = false;
     for (auto& [k, s] : streams_) anyFailed = anyFailed || s.stream->failed();
-    if (refresh || anyFailed || devices_.empty()) devices_ = backend_.enumerate();
+    if (refresh || anyFailed || devices_.empty()) {
+        devices_ = backend_.enumerate();
+        for (const auto& d : devices_) names_[d.id] = d.name;
+    }
+    if (refresh || qpcSecondsNow() - processScan_ >= kProcessScanSeconds) {
+        processes_ = backend_.enumerateProcesses();
+        processScan_ = qpcSecondsNow();
+    }
 
     std::vector<std::string> errors;
     const StreamConfig cfg{demand.mode == "exclusive", demand.blockFrames};
@@ -311,8 +406,11 @@ void DeviceManager::reconcile() {
     {
         std::vector<std::string> drop;
         for (auto& [k, s] : streams_) {
-            const bool wanted = s.device.input ? contains(demand.inputs, s.device.id) : contains(demand.outputs, s.device.id);
-            const bool present = device(s.device.id, s.device.input) != nullptr;
+            const bool wanted = s.process        ? contains(demand.processes, s.device.name)
+                                : s.device.input ? contains(demand.inputs, s.device.id)
+                                                 : contains(demand.outputs, s.device.id);
+            // a process capture is "present" until it fails (the application exited)
+            const bool present = s.process || device(s.device.id, s.device.input) != nullptr;
             if (!wanted || !present || s.stream->failed()) {
                 if (const int period = s.stream->suggestedPeriod(); period > 0) {
                     // reopen right away with the period the device uses, or shared if that was tried
@@ -386,8 +484,12 @@ void DeviceManager::reconcile() {
         }
     }
 
+    reconcileProcesses(demand, errors);
+
     State st;
+    trackAvailability(demand, st.events);
     st.devices = devices_;
+    st.processes = processes_;
     for (auto& [k, s] : streams_) {
         if (s.input) st.ports.inputs[s.device.id] = s.input;
         if (s.output) st.ports.outputs[s.device.id] = s.output;
@@ -401,14 +503,17 @@ void DeviceManager::reconcile() {
         st.latencyMs = cs.stream->latencySeconds() * 1000.0;
     }
     st.errors = std::move(errors);
-    for (auto& [k, s] : streams_)
+    for (auto& [k, s] : streams_) {
+        if (const int rate = s.stream->deviceRate(); rate != static_cast<int>(kSampleRate))
+            st.notes.push_back(s.device.name + ": " + std::to_string(rate) + "Hz で動いているため 48kHz と相互に変換している");
         if (s.stream->sharedFallback())
-            st.notes.push_back(s.device.name + ": 排他モードの 48kHz に対応していないため共有モードで開いた");
+            st.notes.push_back(s.device.name + ": 排他モードで使える形式がないため共有モードで開いた");
         else if (sharedOverride_.count(k))
             st.notes.push_back(s.device.name + ": 排他モードの周期どおりに動かないため共有モードで開いた");
         else if (auto it = periodOverride_.find(k); it != periodOverride_.end())
             st.notes.push_back(s.device.name + ": 排他モードで周期 " + std::to_string(config_.blockFrames) + " に対応せず、" +
                                std::to_string(s.stream->periodFrames()) + " で開いた");
+    }
     if (listener_) listener_(st);
 }
 

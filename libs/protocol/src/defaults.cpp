@@ -1,5 +1,7 @@
 #include "dc/protocol/defaults.hpp"
 
+#include "dc/protocol/video.hpp"
+
 #include <functional>
 
 namespace dc::proto {
@@ -31,7 +33,9 @@ void expand(const std::string& pattern, const Value& value, int fixedFirst, std:
 }
 
 bool isDynamic(const std::string& pattern) {
-    return pattern.find("/fx/") != std::string::npos || pattern.find('*') != std::string::npos;
+    return pattern.find("/fx/") != std::string::npos || pattern.find('*') != std::string::npos ||
+           startsWith(pattern, "/video/source/") || startsWith(pattern, "/video/scene/") ||
+           startsWith(pattern, "/video/devices/");
 }
 
 } // namespace
@@ -40,6 +44,7 @@ int listSize(const std::string& segment) {
     if (segment == "out") return kMaxTrackOutputs;
     if (segment == "send") return kMaxTrackSends;
     if (segment == "audio") return kMaxCaptureAudioStreams;
+    if (segment == "stream") return kMaxLanStreams; // /lan/stream/#
     if (segment == "bank") return kSamplerBanks;
     if (segment == "pad") return kSamplerPads;
     if (segment == "mix") return 1; // one video mix by default; more are added by lane B1
@@ -81,9 +86,11 @@ std::vector<Change> globalDefaults(const Schema& schema) {
     }
     for (auto& c : out) {
         if (c.path == "/video/mix/1/name") c.value = std::string("Mix A");
-        if (c.path.rfind("/sampler/bank/", 0) == 0 && c.path.find("/pad/") == std::string::npos)
+        else if (c.path == "/video/mix/1/program_scene" || c.path == "/video/mix/1/preview_scene") c.value = std::int64_t{1};
+        else if (c.path.rfind("/sampler/bank/", 0) == 0 && c.path.find("/pad/") == std::string::npos)
             c.value = "Bank " + c.path.substr(14, c.path.size() - 14 - 5); // "/sampler/bank/N/name"
     }
+    for (auto& c : videoStartDefaults(schema)) out.push_back(std::move(c));
     return out;
 }
 

@@ -2,6 +2,7 @@ add_library(dc_protocol
     src/codec.cpp
     src/defaults.cpp
     src/fx.cpp
+    src/lan.cpp
     src/meter.cpp
     src/names.cpp
     src/param_store.cpp
@@ -9,6 +10,7 @@ add_library(dc_protocol
     src/routing.cpp
     src/schema.cpp
     src/schema_v1.cpp
+    src/video.cpp
 )
 add_library(dc::protocol ALIAS dc_protocol)
 target_include_directories(dc_protocol PUBLIC include)

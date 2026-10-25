@@ -1,7 +1,7 @@
 import QtQuick
 
 // One mixer strip: name, input, low / high cut, pan, meter + fader, mute / solo. The same item draws
-// the master strip (isMaster: output instead of input, no solo, no menu).
+// the master strip (isMaster: output instead of input, no solo; the name opens the output picker).
 Rectangle {
     id: strip
 
@@ -23,12 +23,17 @@ Rectangle {
     required property real levelL
     required property real levelR
     required property bool clip
+    required property bool cue
+    required property bool recordArmed
+    required property int fxCount
 
     property QtObject model          // tracks or master (StripModel)
     property Item scroller: null     // the scrolling list, paused while the pan is dragged
     property bool isMaster: false
 
     signal menuRequested(int row, string name)
+    signal outputRequested()
+    signal fxRequested(string base, string name)
 
     objectName: (isMaster ? "masterStrip" : "strip_") + (isMaster ? "" : index)
     width: Theme.stripWidth
@@ -64,8 +69,7 @@ Rectangle {
         }
         TapHandler {
             id: headerTap
-            enabled: !strip.isMaster
-            onTapped: strip.menuRequested(strip.index, strip.name)
+            onTapped: strip.isMaster ? strip.outputRequested() : strip.menuRequested(strip.index, strip.name)
         }
     }
 
@@ -82,6 +86,9 @@ Rectangle {
             minHz: 20; maxHz: 2000
             onToggled: strip.model.toggleLowcut(strip.index)
             onHzMoved: (hz) => strip.model.setLowcutHz(strip.index, hz)
+            onHzEntry: Sheets.number.open({ title: strip.name + " ローカット", value: strip.lowcutHz, unit: "Hz",
+                                            min: 20, max: 2000, decimals: 0 },
+                                          v => strip.model.setLowcutHz(strip.index, v))
         }
         FilterButton {
             objectName: "highcut_" + strip.index
@@ -92,6 +99,9 @@ Rectangle {
             minHz: 1000; maxHz: 20000
             onToggled: strip.model.toggleHighcut(strip.index)
             onHzMoved: (hz) => strip.model.setHighcutHz(strip.index, hz)
+            onHzEntry: Sheets.number.open({ title: strip.name + " ハイカット", value: strip.highcutHz, unit: "Hz",
+                                            min: 1000, max: 20000, decimals: 0 },
+                                          v => strip.model.setHighcutHz(strip.index, v))
         }
     }
 
@@ -104,9 +114,30 @@ Rectangle {
         onMoved: (v) => strip.model.setPan(strip.index, v)
     }
 
+    // Effect chain: how many, a tap opens the list.
+    Rectangle {
+        id: fxButton
+        objectName: "fx_" + (strip.isMaster ? "master" : strip.index)
+        anchors { top: panControl.bottom; topMargin: 6; left: parent.left; right: parent.right; margins: 6 }
+        height: 36
+        radius: Theme.radius
+        color: fxTap.pressed ? Theme.controlPressed : strip.fxCount > 0 ? Theme.accentDim : Theme.control
+        Text {
+            anchors.centerIn: parent
+            color: "white"
+            font.pixelSize: 12
+            font.bold: true
+            text: strip.fxCount > 0 ? "FX " + strip.fxCount : "FX"
+        }
+        TapHandler {
+            id: fxTap
+            onTapped: strip.fxRequested(strip.isMaster ? "/master" : "/track/" + strip.trackId, strip.name)
+        }
+    }
+
     Item {
         id: body
-        anchors { top: panControl.bottom; bottom: value.top; left: parent.left; right: parent.right; margins: 8 }
+        anchors { top: fxButton.bottom; bottom: value.top; left: parent.left; right: parent.right; margins: 8 }
 
         Meter {
             id: meter
@@ -127,12 +158,55 @@ Rectangle {
         }
     }
 
-    Text {
+    // Volume in dB; a long press opens the keypad.
+    Rectangle {
         id: value
-        anchors { bottom: buttons.top; bottomMargin: 6; horizontalCenter: parent.horizontalCenter }
-        color: Theme.subText
-        font.pixelSize: 13
-        text: strip.model.dbText(strip.volumeDb) + " dB"
+        objectName: "volumeText_" + (strip.isMaster ? "master" : strip.index)
+        anchors { bottom: extras.top; bottomMargin: 2; horizontalCenter: parent.horizontalCenter }
+        width: strip.width - 16
+        height: 30
+        radius: Theme.radius
+        color: valueTap.pressed ? Theme.controlPressed : "transparent"
+        Text {
+            anchors.centerIn: parent
+            color: Theme.subText
+            font.pixelSize: 13
+            text: strip.model.dbText(strip.volumeDb) + " dB"
+        }
+        TapHandler {
+            id: valueTap
+            onLongPressed: Sheets.number.open({ title: strip.name + " の音量", value: Math.max(-60, strip.volumeDb),
+                                                unit: "dB", min: -144, max: 12, decimals: 1 },
+                                              v => strip.model.setVolumeDb(strip.index, v))
+        }
+    }
+
+    // Cue (headphones) and per-track recording.
+    Row {
+        id: extras
+        anchors { bottom: buttons.top; bottomMargin: 4; horizontalCenter: parent.horizontalCenter }
+        spacing: 4
+        ToggleButton {
+            objectName: "cue_" + strip.index
+            visible: !strip.isMaster
+            width: (strip.width - 20) / 2
+            height: 36
+            label: "CUE"
+            fontSize: 12
+            on: strip.cue
+            onColor: Theme.cue
+            onTapped: strip.model.toggleCue(strip.index)
+        }
+        ToggleButton {
+            objectName: "rec_" + (strip.isMaster ? "master" : strip.index)
+            width: strip.isMaster ? strip.width - 16 : (strip.width - 20) / 2
+            height: 36
+            label: "● REC"
+            fontSize: 12
+            on: strip.recordArmed
+            onColor: Theme.record
+            onTapped: strip.model.toggleRecord(strip.index)
+        }
     }
 
     Row {

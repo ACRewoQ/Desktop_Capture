@@ -12,21 +12,23 @@
 | `/system/sample_rate` | int | ro | 48000 | `48000` | サンプルレート（48kHz 固定） |
 | `/system/block_size` | int | rw | 64 / 128 / 256 / 512 / 1024 | `256` | 音声バッファのサンプル数 |
 | `/system/clock_device` | string | rw |  | `""` | クロック基準デバイスの ID（"" = 自動） |
-| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。排他は 48kHz で開けるデバイスだけ） |
+| `/system/audio_mode` | string | rw | shared / exclusive | `"shared"` | WASAPI の動作モード（shared = 共有、exclusive = 排他。48kHz 以外のデバイスはエンジンがレート変換する） |
 | `/system/clock_active` | string | ro |  | `""` | 実際のクロック基準（device/<id>、timer = 出力デバイスがなく内部タイマー） |
 | `/system/latency_ms` | float | ro | 0 〜 1000 | `0` | クロック基準デバイスの出力バッファによる遅延 ms |
 | `/system/cpu_load` | float | ro | 0 〜 1 | `0` | 音声スレッドの負荷率 |
 | `/system/xruns` | int | ro | 0 〜 9.22337e+18 | `0` | 起動後の音切れ回数 |
-| `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/input/#/id` | string | ro |  | `""` | デバイス ID（WASAPI はエンドポイント ID、ASIO は asio:<ドライバー名>。protocol.md 4.4） |
 | `/devices/input/#/name` | string | ro |  | `""` | デバイス名 |
 | `/devices/input/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
 | `/devices/input/#/connected` | bool | ro |  | `false` | 接続中 |
 | `/devices/input/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
-| `/devices/output/#/id` | string | ro |  | `""` | デバイス ID（WASAPI エンドポイント ID） |
+| `/devices/input/#/sample_rate` | int | ro | 0 〜 384000 | `0` | デバイス側のサンプルレート（0 = 不明。48000 以外はエンジンが変換する） |
+| `/devices/output/#/id` | string | ro |  | `""` | デバイス ID（WASAPI はエンドポイント ID、ASIO は asio:<ドライバー名>。protocol.md 4.4） |
 | `/devices/output/#/name` | string | ro |  | `""` | デバイス名 |
 | `/devices/output/#/channels` | int | ro | 0 〜 64 | `0` | チャンネル数 |
 | `/devices/output/#/connected` | bool | ro |  | `false` | 接続中 |
 | `/devices/output/#/api` | string | ro | wasapi / asio / vmic | `"wasapi"` | ドライバー種別 |
+| `/devices/output/#/sample_rate` | int | ro | 0 〜 384000 | `0` | デバイス側のサンプルレート（0 = 不明。48000 以外はエンジンが変換する） |
 | `/devices/process/#/exe` | string | ro |  | `""` | 音声を出しているアプリの実行ファイル名 |
 | `/devices/process/#/pid` | int | ro | 0 〜 9.22337e+18 | `0` | プロセス ID |
 | `/devices/process/#/title` | string | ro |  | `""` | ウィンドウタイトル |
@@ -37,9 +39,11 @@
 | `/track/#/position` | int | ro | 1 〜 64 | `1` | 画面上の並び順（1 始まり、連番） |
 | `/track/#/channels` | int | rw | 1 / 2 | `2` | 1 = モノ、2 = ステレオ |
 | `/track/#/input/kind` | string | rw | none / device / process / lan / sampler | `"none"` | 入力の種類 |
-| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名、LAN ストリーム ID。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
+| `/track/#/input/source` | string | rw |  | `""` | 入力元（デバイス ID、実行ファイル名（大文字小文字は区別しない）、LAN は <相手の id>/<n>。sampler は "" = 全バンク、"1"〜"8" = そのバンクだけ） |
 | `/track/#/input/channel` | int | rw | 1 〜 64 | `1` | デバイスの何チャンネル目から使うか |
 | `/track/#/input/state` | string | ro | none / ok / disconnected | `"none"` | 入力の接続状態 |
+| `/track/#/input/lan_buffer_ms` | float | rw | 0 〜 200 | `0` | LAN 入力の受信バッファ目標 ms（0 = 自動） |
+| `/track/#/input/lan_delay_ms` | float | ro | 0 〜 1000 | `0` | LAN 入力の今の受信バッファ量 ms |
 | `/track/#/name` | string | rw |  | `""` | 表示名 |
 | `/track/#/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
 | `/track/#/pan` | float | rw | -1 〜 1 | `0` | パン（-1 = 左、0 = 中央、1 = 右）。ステレオはバランス |
@@ -53,8 +57,8 @@
 | `/track/#/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
 | `/track/#/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
 | `/track/#/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
-| `/track/#/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / master / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
-| `/track/#/send/#/target` | string | rw |  | `""` | センド先 1〜8。"" / track/<n> / device/<id> / vmic/<id> / lan/<stream> |
+| `/track/#/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / master / track/<n> / device/<id> / vmic/<id> / lan/<n> |
+| `/track/#/send/#/target` | string | rw |  | `""` | センド先 1〜8。"" / track/<n> / device/<id> / vmic/<id> / lan/<n> |
 | `/track/#/send/#/level_db` | float | rw | -144 〜 12 | `0` | センド量 dB |
 | `/track/#/send/#/pre_fader` | bool | rw |  | `false` | フェーダー前から送る |
 | `/track/#/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
@@ -63,8 +67,8 @@
 | `/track/#/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1 |
 | `/track/#/fx/#/status` | string | ro | ok / loading / failed / missing | `"ok"` | 状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない） |
 | `/track/#/fx/#/error` | string | ro |  | `""` | 失敗の理由 |
-| `/track/#/fx/#/latency_samples` | int | ro | 0 〜 1e+06 | `0` | エフェクトが足す遅延（サンプル） |
-| `/track/#/fx/#/param_count` | int | ro | 0 〜 1e+06 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
+| `/track/#/fx/#/latency_samples` | int | ro | 0 〜 1000000 | `0` | エフェクトが足す遅延（サンプル） |
+| `/track/#/fx/#/param_count` | int | ro | 0 〜 1000000 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
 | `/track/#/fx/#/editor` | bool | rw |  | `false` | プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る） |
 | `/master/name` | string | rw |  | `"Master"` | 表示名 |
 | `/master/volume_db` | float | rw | -144 〜 12 | `0` | フェーダー音量 dB（-144 = 無音） |
@@ -77,15 +81,15 @@
 | `/master/meter_id` | int | ro | 0 〜 65535 | `0` | UDPメーターパケット内の識別子 |
 | `/master/record/enabled` | bool | rw |  | `false` | トラック別録音（WAV/FLAC）の対象 |
 | `/master/record/tap` | string | rw | pre / post | `"post"` | 録音位置（フェーダー前 / 後） |
-| `/master/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / device/<id> / vmic/<id> / lan/<stream> |
+| `/master/out/#/target` | string | rw |  | `""` | 出力先 1〜8。"" / device/<id> / vmic/<id> / lan/<n> |
 | `/master/fx/#/type` | string | ro |  | `""` | エフェクト種別（eq4 / comp / reverb / gate / delay / limiter / vst3:<id>） |
 | `/master/fx/#/name` | string | ro |  | `""` | エフェクトの表示名 |
 | `/master/fx/#/bypass` | bool | rw |  | `false` | バイパス |
 | `/master/fx/#/param/*` | float | rw |  | `0` | エフェクトのパラメーター。内蔵は下の「エフェクトのパラメーター」表の範囲、VST3 は p<ParamID> で 0〜1 |
 | `/master/fx/#/status` | string | ro | ok / loading / failed / missing | `"ok"` | 状態（loading = 読み込み中、failed = 読み込み失敗、missing = プラグインが見つからない） |
 | `/master/fx/#/error` | string | ro |  | `""` | 失敗の理由 |
-| `/master/fx/#/latency_samples` | int | ro | 0 〜 1e+06 | `0` | エフェクトが足す遅延（サンプル） |
-| `/master/fx/#/param_count` | int | ro | 0 〜 1e+06 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
+| `/master/fx/#/latency_samples` | int | ro | 0 〜 1000000 | `0` | エフェクトが足す遅延（サンプル） |
+| `/master/fx/#/param_count` | int | ro | 0 〜 1000000 | `0` | パラメーターの総数（VST3 はツリーに載っていないものも数える） |
 | `/master/fx/#/editor` | bool | rw |  | `false` | プラグイン画面を表示する（VST3 のみ、エンジンの PC に出る） |
 | `/capture/state` | string | ro | idle / starting / recording / stopping / error | `"idle"` | 録画状態 |
 | `/capture/elapsed_ms` | int | ro | 0 〜 9.22337e+18 | `0` | 録画経過時間 ms |
@@ -130,7 +134,73 @@
 | `/video/mix/#/width` | int | rw | 160 〜 3840 | `1920` | 合成解像度（幅） |
 | `/video/mix/#/height` | int | rw | 90 〜 2160 | `1080` | 合成解像度（高さ） |
 | `/video/mix/#/fps` | int | rw | 10 〜 120 | `60` | 合成フレームレート |
-| `/video/mix/#/active` | bool | ro |  | `false` | 出力先があり合成中 |
+| `/video/mix/#/active` | bool | ro |  | `false` | 出力先から参照されている（/capture/mix・/video/vcam/mix・/video/monitor/mix・/video/preview/mix・/video/lan/mix） |
+| `/video/mix/#/background` | int | rw | 0 〜 4294967295 | `4278190080` | 背景色（0xAARRGGBB） |
+| `/video/mix/#/program_scene` | int | rw | 0 〜 32 | `0` | 本番に出しているシーン（0 = なし）。変えるとトランジションで切り替わる |
+| `/video/mix/#/preview_scene` | int | rw | 0 〜 32 | `0` | 次に出すシーン（プレビュー、0 = なし） |
+| `/video/mix/#/transition/type` | string | rw | cut / fade | `"fade"` | シーン切り替えの効果 |
+| `/video/mix/#/transition/duration_ms` | int | rw | 0 〜 10000 | `300` | フェードの長さ ms |
+| `/video/scene/#/name` | string | rw |  | `""` | シーン名 |
+| `/video/scene/#/position` | int | ro | 1 〜 32 | `1` | シーン一覧の並び順（1 始まり、連番） |
+| `/video/scene/#/layer/#/name` | string | rw |  | `""` | レイヤー名（"" = ソース名を表示） |
+| `/video/scene/#/layer/#/position` | int | ro | 1 〜 32 | `1` | 重なり順（1 = 最前面、連番） |
+| `/video/scene/#/layer/#/source` | int | rw | 0 〜 64 | `0` | 表示するソース /video/source/<n>（0 = なし） |
+| `/video/scene/#/layer/#/visible` | bool | rw |  | `true` | 表示 |
+| `/video/scene/#/layer/#/x` | float | rw | -4 〜 4 | `0` | 表示枠の左端（キャンバスの幅 = 1） |
+| `/video/scene/#/layer/#/y` | float | rw | -4 〜 4 | `0` | 表示枠の上端（キャンバスの高さ = 1） |
+| `/video/scene/#/layer/#/width` | float | rw | 0 〜 8 | `1` | 表示枠の幅（キャンバスの幅 = 1） |
+| `/video/scene/#/layer/#/height` | float | rw | 0 〜 8 | `1` | 表示枠の高さ（キャンバスの高さ = 1） |
+| `/video/scene/#/layer/#/fit` | string | rw | fit / fill / stretch | `"fit"` | 枠への収め方（fit = 縦横比を保って全体を表示、fill = 縦横比を保って枠を埋める、stretch = 引き伸ばす） |
+| `/video/scene/#/layer/#/crop/left` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/top` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/right` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/crop/bottom` | float | rw | 0 〜 1 | `0` | 切り取り（ソースの幅・高さに対する割合） |
+| `/video/scene/#/layer/#/opacity` | float | rw | 0 〜 1 | `1` | 不透明度 |
+| `/video/scene/#/layer/#/chroma/enabled` | bool | rw |  | `false` | クロマキー |
+| `/video/scene/#/layer/#/chroma/color` | int | rw | 0 〜 16777215 | `65280` | 抜く色（0xRRGGBB） |
+| `/video/scene/#/layer/#/chroma/similarity` | float | rw | 0 〜 1 | `0.4` | 抜く色の範囲（大きいほど広く抜く） |
+| `/video/scene/#/layer/#/chroma/smoothness` | float | rw | 0 〜 1 | `0.08` | 境目のなめらかさ |
+| `/video/scene/#/layer/#/chroma/spill` | float | rw | 0 〜 1 | `0.1` | 色かぶりの除去 |
+| `/video/scene/#/layer/#/no_signal` | string | rw | transparent / image | `"transparent"` | ソースが途切れたときの表示（transparent = 透明、image = 「信号なし」画像） |
+| `/video/source/#/name` | string | rw |  | `""` | ソース名 |
+| `/video/source/#/kind` | string | ro | display / window / camera / image / media / text / color / lan | `"display"` | ソースの種類（追加時に決まる） |
+| `/video/source/#/state` | string | ro | none / ok / disconnected / error | `"none"` | capd が報告する状態（none = どのミックスでも使っていない） |
+| `/video/source/#/error` | string | ro |  | `""` | state = error の理由 |
+| `/video/source/#/width` | int | ro | 0 〜 16384 | `0` | ソースの実際の幅（capd が報告） |
+| `/video/source/#/height` | int | ro | 0 〜 16384 | `0` | ソースの実際の高さ（capd が報告） |
+| `/video/source/#/cursor` | bool | rw |  | `true` | マウスカーソルを入れる（display / window） |
+| `/video/source/#/display/id` | string | rw |  | `""` | モニター ID（/video/devices/display/#/id、"" = 主モニター） |
+| `/video/source/#/display/method` | string | rw | wgc / dda | `"wgc"` | 取得方式（wgc = Windows.Graphics.Capture、dda = Desktop Duplication） |
+| `/video/source/#/window/exe` | string | rw |  | `""` | ウィンドウの実行ファイル名（例 game.exe） |
+| `/video/source/#/window/title` | string | rw |  | `""` | ウィンドウタイトル |
+| `/video/source/#/window/match` | string | rw | title / exe | `"title"` | 閉じたあとにつなぎ直す条件（title = 実行ファイル名とタイトル、exe = 実行ファイル名だけ） |
+| `/video/source/#/camera/id` | string | rw |  | `""` | カメラ ID（/video/devices/camera/#/id） |
+| `/video/source/#/camera/name` | string | rw |  | `""` | カメラ名（ID が変わったときの照合用） |
+| `/video/source/#/camera/width` | int | rw | 0 〜 7680 | `0` | 取り込み解像度の幅（0 = 自動：1920×1080 以下で最大のもの） |
+| `/video/source/#/camera/height` | int | rw | 0 〜 4320 | `0` | 取り込み解像度の高さ（0 = 自動） |
+| `/video/source/#/camera/fps` | int | rw | 0 〜 240 | `0` | 取り込みフレームレート（0 = 自動：60 以下で最大） |
+| `/video/source/#/file` | string | rw |  | `""` | ファイルのパス（image / media） |
+| `/video/source/#/media/loop` | bool | rw |  | `true` | 動画を繰り返す |
+| `/video/source/#/text/content` | string | rw |  | `""` | 表示する文字（改行可） |
+| `/video/source/#/text/font` | string | rw |  | `"Yu Gothic UI"` | フォント名 |
+| `/video/source/#/text/size` | int | rw | 8 〜 512 | `48` | 文字の大きさ（ピクセル） |
+| `/video/source/#/text/color` | int | rw | 0 〜 4294967295 | `4294967295` | 文字色（0xAARRGGBB） |
+| `/video/source/#/text/background` | int | rw | 0 〜 4294967295 | `0` | 背景色（0xAARRGGBB、0 = 透明） |
+| `/video/source/#/text/bold` | bool | rw |  | `false` | 太字 |
+| `/video/source/#/text/italic` | bool | rw |  | `false` | 斜体 |
+| `/video/source/#/text/align` | string | rw | left / center / right | `"left"` | 行揃え |
+| `/video/source/#/text/wrap_width` | int | rw | 0 〜 7680 | `0` | 折り返し幅（ピクセル、0 = 折り返さない） |
+| `/video/source/#/color/value` | int | rw | 0 〜 4294967295 | `4278190080` | 単色ソースの色（0xAARRGGBB） |
+| `/video/source/#/lan/stream` | string | rw |  | `""` | LAN メディア伝送の受信ストリーム ID（レーン N） |
+| `/video/devices/display/#/id` | string | ro |  | `""` | モニター ID |
+| `/video/devices/display/#/name` | string | ro |  | `""` | モニター名 |
+| `/video/devices/display/#/width` | int | ro | 0 〜 16384 | `0` | 幅（物理ピクセル） |
+| `/video/devices/display/#/height` | int | ro | 0 〜 16384 | `0` | 高さ（物理ピクセル） |
+| `/video/devices/display/#/primary` | bool | ro |  | `false` | 主モニター |
+| `/video/devices/window/#/exe` | string | ro |  | `""` | 実行ファイル名 |
+| `/video/devices/window/#/title` | string | ro |  | `""` | ウィンドウタイトル |
+| `/video/devices/camera/#/id` | string | ro |  | `""` | カメラ ID |
+| `/video/devices/camera/#/name` | string | ro |  | `""` | カメラ名 |
 | `/video/vcam/mix` | int | rw | 0 〜 4 | `0` | 仮想カメラに出す映像ミックス（0 = なし） |
 | `/video/vcam/resolution` | string | rw | 1080p / 720p | `"1080p"` | 仮想カメラの解像度 |
 | `/video/monitor/mix` | int | rw | 0 〜 4 | `0` | 全画面表示に出す映像ミックス（0 = なし） |
@@ -144,6 +214,30 @@
 | `/video/preview/height` | int | rw | 90 〜 1080 | `540` | プレビュー解像度（高さ） |
 | `/video/preview/fps` | int | rw | 5 〜 60 | `30` | プレビューのフレームレート |
 | `/video/preview/bitrate_kbps` | int | rw | 500 〜 8000 | `3000` | プレビューのビットレート kbps |
+| `/video/lan/mix` | int | rw | 0 〜 4 | `0` | LAN 送信（映像）に出す映像ミックス（0 = なし） |
+| `/video/lan/width` | int | rw | 160 〜 3840 | `1920` | LAN 送信の解像度（幅） |
+| `/video/lan/height` | int | rw | 90 〜 2160 | `1080` | LAN 送信の解像度（高さ） |
+| `/video/lan/fps` | int | rw | 5 〜 60 | `30` | LAN 送信のフレームレート |
+| `/video/lan/bitrate_kbps` | int | rw | 500 〜 50000 | `8000` | LAN 送信のビットレート kbps |
+| `/lan/name` | string | rw |  | `""` | LAN で名乗る名前（"" = コンピューター名） |
+| `/lan/id` | string | ro |  | `""` | この PC のエンジンの id（Welcome.server_id と同じ。インストールごとに固定） |
+| `/lan/stream/#/name` | string | rw |  | `""` | LAN 送信ストリーム 1〜8 の表示名（"" = LAN <n>）。出力先 lan/<n> で使う |
+| `/lan/stream/#/codec` | string | rw | pcm16 / pcm24 / opus | `"pcm24"` | コーデック（pcm = 無圧縮・低遅延、opus = 無線向け） |
+| `/lan/stream/#/opus_frames` | int | rw | 120 / 240 / 480 / 960 | `480` | Opus のパケット長（フレーム数、480 = 10 ms） |
+| `/lan/stream/#/bitrate_kbps` | int | rw | 32 〜 512 | `128` | Opus のビットレート kbps |
+| `/lan/stream/#/stream_id` | int | ro | 0 〜 4294967295 | `0` | 今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない） |
+| `/lan/stream/#/subscribers` | int | ro | 0 〜 32 | `0` | 受信している相手の数 |
+| `/lan/stream/#/active` | bool | ro |  | `false` | 何かが出力していて、受信者がいて送信中 |
+| `/lan/sub/#/stream` | string | ro |  | `""` | 購読しているストリーム（audio/<n> / video/preview / video/lan） |
+| `/lan/sub/#/address` | string | ro |  | `""` | 送り先の UDP アドレス（ip:port） |
+| `/lan/sub/#/client` | string | ro |  | `""` | 購読した接続の名前 |
+| `/lan/peers/#/id` | string | ro |  | `""` | LAN 内の別の PC のエンジンの id |
+| `/lan/peers/#/name` | string | ro |  | `""` | その PC の名前 |
+| `/lan/peers/#/address` | string | ro |  | `""` | 制御の接続先（ip:port） |
+| `/lan/peers/#/state` | string | ro | offline / unpaired / connecting / connected / refused | `"offline"` | 相手の状態（refused = ペアリングが取り消された） |
+| `/lan/peers/#/manual` | bool | ro |  | `false` | 手動で追加した相手（mDNS で見つからない場合） |
+| `/lan/peers/#/stream/#/name` | string | ro |  | `""` | 相手の LAN 送信ストリームの表示名（接続中だけ） |
+| `/lan/peers/#/stream/#/active` | bool | ro |  | `false` | 相手のストリームに何かが出力している |
 | `/plugins/extra_dirs` | string | rw |  | `""` | 標準以外の VST3 フォルダー（; 区切り） |
 | `/plugins/scan/state` | string | ro | idle / scanning | `"idle"` | プラグインのスキャン状態 |
 | `/plugins/scan/progress` | float | ro | 0 〜 1 | `0` | スキャンの進み具合 |
@@ -158,6 +252,10 @@
 | `/plugins/#/path` | string | ro |  | `""` | プラグインのファイル |
 | `/remote/clients` | int | ro | 0 〜 4 | `0` | 接続中のリモコン数 |
 | `/remote/pairing/active` | bool | ro |  | `false` | ペアリング受付中 |
+| `/remote/paired/#/id` | string | ro |  | `""` | ペアリング済みの相手の id（Hello.client_id） |
+| `/remote/paired/#/name` | string | ro |  | `""` | ペアリング済みの相手の名前 |
+| `/remote/paired/#/role` | string | ro | remote / peer | `"remote"` | 相手の種類（リモコン / 別の PC のエンジン） |
+| `/remote/paired/#/online` | bool | ro |  | `false` | 今つながっている |
 
 | メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |
 |---|---|---|---|---|
@@ -173,6 +271,20 @@
 | `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
 | `/sampler/release` | pad:int, bank:int? | nil | P3 | パッドを離す（hold のパッドが止まる） |
 | `/sampler/stop` | bank:int? | nil | P3 | 再生中のパッドを止める（bank なし = 全バンク） |
+| `/video/source/add` | kind:string, name:string? | int（新しいソース番号） | P3 | ソースを追加。番号は空いている最小の番号 |
+| `/video/source/remove` | source:int | nil | P3 | ソースを削除。そのソースを表示していたレイヤーも消える |
+| `/video/source/report` | source:int, state:string, width:int?, height:int?, error:string? | nil | P3 | capd がソースの状態を知らせる（role = サービスの接続だけ） |
+| `/video/scene/add` | name:string?, position:int? | int（新しいシーン番号） | P3 | シーンを追加 |
+| `/video/scene/remove` | scene:int | nil | P3 | シーンを削除。参照していた program / preview は 0 に戻る |
+| `/video/scene/move` | scene:int, position:int | nil | P3 | シーンの並び順を変える |
+| `/video/scene/#/layer/add` | source:int, name:string?, position:int? | int（新しいレイヤー番号） | P3 | レイヤーを追加（既定は最前面、キャンバス全体） |
+| `/video/scene/#/layer/remove` | layer:int | nil | P3 | レイヤーを削除 |
+| `/video/scene/#/layer/move` | layer:int, position:int | nil | P3 | 重なり順を変える（1 = 最前面） |
+| `/video/mix/add` | name:string? | int（新しいミックス番号） | P3 | 映像ミックスを追加（最大 4） |
+| `/video/mix/remove` | mix:int | nil | P3 | 映像ミックスを削除。参照していた出力先は 0 に戻る |
+| `/video/mix/#/take` | なし | nil | P3 | プレビューのシーンをトランジションで本番に出し、直前の本番シーンをプレビューに入れる |
+| `/video/devices/refresh` | なし | nil | P3 | モニター・ウィンドウ・カメラ一覧の更新を capd に頼む（イベント video.devices.refresh） |
+| `/video/devices/report` | kind:string, <n>/<field>:値… | nil | P3 | capd がモニター・ウィンドウ・カメラの一覧を知らせる（role = サービスの接続だけ） |
 | `/track/#/fx/add` | type:string, index:int? | int（スロット番号） | P3 | エフェクト追加 |
 | `/track/#/fx/remove` | index:int | nil | P3 | エフェクト削除 |
 | `/track/#/fx/move` | from:int, to:int | nil | P3 | エフェクトの順序変更 |
@@ -184,8 +296,14 @@
 | `/plugins/scan` | rescan:bool? | nil | P3 | VST3 プラグインを探す（rescan = 前回の結果を使わずに全部） |
 | `/devices/refresh` | なし | nil | P2 | デバイス・プロセス一覧の更新 |
 | `/video/output/report` | output:string, state:string, detail:string? | nil | P3 | capd が出力（vcam / monitor）の状態をエンジンに知らせる（role = サービスの接続だけ） |
-| `/remote/pairing/start` | なし | string（6桁コード） | P4 | ペアリング受付開始 |
-| `/remote/pairing/stop` | なし | nil | P4 | ペアリング受付終了 |
+| `/remote/pairing/start` | なし | string（6桁コード） | P3 | ペアリング受付開始（2 分、1 台つながるまで） |
+| `/remote/pairing/stop` | なし | nil | P3 | ペアリング受付終了 |
+| `/remote/unpair` | id:string | nil | P3 | ペアリングを取り消す（つながっていれば切断） |
+| `/lan/subscribe` | stream:string, port:int | int（購読番号） | P3 | ストリームを受け取る。送り先は接続元の IP の port。接続が切れると自動で解除 |
+| `/lan/unsubscribe` | id:int | nil | P3 | 購読をやめる |
+| `/lan/peers/pair` | id:string, code:string | nil | P3 | 相手の PC に表示された 6 桁コードでペアリングする |
+| `/lan/peers/forget` | id:string | nil | P3 | 相手のペアリング情報を消す（手動で追加した相手は一覧からも消す） |
+| `/lan/peers/add` | address:string | nil | P3 | 相手を IP アドレス（ip または ip:port）で手動追加 |
 
 ## エフェクトのパラメーター（内蔵）
 

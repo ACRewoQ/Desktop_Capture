@@ -6,6 +6,7 @@
 
 #include "dsp.hpp"
 #include "plan.hpp"
+#include "sampler.hpp"
 
 #include "dc/shmaudio/ring.hpp"
 
@@ -46,13 +47,16 @@ public:
 
     // Mixes frames (<= kMaxBlockFrames) with plan. inputs[i] holds frames interleaved samples of
     // plan.inputs[i] (its channel count), or nullptr for silence. Strips with a shared memory tap are
-    // written to shm (when not null); the caller commits the block.
-    void process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm);
+    // written to shm (when not null); the caller commits the block. qpcTime is the QPC time (seconds)
+    // the block is stamped with in shared memory (only the test pulse uses it).
+    void process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm,
+                 double qpcTime = 0);
 
     // Output of bus i of the last processed plan, one channel (0 = left, 1 = right).
     const float* bus(int index, int channel) const { return buses_[index][channel].data(); }
 
     MeterBank& meters() { return meters_; }
+    Sampler& sampler() { return sampler_; }
 
 private:
     using Buffer = std::array<float, kMaxBlockFrames>;
@@ -71,6 +75,7 @@ private:
                       shm::AudioRingWriter* shm);
     float* destination(const Destination& d, int channel);
     void writeShm(shm::AudioRingWriter* shm, int slot, const float* const* x, int channels, int frames);
+    void record(const MixPlan& plan, const StripPlan& s, const float* const* x, int channels, int frames);
 
     std::uint64_t generation_ = ~0ull;
     std::unique_ptr<std::array<StripState, kMaxStrips>> strips_;
@@ -79,8 +84,10 @@ private:
     std::array<std::array<Buffer, 2>, kMaxOutputBuses>& buses_;
     std::array<Buffer, 2> work_{}, post_{}, pre_{}, cue_{};
     std::array<float, kMaxBlockFrames * 2> interleave_{};
+    std::array<bool, kMaxStrips> recorded_{}; // per take stream: written in this block
     double tonePhase_ = 0;
     MeterBank meters_;
+    Sampler sampler_;
 };
 
 } // namespace dc::mixd

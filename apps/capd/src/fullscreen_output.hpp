@@ -83,7 +83,8 @@ private:
     std::string state_ = "starting";
 };
 
-// Default lookup: the id is the monitor's device name (\\.\DISPLAY2) or its index in "capd list"; "" = primary.
+// Default lookup: the id of /video/monitor/display (monitor device path or \\.\DISPLAY2, see findMonitor) or an index
+// in "capd list"; "" = primary.
 std::optional<RECT> findMonitorRect(const std::string& id);
 
 }  // namespace dc::capd

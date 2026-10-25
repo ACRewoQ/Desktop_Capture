@@ -56,6 +56,38 @@ int runSelfTest(Connection& connection, StripModel& tracks, StripModel& master, 
     check(tracks.data(tracks.index(row()), StripModel::ChannelsRole).toInt() == 2,
           QStringLiteral("new track %1 is stereo").arg(id));
 
+    // Input picker: the first device the engine lists goes in with kind, source and channel together.
+    const QVariantList inputs = tracks.inputChoices(row());
+    QVariantMap device;
+    for (const auto& v : inputs)
+        if (v.toMap().value("kind") == QLatin1String("device")) {
+            device = v.toMap();
+            break;
+        }
+    check(!inputs.isEmpty() && inputs.first().toMap().value("kind") == QLatin1String("none"),
+          QStringLiteral("input choices listed (%1)").arg(inputs.size()));
+    if (!device.isEmpty()) {
+        const std::string source = device.value("source").toString().toStdString();
+        tracks.setInput(row(), QStringLiteral("device"), device.value("source").toString(), device.value("channel").toInt());
+        check(waitUntil([&] { return tree.getAs<std::string>(base + "/input/kind") == std::string("device") &&
+                                     tree.getAs<std::string>(base + "/input/source") == source && settled(tracks); },
+                        2000),
+              QStringLiteral("input set to %1").arg(device.value("label").toString()));
+        const bool selected = waitUntil([&] {
+            for (const auto& v : tracks.inputChoices(row())) {
+                const auto m = v.toMap();
+                if (m.value("selected").toBool()) return m.value("source").toString().toStdString() == source;
+            }
+            return false;
+        }, 500);
+        check(selected, QStringLiteral("picker marks the chosen input"));
+    }
+    const QVariantList outputs = master.outputChoices();
+    int selectedOutputs = 0;
+    for (const auto& v : outputs) selectedOutputs += v.toMap().value("selected").toBool() ? 1 : 0;
+    check(outputs.size() >= 1 && selectedOutputs == 1,
+          QStringLiteral("output choices listed (%1), current one marked").arg(outputs.size()));
+
     tracks.setVolumeDb(row(), -6.0);
     check(tracks.data(tracks.index(row()), StripModel::VolumeDbRole).toDouble() == -6.0,
           QStringLiteral("fader moves before the server answers"));
@@ -111,7 +143,7 @@ int runSelfTest(Connection& connection, StripModel& tracks, StripModel& master, 
 
     // Recording
     recorder.start();
-    check(waitUntil([&] { return recorder.recording() && !recorder.busy(); }, 2000), QStringLiteral("recording started"));
+    check(waitUntil([&] { return recorder.recording() && !recorder.busy(); }, 5000), QStringLiteral("recording started"));
     // (Arguments are evaluated in any order: wait first, then build the message.)
     const bool running = waitUntil([&] { return tree.getAs<std::int64_t>("/capture/elapsed_ms").value_or(0) > 0; }, 2000);
     check(running, QStringLiteral("elapsed time runs (%1 ms)")

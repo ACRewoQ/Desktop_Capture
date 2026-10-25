@@ -4,8 +4,12 @@
 //                                            latency up to "frame ready in a shared texture"
 //   dc-v6-bench --send HOST:PORT [options]   network sender for dc-v6-preview --listen PORT on another PC;
 //                                            reports the full round trip including the remote display
+//   dc-v6-bench --send-lan ENGINE [options]  sends the test pattern as the LAN video stream to the viewers
+//                                            subscribed at the engine (mixd on this PC, e.g. 127.0.0.1);
+//                                            the viewer is dc-v6-preview --engine on another PC
 
 #include "common.hpp"
+#include "lan_link.hpp"
 #include "options.hpp"
 #include "pipeline.hpp"
 #include "stats.hpp"
@@ -20,7 +24,8 @@ using namespace v6;
 namespace {
 
 void usage() {
-    std::cout << "usage: dc-v6-bench [--send HOST:PORT] [options]\n" << kCommonUsage;
+    std::cout << "usage: dc-v6-bench [--send HOST:PORT | --send-lan ENGINE [--video-port N]] [options]\n"
+              << kCommonUsage;
 }
 
 void printCpu(std::int64_t cpu0, std::int64_t wall0) {
@@ -106,6 +111,31 @@ int runSender(const CliOptions& o) {
     return 0;
 }
 
+int runLanSender(const CliOptions& o) {
+    Stats stats(Encoded, static_cast<std::uint64_t>(o.warmup));
+    LanVideoSender lan(o.sendLan, o.stream, static_cast<std::uint16_t>(o.videoPort));
+    SenderPipeline* txp = nullptr;
+    SenderPipeline tx(o.pipe, stats, [&](EncodedUnit&& u) {
+        if (lan.keyframeWanted() && txp) txp->requestKeyframe();  // applies to the next frame
+        lan.send(u);
+    });
+    txp = &tx;
+    tx.start();
+    std::printf("LAN sender: %s via engine %s, UDP %d\nencoder : %s%s\nstream  : %dx%d @ %d fps, %d kbps\n",
+                o.stream.c_str(), o.sendLan.c_str(), o.videoPort, tx.encoderName().c_str(),
+                tx.encoderIsHardware() ? " [hardware]" : "", o.pipe.width, o.pipe.height, o.pipe.fps, o.pipe.kbps);
+    const std::int64_t cpu0 = processCpuUs(), wall0 = nowUs();
+    const double seconds = o.seconds > 0 ? o.seconds : 1e9;
+    for (int i = 0; i < static_cast<int>(seconds * 2); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if ((i & 3) == 3) std::printf("  %s\n", lan.status().c_str());
+    }
+    tx.stop();
+    std::printf("%s\n", lan.status().c_str());
+    printCpu(cpu0, wall0);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -121,6 +151,7 @@ int main(int argc, char** argv) {
     installCrashReporter();
     try {
         MfRuntime mf;
+        if (!o.sendLan.empty()) return runLanSender(o);
         return o.sendTo.empty() ? runLocal(o) : runSender(o);
     } catch (const std::exception& e) {
         std::cerr << "RESULT: ERROR " << e.what() << "\n";

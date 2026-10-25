@@ -1,5 +1,8 @@
 #pragma once
 
+#include "fx_manager.hpp"
+#include "mock_plugins.hpp"
+
 #include "dc/control/server.hpp"
 
 #include <asio.hpp>
@@ -11,7 +14,8 @@ namespace dc::mock {
 
 // A fake engine that speaks the real protocol. It owns no audio: it seeds a plausible parameter
 // tree (4 tracks, fake devices), implements the P0 methods (track add/remove/move, record
-// start/stop) and sends fake meter levels. Lane C develops the UI against it until mixd is ready.
+// start/stop), the effect racks and plugin list of mixd (the same FxManager, with pretend VST3
+// plugins) and sends fake meter levels. Lane C develops the UI against it until mixd is ready.
 class MockEngine {
 public:
     struct Options {
@@ -27,6 +31,8 @@ public:
     // Seeds the tree and starts timers. Call once before running the io_context.
     void start();
     void stop();
+    // ControlServer::Options::onDelta: effect parameter / bypass / editor changes.
+    void onDelta(const proto::Delta& delta) { fx_.onDelta(delta); }
 
 private:
     void seed();
@@ -51,6 +57,8 @@ private:
     std::uint32_t meterSeq_ = 0;
     double phase_ = 0.0;
     bool stopped_ = false;
+    MockPluginHost plugins_;
+    mixd::FxManager fx_;
 };
 
 } // namespace dc::mock

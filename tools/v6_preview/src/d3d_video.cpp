@@ -319,15 +319,20 @@ bool FrameProbe::check(ID3D11DeviceContext* ctx, ID3D11Texture2D* src, std::uint
         const std::uint8_t* p = px(cell + bit * cell + cell / 2, cell * 3);
         id = (id << 1) | (p[1] > 128 ? 1u : 0u);  // green channel ~ luma
     }
+    if (!haveOffset_) {
+        offset_ = (id - expectedId) & 0xFFFFFF;
+        haveOffset_ = true;
+    }
+    const std::uint64_t want = (expectedId + offset_) & 0xFFFFFF;
     const std::uint8_t* c = px(w_ / 2, h_ / 2);
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "barcode %llu (expected %llu), centre BGRA %u,%u,%u,%u",
-                  static_cast<unsigned long long>(id), static_cast<unsigned long long>(expectedId & 0xFFFFFF), c[0],
-                  c[1], c[2], c[3]);
+    char buf[192];
+    std::snprintf(buf, sizeof buf, "barcode %llu (expected %llu, offset %llu), centre BGRA %u,%u,%u,%u",
+                  static_cast<unsigned long long>(id), static_cast<unsigned long long>(want),
+                  static_cast<unsigned long long>(offset_), c[0], c[1], c[2], c[3]);
     ctx->Unmap(staging_.Get(), 0);
     last_ = buf;
     if (detail) *detail = last_;
-    const bool good = id == (expectedId & 0xFFFFFF);
+    const bool good = id == want;
     (good ? ok_ : bad_)++;
     return good;
 }

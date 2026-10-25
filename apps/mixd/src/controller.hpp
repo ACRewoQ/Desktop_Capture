@@ -6,7 +6,10 @@
 
 #include "device_manager.hpp"
 #include "engine.hpp"
+#include "fx_manager.hpp"
 #include "plan_builder.hpp"
+#include "recorder.hpp"
+#include "sampler.hpp"
 
 #include "dc/control/server.hpp"
 #include "dc/shmaudio/ring.hpp"
@@ -16,9 +19,14 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace dc::mixd {
+
+class LanService;
 
 class Controller {
 public:
@@ -27,6 +35,8 @@ public:
         std::chrono::milliseconds meterInterval{33};
         std::chrono::milliseconds statsInterval{500};
         bool verbose = true;
+        PluginHost* plugins = nullptr; // VST3 host, null when the build has none
+        LanService* lan = nullptr; // LAN streams, inputs and pairing (optional)
     };
 
     Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,
@@ -42,6 +52,8 @@ public:
     void onDeviceState(const DeviceManager::State& state);
     // ControlServer::Options::onClient (network thread): follows the capture process (capd).
     void onClient(const control::ClientInfo& client, bool connected);
+    // The LAN service added or removed ports (network thread).
+    void portsChanged() { scheduleRebuild(); }
 
 private:
     void seed(const std::vector<DeviceInfo>& devices);
@@ -50,6 +62,8 @@ private:
     void rebuild();
     void applyDeviceState(const DeviceManager::State& state);
     void publishDevices(const std::vector<DeviceInfo>& devices);
+    void publishProcesses(const std::vector<ProcessInfo>& processes);
+    void rematch();
     void scheduleMeters();
     void scheduleStats();
     std::vector<proto::Change> deviceChanges(const std::vector<DeviceInfo>& devices) const;
@@ -62,6 +76,19 @@ private:
     proto::Result captureReport(control::CallContext& ctx);
     proto::Result outputReport(control::CallContext& ctx);
     void scheduleRecordingClock();
+
+    // per-track recording (recorder.hpp)
+    proto::Result startTake(bool fromCapture, std::string* folder);
+    void stopTake(const std::string& error);
+    void scheduleRecorderClock();
+    void captureStateChanged(const std::string& state);
+
+    // sampler (sampler.hpp)
+    void padFileChanged(int pad, const std::string& file);
+    void sampleLoaded(SampleLoader::Result r);
+    std::shared_ptr<const SamplerTable> samplerTable() const;
+    void publishPlaying();
+    proto::Result samplerCommand(control::CallContext& ctx, Sampler::Command::Type type);
 
     asio::io_context& io_;
     control::ControlServer& server_;
@@ -79,12 +106,29 @@ private:
     std::uint64_t generation_ = 0;
     PortTable ports_;
     std::vector<DeviceInfo> deviceList_;
+    std::vector<ProcessInfo> processList_;
+    std::map<std::string, KnownDevice> known_; // every device seen since the start, for rematch()
     std::vector<std::string> lastErrors_;
     std::vector<std::string> lastNotes_;
     std::array<std::uint32_t, kMaxStrips> shmChannels_{};
     std::array<bool, kMaxStrips> shmDisconnected_{};
     std::uint32_t meterSeq_ = 0;
     std::uint64_t loggedGlitches_ = 0;
+
+    std::shared_ptr<RecorderTake> take_;
+    bool takeFromCapture_ = false;
+    asio::steady_timer recorderTimer_;
+
+    struct PadState {
+        std::string file;
+        std::uint64_t serial = 0;
+        std::shared_ptr<const SampleData> sample;
+    };
+    std::array<PadState, kSamplerPadCount> pads_;
+    std::uint64_t loadSerial_ = 0;
+    std::array<std::uint64_t, 2> lastPlaying_{};
+    std::unique_ptr<SampleLoader> loader_;
+    FxManager fx_;
 };
 
 } // namespace dc::mixd

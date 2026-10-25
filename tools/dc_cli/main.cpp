@@ -32,7 +32,7 @@ int usage() {
     std::cerr << "usage:\n"
                  "  dc-cli [--host H] [--port P] snapshot [PREFIX]\n"
                  "  dc-cli [--host H] [--port P] set PATH VALUE\n"
-                 "  dc-cli [--host H] [--port P] call METHOD [key=value ...]\n"
+                 "  dc-cli [--host H] [--port P] call METHOD [key=value ...]   (value s:123 = the string \"123\")\n"
                  "  dc-cli [--host H] [--port P] watch [--meters]\n"
                  "  dc-cli schema [--markdown]\n";
     return 2;
@@ -69,6 +69,7 @@ Value parseValue(const std::string& text, const ParamSpec* spec) {
         }
         return text; // let the server report the type mismatch
     }
+    if (text.rfind("s:", 0) == 0) return text.substr(2); // a string that looks like a number (s:012345)
     if (text == "true") return true;
     if (text == "false") return false;
     if (text == "nil") return std::monostate{};
@@ -96,9 +97,10 @@ std::string rangeText(const ParamSpec& s) {
     } else if (!s.intChoices.empty()) {
         for (auto c : s.intChoices) out += (out.empty() ? "" : " / ") + std::to_string(c);
     } else if (s.min || s.max) {
-        auto num = [](double d) {
+        auto num = [&](double d) {
             char buf[32];
-            std::snprintf(buf, sizeof buf, "%g", d);
+            if (s.type == ValueType::Int && d > -1e15 && d < 1e15) std::snprintf(buf, sizeof buf, "%.0f", d);
+            else std::snprintf(buf, sizeof buf, "%g", d);
             return std::string(buf);
         };
         out = (s.min ? num(*s.min) : "") + " 〜 " + (s.max ? num(*s.max) : "");
@@ -179,6 +181,7 @@ int main(int argc, char** argv) {
 
     dc::control::ControlClient client(opt);
     if (cmd == "watch") {
+        std::cout << std::unitbuf; // write through also when the output goes to a file (scripts poll it)
         client.onDelta = [](const Delta& d) {
             std::cout << "delta rev " << d.rev;
             if (!d.originClient.empty()) std::cout << " by " << d.originClient;

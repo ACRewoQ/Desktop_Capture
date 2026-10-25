@@ -1,24 +1,36 @@
 // WASAPI device backend: endpoint enumeration with change notifications, and one event-driven stream
-// per device in shared mode (48 kHz float, Windows converts to the device's mix format) or exclusive
-// mode (48 kHz in a PCM format the device accepts, period = /system/block_size).
+// per device in shared mode (float at the device's mix rate) or exclusive mode (a PCM format the
+// device accepts, 48 kHz when it can, period = /system/block_size). Devices that do not run at 48 kHz
+// are converted inside the stream (clocksync::RateConverter), not by Windows. Also: process loopback
+// captures of applications, and the ASIO drivers (asio_backend.cpp) listed next to the endpoints.
 
+#include "asio_backend.hpp"
 #include "device.hpp"
 #include "engine.hpp"
+
+#include "dc/clocksync/rate_converter.hpp"
 
 #include <windows.h>
 
 #include <audioclient.h>
+#include <audiopolicy.h>
 #include <avrt.h>
 #include <mmdeviceapi.h>
+#include <tlhelp32.h>
+#include "process_loopback_compat.hpp"
 // defines the PKEY_* constants in this translation unit
 #include <initguid.h>
 #include <functiondiscoverykeys_devpkey.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <thread>
 #include <utility>
 
@@ -99,12 +111,29 @@ std::wstring widen(const std::string& s) {
 }
 
 struct ComInit {
-    ComInit() { CoInitializeEx(nullptr, COINIT_MULTITHREADED); }
-    ~ComInit() { CoUninitialize(); }
+    ComInit() : ok(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {}
+    ~ComInit() {
+        if (ok) CoUninitialize();
+    }
+    bool ok;
 };
 
+// 48 kHz frames <-> 100 ns units
 REFERENCE_TIME framesToHns(int frames) { return static_cast<REFERENCE_TIME>(frames * 10'000'000.0 / kSampleRate + 0.5); }
 int hnsToFrames(REFERENCE_TIME hns) { return static_cast<int>(static_cast<double>(hns) * kSampleRate / 10'000'000.0 + 0.5); }
+
+// The rate of the device format (what the hardware runs at), 0 if unknown.
+int deviceFormatRate(IMMDevice* dev) {
+    Com<IPropertyStore> props;
+    if (FAILED(dev->OpenPropertyStore(STGM_READ, props.put()))) return 0;
+    PROPVARIANT v;
+    PropVariantInit(&v);
+    int rate = 0;
+    if (SUCCEEDED(props->GetValue(kDeviceFormatKey, &v)) && v.vt == VT_BLOB && v.blob.cbSize >= sizeof(WAVEFORMATEX))
+        rate = static_cast<int>(reinterpret_cast<const WAVEFORMATEX*>(v.blob.pBlobData)->nSamplesPerSec);
+    PropVariantClear(&v);
+    return rate;
+}
 
 DWORD defaultMask(int channels) {
     switch (channels) {
@@ -123,7 +152,7 @@ struct Format {
     int bytesPerSample = 4;
 };
 
-Format makeFormat(SampleKind kind, int channels, DWORD mask) {
+Format makeFormat(SampleKind kind, int channels, DWORD mask, int rate = static_cast<int>(kSampleRate)) {
     Format f;
     f.kind = kind;
     f.channels = channels;
@@ -139,7 +168,7 @@ Format makeFormat(SampleKind kind, int channels, DWORD mask) {
     auto& w = f.wfx;
     w.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
     w.Format.nChannels = static_cast<WORD>(channels);
-    w.Format.nSamplesPerSec = static_cast<DWORD>(kSampleRate);
+    w.Format.nSamplesPerSec = static_cast<DWORD>(rate);
     w.Format.wBitsPerSample = static_cast<WORD>(container * 8);
     w.Format.nBlockAlign = static_cast<WORD>(container * channels);
     w.Format.nAvgBytesPerSec = w.Format.nSamplesPerSec * w.Format.nBlockAlign;
@@ -205,6 +234,69 @@ void fromFloat(const Format& f, const float* src, BYTE* dst, std::size_t samples
     }
 }
 
+// ActivateAudioInterfaceAsync wants an agile completion handler: a free-threaded object that signals.
+class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
+public:
+    ActivationHandler() : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+    ~ActivationHandler() { CloseHandle(done_); }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
+        if (!out) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IActivateAudioInterfaceCompletionHandler))
+            *out = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+        else if (riid == __uuidof(IAgileObject))
+            *out = static_cast<IAgileObject*>(this);
+        else {
+            *out = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG n = --refs_;
+        if (n == 0) delete this;
+        return n;
+    }
+    HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation*) override {
+        SetEvent(done_);
+        return S_OK;
+    }
+    HANDLE done() const { return done_; }
+
+private:
+    std::atomic<ULONG> refs_{1};
+    HANDLE done_;
+};
+
+// An IAudioClient capturing what the process tree of pid plays (V1: Windows 10 22H2 and 11).
+HRESULT activateProcessLoopback(DWORD pid, IAudioClient** out) {
+    AUDIOCLIENT_ACTIVATION_PARAMS params{};
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.TargetProcessId = pid;
+    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    PROPVARIANT pv{};
+    pv.vt = VT_BLOB;
+    pv.blob.cbSize = sizeof params;
+    pv.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
+    auto* handler = new ActivationHandler();
+    Com<IActivateAudioInterfaceAsyncOperation> op;
+    HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &pv, handler, op.put());
+    if (FAILED(hr)) {
+        handler->Release();
+        return hr;
+    }
+    const DWORD wait = WaitForSingleObject(handler->done(), 5000);
+    handler->Release();
+    if (wait != WAIT_OBJECT_0) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+    HRESULT activated = E_FAIL;
+    Com<IUnknown> unk;
+    hr = op->GetActivateResult(&activated, unk.put());
+    if (FAILED(hr)) return hr;
+    if (FAILED(activated)) return activated;
+    return unk->QueryInterface(__uuidof(IAudioClient), reinterpret_cast<void**>(out));
+}
+
 class WasapiStream final : public Stream {
 public:
     WasapiStream(bool input, InputCallback inCb, OutputCallback outCb, std::function<void()> onFailure)
@@ -212,6 +304,7 @@ public:
     ~WasapiStream() override {
         stop();
         if (event_) CloseHandle(event_);
+        if (process_) CloseHandle(process_);
     }
 
     bool open(IMMDeviceEnumerator* en, const DeviceInfo& device, const StreamConfig& cfg, std::string* error) {
@@ -227,7 +320,7 @@ public:
         hr = client_->GetMixFormat(&mix);
         if (FAILED(hr)) return fail(error, "GetMixFormat", hr);
         int channels = mix->nChannels;
-        const double mixRate = mix->nSamplesPerSec;
+        const int mixRate = static_cast<int>(mix->nSamplesPerSec);
         DWORD mask = defaultMask(channels);
         if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22)
             mask = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix)->dwChannelMask;
@@ -239,16 +332,22 @@ public:
 
         std::optional<Format> exclusiveFormat;
         if (exclusive_) {
-            // the device format's channel count, then the mix format's
-            for (auto kind : {SampleKind::Float32, SampleKind::Int32, SampleKind::Int24In32, SampleKind::Int24, SampleKind::Int16}) {
-                auto f = makeFormat(kind, channels, mask);
-                if (client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.wfx.Format, nullptr) == S_OK) {
-                    exclusiveFormat = f;
-                    break;
+            // 48 kHz first; a device its driver locks to another rate (the Steinberg UR22 at 44.1 kHz)
+            // runs at that rate and the stream converts
+            std::vector<int> rates{static_cast<int>(kSampleRate)};
+            for (int r : {deviceFormatRate(dev.get()), mixRate, 44100, 96000, 88200})
+                if (r > 0 && std::find(rates.begin(), rates.end(), r) == rates.end()) rates.push_back(r);
+            for (int rate : rates) {
+                for (auto kind : {SampleKind::Float32, SampleKind::Int32, SampleKind::Int24In32, SampleKind::Int24, SampleKind::Int16}) {
+                    auto f = makeFormat(kind, channels, mask, rate);
+                    if (client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.wfx.Format, nullptr) == S_OK) {
+                        exclusiveFormat = f;
+                        break;
+                    }
                 }
+                if (exclusiveFormat) break;
             }
-            // devices locked to another rate by their driver (Steinberg UR22 at 44.1 kHz, ...) cannot
-            // run exclusive at 48 kHz: open them shared, where Windows converts the rate
+            // no exclusive PCM format at all: shared mode
             if (!exclusiveFormat) {
                 exclusive_ = false;
                 sharedFallback_ = true;
@@ -256,18 +355,30 @@ public:
         }
 
         if (!exclusive_) {
-            format_ = makeFormat(SampleKind::Float32, channels, mask);
-            const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                                AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            // the mix format's own rate, so Windows does not resample (G2: its converter dropped data
+            // every few minutes on the UR22 at 44.1 kHz)
+            format_ = makeFormat(SampleKind::Float32, channels, mask, mixRate > 0 ? mixRate : static_cast<int>(kSampleRate));
+            const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
             // inputs get a deeper buffer than one period: events still come every period, but a late
             // read no longer overflows it (G2: the UR22 reported data discontinuities with 10 ms)
             const REFERENCE_TIME buffer = input_ ? std::max<REFERENCE_TIME>(defPeriod, kSharedInputBuffer) : defPeriod;
             hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, buffer, 0, &format_.wfx.Format, nullptr);
+            if (FAILED(hr) && format_.wfx.Format.nSamplesPerSec != kSampleRate) {
+                // as in P2: 48 kHz, converted by Windows
+                client_.reset();
+                hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client_.putVoid());
+                if (FAILED(hr)) return fail(error, "Activate", hr);
+                format_ = makeFormat(SampleKind::Float32, channels, mask);
+                hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, buffer, 0,
+                                         &format_.wfx.Format, nullptr);
+                // device positions still count frames at the device rate
+                posScale_ = mixRate > 0 ? kSampleRate / mixRate : 1.0;
+            }
             if (FAILED(hr)) return fail(error, "Initialize (shared)", hr);
             period_ = hnsToFrames(defPeriod);
-            devRate_ = mixRate > 0 ? mixRate : kSampleRate;
         } else {
             format_ = *exclusiveFormat;
+            const double rate = format_.wfx.Format.nSamplesPerSec;
             REFERENCE_TIME period = std::max(minPeriod, framesToHns(cfg.blockFrames));
             hr = client_->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, period, period,
                                      &format_.wfx.Format, nullptr);
@@ -278,7 +389,7 @@ public:
                 client_.reset();
                 hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client_.putVoid());
                 if (FAILED(hr)) return fail(error, "Activate", hr);
-                period = static_cast<REFERENCE_TIME>(10'000'000.0 * frames / kSampleRate + 0.5);
+                period = static_cast<REFERENCE_TIME>(10'000'000.0 * frames / rate + 0.5);
                 hr = client_->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, period, period,
                                          &format_.wfx.Format, nullptr);
             }
@@ -286,17 +397,53 @@ public:
             period_ = hnsToFrames(period);
         }
         channels_ = format_.channels;
+        devRate_ = format_.wfx.Format.nSamplesPerSec;
 
         UINT32 bufferFrames = 0;
         client_->GetBufferSize(&bufferFrames);
         bufferFrames_ = static_cast<int>(bufferFrames);
-        if (exclusive_) period_ = bufferFrames_;
+        if (exclusive_) period_ = static_cast<int>(std::lround(bufferFrames_ * kSampleRate / devRate_));
         REFERENCE_TIME streamLatency = 0;
         client_->GetStreamLatency(&streamLatency);
-        latency_ = static_cast<double>(bufferFrames_) / kSampleRate + static_cast<double>(streamLatency) * 1e-7;
+        latency_ = static_cast<double>(bufferFrames_) / devRate_ + static_cast<double>(streamLatency) * 1e-7;
+        if (devRate_ != kSampleRate) {
+            const auto block = static_cast<std::size_t>(std::max(bufferFrames_, 1024));
+            converter_ = input_ ? std::make_unique<clocksync::RateConverter>(channels_, devRate_, kSampleRate, block)
+                                : std::make_unique<clocksync::RateConverter>(channels_, kSampleRate, devRate_, block);
+        }
+        return finishOpen(error);
+    }
 
+    // Process loopback: what the process tree of pid plays, 48 kHz stereo (Windows mixes and converts).
+    bool openProcess(const ProcessInfo& p, std::string* error) {
+        process_ = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p.pid);
+        if (!process_) return fail(error, "OpenProcess", HRESULT_FROM_WIN32(GetLastError()));
+        HRESULT hr = activateProcessLoopback(p.pid, client_.put());
+        if (FAILED(hr)) return fail(error, "ActivateAudioInterfaceAsync (process loopback)", hr);
+        // process loopback clients have no mix format or device period: the format is ours
+        const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        format_ = makeFormat(SampleKind::Float32, 2, defaultMask(2));
+        hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, kSharedInputBuffer, 0, &format_.wfx.Format, nullptr);
+        if (hr == kUnsupportedFormat) {
+            format_ = makeFormat(SampleKind::Int16, 2, defaultMask(2));
+            hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, kSharedInputBuffer, 0, &format_.wfx.Format, nullptr);
+        }
+        if (FAILED(hr)) return fail(error, "Initialize (process loopback)", hr);
+        channels_ = 2;
+        devRate_ = kSampleRate;
+        period_ = 480; // V1: a packet every 10 ms, silent ones too
+        UINT32 bufferFrames = 0;
+        client_->GetBufferSize(&bufferFrames);
+        bufferFrames_ = static_cast<int>(bufferFrames);
+        latency_ = static_cast<double>(bufferFrames_) / kSampleRate;
+        return finishOpen(error);
+    }
+
+    bool finishOpen(std::string* error) {
         event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         client_->SetEventHandle(event_);
+        HRESULT hr = S_OK;
         if (input_) {
             hr = client_->GetService(__uuidof(IAudioCaptureClient), capture_.putVoid());
             if (FAILED(hr)) return fail(error, "GetService(capture)", hr);
@@ -337,6 +484,7 @@ public:
     bool failed() const override { return failed_.load(); }
     std::uint64_t glitches() const override { return glitches_.load(); }
     bool sharedFallback() const override { return sharedFallback_; }
+    int deviceRate() const override { return static_cast<int>(devRate_); }
     int suggestedPeriod() const override { return suggestedPeriod_.load(); }
     std::string diagnostics() const override {
         // frames per second the device actually took or gave since start: should be about 48000
@@ -439,9 +587,8 @@ private:
             if (clock_ && clockFreq_) {
                 UINT64 pos = 0, qpc = 0;
                 if (SUCCEEDED(clock_->GetPosition(&pos, &qpc)))
-                    when = static_cast<double>(qpc) * 1e-7 +
-                           (static_cast<double>(written_) - static_cast<double>(pos) / static_cast<double>(clockFreq_) * kSampleRate) /
-                               kSampleRate;
+                    when = static_cast<double>(qpc) * 1e-7 + static_cast<double>(written_) / devRate_ -
+                           static_cast<double>(pos) / static_cast<double>(clockFreq_);
             }
 
             BYTE* data = nullptr;
@@ -450,12 +597,19 @@ private:
                 markFailed();
                 break;
             }
-            if (format_.kind == SampleKind::Float32) {
-                outCb_(reinterpret_cast<float*>(data), frames, channels_, when);
+            float* dst = format_.kind == SampleKind::Float32 ? reinterpret_cast<float*>(data) : scratch_.data();
+            if (converter_) {
+                // the engine renders 48 kHz frames as the converter asks for them
+                double supplied = 0;
+                converter_->pull(dst, static_cast<std::size_t>(frames), [&](float* in, std::size_t n) {
+                    outCb_(in, static_cast<int>(n), channels_, when + supplied / kSampleRate);
+                    supplied += static_cast<double>(n);
+                });
             } else {
-                outCb_(scratch_.data(), frames, channels_, when);
-                fromFloat(format_, scratch_.data(), data, static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels_));
+                outCb_(dst, frames, channels_, when);
             }
+            if (format_.kind != SampleKind::Float32)
+                fromFloat(format_, scratch_.data(), data, static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels_));
             hr = render_->ReleaseBuffer(static_cast<UINT32>(frames), 0);
             if (FAILED(hr)) {
                 markFailed();
@@ -484,6 +638,11 @@ private:
                 continue;
             }
             silentWaits = 0;
+            if (process_ && WaitForSingleObject(process_, 0) == WAIT_OBJECT_0) {
+                // the application exited: the capture would only deliver silence from now on
+                markFailed();
+                break;
+            }
             const double now = qpcSecondsNow();
             const auto gapUs = lastRead > 0 ? static_cast<std::int64_t>((now - lastRead) * 1e6) : 0;
             lastRead = now;
@@ -491,9 +650,9 @@ private:
             if (eventRateWrong(now)) break;
             UINT32 next = 0;
             HRESULT hr = S_OK;
-            // device positions count frames at the device rate (44.1 kHz for a device converted in
-            // shared mode): compare them in 48 kHz frames
-            const double toStream = kSampleRate / devRate_;
+            // device positions count frames at the device rate; the data does too, except when Windows
+            // converts to 48 kHz (posScale_)
+            const double toStream = posScale_;
             while (SUCCEEDED(hr = capture_->GetNextPacketSize(&next)) && next > 0) {
                 BYTE* data = nullptr;
                 UINT32 frames = 0;
@@ -504,9 +663,11 @@ private:
                 if (hr == AUDCLNT_S_BUFFER_EMPTY || frames == 0) break;
                 const double pos = static_cast<double>(devPos) * toStream;
                 // a packet the device hands out again (G2: the Realtek mic in exclusive mode, about
-                // 1.5x the real rate): drop what was delivered already, judged by its position
+                // 1.5x the real rate): drop what was delivered already, judged by its position. Not for
+                // process loopback: its packets carry no usable device position (A2 test: every packet
+                // was dropped)
                 UINT32 skip = 0;
-                if (!first && devRate_ == kSampleRate && pos + 0.5 < expectedPos) {
+                if (!first && !process_ && posScale_ == 1.0 && pos + 0.5 < expectedPos) {
                     skip = static_cast<UINT32>(std::min<double>(frames, expectedPos - pos + 0.5));
                     duplicates_.fetch_add(skip);
                 }
@@ -523,8 +684,8 @@ private:
                 if (fresh > 0 && samples <= scratch_.size()) {
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) std::fill_n(scratch_.data(), samples, 0.0f);
                     else toFloat(format_, data, scratch_.data(), samples);
-                    inCb_(scratch_.data() + static_cast<std::size_t>(skip) * static_cast<std::size_t>(channels_),
-                          static_cast<int>(fresh), static_cast<double>(qpc) * 1e-7 + skip / kSampleRate, discontinuity);
+                    deliver(scratch_.data() + static_cast<std::size_t>(skip) * static_cast<std::size_t>(channels_), fresh,
+                            static_cast<double>(qpc) * 1e-7 + skip / devRate_, discontinuity);
                 }
                 frames_.fetch_add(fresh);
                 if (startTime_.load() == 0) startTime_ = now;
@@ -538,6 +699,20 @@ private:
             if (captureOverflowing()) break;
         }
         if (avrt_) AvRevertMmThreadCharacteristics(avrt_);
+    }
+
+    // captured frames at the device rate -> the callback at 48 kHz
+    void deliver(const float* frames, UINT32 count, double time, bool discontinuity) {
+        pendingDiscontinuity_ = pendingDiscontinuity_ || discontinuity;
+        if (!converter_) {
+            inCb_(frames, static_cast<int>(count), time, pendingDiscontinuity_);
+            pendingDiscontinuity_ = false;
+            return;
+        }
+        converter_->push(frames, count, time, [&](const float* out, std::size_t n, double t) {
+            inCb_(out, static_cast<int>(n), t, pendingDiscontinuity_);
+            pendingDiscontinuity_ = false;
+        });
     }
 
     const bool input_;
@@ -566,7 +741,11 @@ private:
     std::atomic<std::int64_t> lastGapUs_{0}, maxGapUs_{0}, lastSkipped_{0};
     std::atomic<std::uint64_t> frames_{0}; // frames rendered or captured since the first period
     std::atomic<std::uint64_t> duplicates_{0}; // captured frames dropped as already delivered
-    double devRate_ = kSampleRate;         // rate of the device positions
+    double devRate_ = kSampleRate;  // rate of the stream's data (the device's own unless Windows converts)
+    double posScale_ = 1.0;         // data frames per device position frame
+    std::unique_ptr<clocksync::RateConverter> converter_; // devRate_ != 48 kHz
+    bool pendingDiscontinuity_ = false;
+    HANDLE process_ = nullptr;      // process loopback: the target, to notice it exiting
     static constexpr int kRateSkipEvents = 10, kRateCheckEvents = 110, kOverflowLimit = 10;
     int defaultPeriod_ = 480; // the device's default period, frames
     int events_ = 0;                       // stream thread only
@@ -613,22 +792,92 @@ private:
     std::function<void()> cb_;
 };
 
+std::string lower(std::string s) {
+    for (auto& c : s)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return s;
+}
+
+struct ProcEntry {
+    DWORD pid = 0, parent = 0;
+    std::string exe;
+};
+
+std::map<DWORD, ProcEntry> processSnapshot() {
+    std::map<DWORD, ProcEntry> out;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof pe;
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+        out[pe.th32ProcessID] = {pe.th32ProcessID, pe.th32ParentProcessID, narrow(pe.szExeFile)};
+    CloseHandle(snap);
+    return out;
+}
+
+// The root of pid's same-named tree: walk up while the parent has the same executable name.
+DWORD rootOf(const std::map<DWORD, ProcEntry>& procs, DWORD pid) {
+    std::set<DWORD> seen;
+    for (;;) {
+        auto it = procs.find(pid);
+        if (it == procs.end() || !seen.insert(pid).second) return pid;
+        auto parent = procs.find(it->second.parent);
+        if (parent == procs.end() || lower(parent->second.exe) != lower(it->second.exe)) return pid;
+        pid = parent->first;
+    }
+}
+
+std::uint64_t creationTime(DWORD pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) return ~0ull;
+    FILETIME c{}, e{}, k{}, u{};
+    std::uint64_t t = ~0ull;
+    if (GetProcessTimes(h, &c, &e, &k, &u)) t = (std::uint64_t(c.dwHighDateTime) << 32) | c.dwLowDateTime;
+    CloseHandle(h);
+    return t;
+}
+
+std::string windowTitle(DWORD pid) {
+    struct Find {
+        DWORD pid;
+        std::wstring title;
+    } find{pid, {}};
+    EnumWindows(
+        [](HWND w, LPARAM l) -> BOOL {
+            auto* f = reinterpret_cast<Find*>(l);
+            DWORD owner = 0;
+            GetWindowThreadProcessId(w, &owner);
+            if (owner != f->pid || !IsWindowVisible(w) || GetWindow(w, GW_OWNER)) return TRUE;
+            wchar_t buf[256];
+            if (GetWindowTextW(w, buf, 256) > 0) {
+                f->title = buf;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&find));
+    return narrow(find.title.c_str());
+}
+
 class WasapiBackend final : public DeviceBackend {
 public:
-    WasapiBackend() {
+    explicit WasapiBackend(bool asio) {
         CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
                          enumerator_.putVoid());
         if (enumerator_) {
             notifier_ = new NotificationClient([this] { changed(); });
             enumerator_->RegisterEndpointNotificationCallback(notifier_);
         }
+        if (asio) asio_ = makeAsioHost([this] { changed(); });
     }
     ~WasapiBackend() override {
+        asio_.reset();
         if (enumerator_ && notifier_) enumerator_->UnregisterEndpointNotificationCallback(notifier_);
         if (notifier_) notifier_->Release();
     }
 
     std::vector<DeviceInfo> enumerate() override {
+        ComInit com;
         std::vector<DeviceInfo> out;
         if (!enumerator_) return out;
         std::string defaults[2];
@@ -643,56 +892,68 @@ public:
             }
         }
         Com<IMMDeviceCollection> col;
-        if (FAILED(enumerator_->EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED, col.put())))
-            return out;
-        UINT count = 0;
-        col->GetCount(&count);
-        for (UINT i = 0; i < count; ++i) {
-            Com<IMMDevice> dev;
-            if (FAILED(col->Item(i, dev.put()))) continue;
-            DeviceInfo info;
-            LPWSTR id = nullptr;
-            if (FAILED(dev->GetId(&id))) continue;
-            info.id = narrow(id);
-            CoTaskMemFree(id);
-            Com<IMMEndpoint> ep;
-            EDataFlow flow = eRender;
-            if (SUCCEEDED(dev->QueryInterface(__uuidof(IMMEndpoint), ep.putVoid()))) ep->GetDataFlow(&flow);
-            info.input = flow == eCapture;
-            DWORD state = 0;
-            dev->GetState(&state);
-            info.connected = state == DEVICE_STATE_ACTIVE;
-            Com<IPropertyStore> props;
-            if (SUCCEEDED(dev->OpenPropertyStore(STGM_READ, props.put()))) {
-                PROPVARIANT v;
-                PropVariantInit(&v);
-                if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR) info.name = narrow(v.pwszVal);
-                PropVariantClear(&v);
-                PropVariantInit(&v);
-                if (SUCCEEDED(props->GetValue(kDeviceFormatKey, &v)) && v.vt == VT_BLOB && v.blob.cbSize >= sizeof(WAVEFORMATEX))
-                    info.channels = reinterpret_cast<const WAVEFORMATEX*>(v.blob.pBlobData)->nChannels;
-                PropVariantClear(&v);
-            }
-            if (info.connected) {
-                // the mix format is what shared mode streams get
-                Com<IAudioClient> client;
-                if (SUCCEEDED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client.putVoid()))) {
-                    WAVEFORMATEX* mix = nullptr;
-                    if (SUCCEEDED(client->GetMixFormat(&mix))) {
-                        info.channels = mix->nChannels;
-                        CoTaskMemFree(mix);
+        if (SUCCEEDED(enumerator_->EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED, col.put()))) {
+            UINT count = 0;
+            col->GetCount(&count);
+            for (UINT i = 0; i < count; ++i) {
+                Com<IMMDevice> dev;
+                if (FAILED(col->Item(i, dev.put()))) continue;
+                DeviceInfo info;
+                LPWSTR id = nullptr;
+                if (FAILED(dev->GetId(&id))) continue;
+                info.id = narrow(id);
+                CoTaskMemFree(id);
+                Com<IMMEndpoint> ep;
+                EDataFlow flow = eRender;
+                if (SUCCEEDED(dev->QueryInterface(__uuidof(IMMEndpoint), ep.putVoid()))) ep->GetDataFlow(&flow);
+                info.input = flow == eCapture;
+                DWORD state = 0;
+                dev->GetState(&state);
+                info.connected = state == DEVICE_STATE_ACTIVE;
+                std::string iface;
+                Com<IPropertyStore> props;
+                if (SUCCEEDED(dev->OpenPropertyStore(STGM_READ, props.put()))) {
+                    PROPVARIANT v;
+                    PropVariantInit(&v);
+                    if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR) info.name = narrow(v.pwszVal);
+                    PropVariantClear(&v);
+                    PropVariantInit(&v);
+                    if (SUCCEEDED(props->GetValue(PKEY_DeviceInterface_FriendlyName, &v)) && v.vt == VT_LPWSTR) iface = narrow(v.pwszVal);
+                    PropVariantClear(&v);
+                    PropVariantInit(&v);
+                    if (SUCCEEDED(props->GetValue(kDeviceFormatKey, &v)) && v.vt == VT_BLOB && v.blob.cbSize >= sizeof(WAVEFORMATEX)) {
+                        const auto* wf = reinterpret_cast<const WAVEFORMATEX*>(v.blob.pBlobData);
+                        info.channels = wf->nChannels;
+                        info.sampleRate = static_cast<int>(wf->nSamplesPerSec);
+                    }
+                    PropVariantClear(&v);
+                }
+                if (info.connected) {
+                    // the mix format is what shared mode streams get
+                    Com<IAudioClient> client;
+                    if (SUCCEEDED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client.putVoid()))) {
+                        WAVEFORMATEX* mix = nullptr;
+                        if (SUCCEEDED(client->GetMixFormat(&mix))) {
+                            info.channels = mix->nChannels;
+                            if (info.sampleRate == 0) info.sampleRate = static_cast<int>(mix->nSamplesPerSec);
+                            CoTaskMemFree(mix);
+                        }
                     }
                 }
+                info.isDefault = info.id == defaults[info.input ? 1 : 0];
+                // VB-Audio's cables ("CABLE Input (VB-Audio Virtual Cable)"), A+B and Voicemeeter's
+                info.virtualCable = iface.find("VB-Audio") != std::string::npos || info.name.find("VB-Audio") != std::string::npos ||
+                                    info.name.rfind("CABLE", 0) == 0;
+                out.push_back(std::move(info));
             }
-            info.isDefault = info.id == defaults[info.input ? 1 : 0];
-            info.virtualCable = info.name.find("VB-Audio") != std::string::npos || info.name.find("CABLE") != std::string::npos;
-            out.push_back(std::move(info));
         }
         // stable order: defaults first, then by name
         std::stable_sort(out.begin(), out.end(), [](const DeviceInfo& a, const DeviceInfo& b) {
             if (a.isDefault != b.isDefault) return a.isDefault;
             return a.name < b.name;
         });
+        if (asio_)
+            for (auto& d : asio_->enumerate()) out.push_back(std::move(d));
         return out;
     }
 
@@ -703,6 +964,7 @@ public:
 
     std::unique_ptr<Stream> openInput(const DeviceInfo& device, const StreamConfig& cfg, InputCallback cb,
                                       std::string* error) override {
+        if (device.asio) return asio_ ? asio_->openInput(device, cfg, std::move(cb), error) : nullptr;
         auto s = std::make_unique<WasapiStream>(true, std::move(cb), nullptr, [this] { changed(); });
         if (!enumerator_ || !s->open(enumerator_.get(), device, cfg, error)) return nullptr;
         return s;
@@ -710,8 +972,66 @@ public:
 
     std::unique_ptr<Stream> openOutput(const DeviceInfo& device, const StreamConfig& cfg, OutputCallback cb,
                                        std::string* error) override {
+        if (device.asio) return asio_ ? asio_->openOutput(device, cfg, std::move(cb), error) : nullptr;
         auto s = std::make_unique<WasapiStream>(false, nullptr, std::move(cb), [this] { changed(); });
         if (!enumerator_ || !s->open(enumerator_.get(), device, cfg, error)) return nullptr;
+        return s;
+    }
+
+    std::vector<ProcessInfo> enumerateProcesses() override {
+        ComInit com;
+        const auto sessions = sessionPids();
+        const auto procs = processSnapshot();
+        std::map<std::string, std::pair<DWORD, std::uint64_t>> roots; // lower exe -> (root, creation time)
+        for (DWORD pid : sessions) {
+            if (!procs.count(pid)) continue;
+            const DWORD root = rootOf(procs, pid);
+            const auto key = lower(procs.at(root).exe);
+            const auto created = creationTime(root);
+            auto it = roots.find(key);
+            if (it == roots.end() || created < it->second.second) roots[key] = {root, created};
+        }
+        std::vector<ProcessInfo> out;
+        for (const auto& [key, root] : roots) out.push_back({procs.at(root.first).exe, root.first, windowTitle(root.first)});
+        {
+            std::lock_guard lock(mutex_);
+            sessionPids_ = sessions;
+        }
+        return out;
+    }
+
+    ProcessInfo findProcess(const std::string& exe) override {
+        const auto want = lower(exe);
+        const auto procs = processSnapshot();
+        std::set<DWORD> sessions;
+        {
+            std::lock_guard lock(mutex_);
+            sessions = sessionPids_;
+        }
+        // roots of the trees with that name, and whether a process of the tree has an audio session
+        std::map<DWORD, bool> roots;
+        for (const auto& [pid, p] : procs)
+            if (lower(p.exe) == want) roots[rootOf(procs, pid)] = false;
+        for (DWORD pid : sessions)
+            if (auto it = procs.find(pid); it != procs.end() && lower(it->second.exe) == want) roots[rootOf(procs, pid)] = true;
+        DWORD best = 0;
+        bool bestAudio = false;
+        std::uint64_t bestTime = ~0ull;
+        for (const auto& [pid, audio] : roots) {
+            const auto t = creationTime(pid);
+            if (best == 0 || (audio && !bestAudio) || (audio == bestAudio && t < bestTime)) {
+                best = pid;
+                bestAudio = audio;
+                bestTime = t;
+            }
+        }
+        if (best == 0) return {exe, 0, {}};
+        return {procs.at(best).exe, best, windowTitle(best)};
+    }
+
+    std::unique_ptr<Stream> openProcess(const ProcessInfo& process, InputCallback cb, std::string* error) override {
+        auto s = std::make_unique<WasapiStream>(true, std::move(cb), nullptr, [this] { changed(); });
+        if (!s->openProcess(process, error)) return nullptr;
         return s;
     }
 
@@ -721,15 +1041,51 @@ private:
         if (cb_) cb_();
     }
 
+    // processes with an audio session (active or inactive) on any active render endpoint
+    std::set<DWORD> sessionPids() {
+        std::set<DWORD> out;
+        if (!enumerator_) return out;
+        Com<IMMDeviceCollection> col;
+        if (FAILED(enumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, col.put()))) return out;
+        UINT count = 0;
+        col->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            Com<IMMDevice> dev;
+            Com<IAudioSessionManager2> mgr;
+            Com<IAudioSessionEnumerator> sessions;
+            if (FAILED(col->Item(i, dev.put())) ||
+                FAILED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, mgr.putVoid())) ||
+                FAILED(mgr->GetSessionEnumerator(sessions.put())))
+                continue;
+            int n = 0;
+            sessions->GetCount(&n);
+            for (int k = 0; k < n; ++k) {
+                Com<IAudioSessionControl> ctl;
+                Com<IAudioSessionControl2> ctl2;
+                if (FAILED(sessions->GetSession(k, ctl.put())) || FAILED(ctl->QueryInterface(__uuidof(IAudioSessionControl2), ctl2.putVoid())))
+                    continue;
+                AudioSessionState state = AudioSessionStateExpired;
+                ctl->GetState(&state);
+                DWORD pid = 0;
+                // 0 = the system sounds session
+                if (state != AudioSessionStateExpired && SUCCEEDED(ctl2->GetProcessId(&pid)) && pid != 0 && pid != GetCurrentProcessId())
+                    out.insert(pid);
+            }
+        }
+        return out;
+    }
+
     ComInit com_;
     Com<IMMDeviceEnumerator> enumerator_;
     NotificationClient* notifier_ = nullptr;
+    std::unique_ptr<AsioHost> asio_;
     std::mutex mutex_;
     std::function<void()> cb_;
+    std::set<DWORD> sessionPids_; // from the last enumerateProcesses()
 };
 
 } // namespace
 
-std::unique_ptr<DeviceBackend> makeWasapiBackend() { return std::make_unique<WasapiBackend>(); }
+std::unique_ptr<DeviceBackend> makeWasapiBackend(bool asio) { return std::make_unique<WasapiBackend>(asio); }
 
 } // namespace dc::mixd

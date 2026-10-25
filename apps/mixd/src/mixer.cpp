@@ -1,5 +1,7 @@
 #include "mixer.hpp"
 
+#include "recorder.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -102,6 +104,7 @@ void Mixer::adopt(const MixPlan& plan) {
     };
     touch(plan.master);
     for (const auto& t : plan.tracks) touch(t);
+    sampler_.adopt(plan.sampler.get());
     generation_ = plan.generation;
 }
 
@@ -121,9 +124,28 @@ void Mixer::writeShm(shm::AudioRingWriter* shm, int slot, const float* const* x,
                static_cast<std::uint32_t>(channels));
 }
 
-void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm) {
+void Mixer::record(const MixPlan& plan, const StripPlan& s, const float* const* x, int channels, int frames) {
+    auto& take = *plan.take;
+    const int out = take.streams()[static_cast<std::size_t>(s.recordStream)].channels;
+    for (int i = 0; i < frames; ++i) {
+        if (out == channels) {
+            for (int c = 0; c < out; ++c) interleave_[static_cast<std::size_t>(i * out + c)] = x[c][i];
+        } else if (out == 2) { // a mono strip recorded into a stereo file
+            interleave_[static_cast<std::size_t>(2 * i)] = interleave_[static_cast<std::size_t>(2 * i + 1)] = x[0][i];
+        } else { // the strip became stereo during the take
+            interleave_[static_cast<std::size_t>(i)] = (x[0][i] + x[1][i]) * 0.5f;
+        }
+    }
+    take.push(s.recordStream, interleave_.data(), frames);
+    recorded_[static_cast<std::size_t>(s.recordStream)] = true;
+}
+
+void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs, shm::AudioRingWriter* shm,
+                    double qpcTime) {
     frames = std::clamp(frames, 0, kMaxBlockFrames);
     if (plan.generation != generation_) adopt(plan);
+    if (plan.take) recorded_.fill(false);
+    sampler_.render(frames);
 
     const auto bytes = static_cast<std::size_t>(frames) * sizeof(float);
     for (int c = 0; c < 2; ++c) {
@@ -135,7 +157,20 @@ void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs,
 
     for (const auto& t : plan.tracks) processStrip(t, frames, inputs, plan, shm);
 
-    if (plan.testToneGain > 0) {
+    if (plan.testToneGain > 0 && plan.testPulseSeconds > 0) {
+        // Bursts tied to QPC time, so that the recording can be compared with a screen flash.
+        constexpr double kBurst = 0.05, kRamp = 0.0005;
+        for (int i = 0; i < frames; ++i) {
+            const double t = qpcTime + i / kSampleRate;
+            const double inBurst = std::fmod(t, plan.testPulseSeconds);
+            if (inBurst >= kBurst) continue;
+            const double env = std::min({1.0, inBurst / kRamp, (kBurst - inBurst) / kRamp});
+            const double cycles = std::fmod(t * plan.testToneHz, 1.0);
+            const float v = plan.testToneGain * static_cast<float>(env * std::sin(2 * kPi * cycles));
+            (*acc_)[0][0][i] += v;
+            (*acc_)[0][1][i] += v;
+        }
+    } else if (plan.testToneGain > 0) {
         const double step = 2 * kPi * plan.testToneHz / kSampleRate;
         for (int i = 0; i < frames; ++i) {
             const float v = plan.testToneGain * static_cast<float>(std::sin(tonePhase_));
@@ -152,6 +187,14 @@ void Mixer::process(const MixPlan& plan, int frames, const float* const* inputs,
             float* dst = buses_[plan.cueBus][c].data();
             for (int i = 0; i < frames; ++i) dst[i] += cue_[c][i] * plan.cueGain;
         }
+
+    if (plan.take) {
+        // strips removed during the take keep their files going with silence
+        const int streams = static_cast<int>(plan.take->streams().size());
+        for (int i = 0; i < streams; ++i)
+            if (!recorded_[static_cast<std::size_t>(i)]) plan.take->pushSilence(i, frames);
+        plan.take->endBlock(frames);
+    }
 }
 
 void Mixer::processStrip(const StripPlan& s, int frames, const float* const* inputs, const MixPlan& plan,
@@ -180,10 +223,26 @@ void Mixer::processStrip(const StripPlan& s, int frames, const float* const* inp
             }
     }
 
+    // sampler input
+    if (s.samplerBank >= 0) {
+        const float* sl = sampler_.bus(s.samplerBank, 0);
+        const float* sr = sampler_.bus(s.samplerBank, 1);
+        if (ch == 1) {
+            for (int i = 0; i < frames; ++i) x[0][i] += (sl[i] + sr[i]) * 0.5f;
+        } else {
+            for (int i = 0; i < frames; ++i) {
+                x[0][i] += sl[i];
+                x[1][i] += sr[i];
+            }
+        }
+    }
+
     st.lowcut.process(x, ch, frames, s.lowcut, s.lowcutHz);
     st.highcut.process(x, ch, frames, s.highcut, s.highcutHz);
+    for (const auto& fx : s.fx) fx->process(x, ch, frames);
 
     if (shm && s.shmTap == Tap::Pre) writeShm(shm, s.id, x, ch, frames);
+    if (plan.take && s.recordStream >= 0 && s.recordTap == Tap::Pre) record(plan, s, x, ch, frames);
     if (s.cue)
         for (int c = 0; c < 2; ++c) addScaled(cue_[c].data(), x[std::min(c, ch - 1)], frames);
 
@@ -232,6 +291,7 @@ void Mixer::processStrip(const StripPlan& s, int frames, const float* const* inp
     }
 
     if (shm && s.shmTap == Tap::Post) writeShm(shm, s.id, post, 2, frames);
+    if (plan.take && s.recordStream >= 0 && s.recordTap == Tap::Post) record(plan, s, post, 2, frames);
 }
 
 } // namespace dc::mixd

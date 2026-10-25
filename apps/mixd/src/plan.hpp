@@ -4,13 +4,18 @@
 // the parameter tree and the open ports. Plans are immutable once handed to the engine; a parameter
 // change produces a new plan that the engine adopts at the next block boundary.
 
+#include "fx/effect.hpp"
 #include "ports.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace dc::mixd {
+
+class RecorderTake;
+struct SamplerTable;
 
 inline constexpr int kMaxStrips = 65;     // 0 = master, 1..64 = tracks
 inline constexpr int kMaxBlockFrames = 1024; // largest chunk the mixer processes at once
@@ -45,12 +50,20 @@ struct StripPlan {
     double lowcutHz = 80;
     bool highcut = false;
     double highcutHz = 18000;
+    std::vector<std::shared_ptr<FxSlot>> fx; // inserts after the filters, before the pre tap
     bool cue = false;
     std::vector<Destination> outputs;
     std::vector<SendPlan> sends;
     Tap shmTap = Tap::None; // export to shared memory slot id (pre: strip channels, post: stereo)
+    int samplerBank = -1;   // input from the sampler: -1 = none, 0 = all banks, 1..8 = one bank
+    int recordStream = -1;  // stream of MixPlan::take this strip is recorded to, -1 = not recorded
+    Tap recordTap = Tap::None;
     std::uint16_t meterId = 0;
 };
+
+// Per strip (0 = master, 1..64 = tracks): the effect slots the audio thread runs, in order. Slots
+// whose effect is not loaded (VST3 loading or failed) are left out.
+using FxRack = std::array<std::vector<std::shared_ptr<FxSlot>>, kMaxStrips>;
 
 struct MixPlan {
     std::uint64_t generation = 0;
@@ -63,8 +76,13 @@ struct MixPlan {
     float cueGain = 1;
     // per input port: room for kMaxBlockFrames interleaved frames, filled by the engine each block
     mutable std::vector<std::vector<float>> inputScratch;
+    std::shared_ptr<RecorderTake> take;           // per-track recording in progress (null = none)
+    std::shared_ptr<const SamplerTable> sampler; // pads (null = sampler unused)
     float testToneGain = 0; // diagnostics: a sine added to the master input (mixd --test-tone)
     double testToneHz = 1000;
+    // > 0: the test tone is a 50 ms burst starting at every multiple of this many seconds of QPC time
+    // (mixd --test-pulse; lines up with dc-av-flash for the A/V sync check of recordings)
+    double testPulseSeconds = 0;
 };
 
 } // namespace dc::mixd

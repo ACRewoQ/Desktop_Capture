@@ -1,11 +1,35 @@
 #include "engine.hpp"
 
+#include "dc/lanmedia/audio_receiver.hpp"
+#include "dc/lanmedia/audio_sender.hpp"
 #include "dc/shmaudio/clock.hpp"
 
 #include <algorithm>
 #include <cstring>
 
+#if defined(_M_X64) || defined(__SSE2__)
+#include <xmmintrin.h>
+#define DC_HAVE_MXCSR 1
+#endif
+
 namespace dc::mixd {
+
+namespace {
+
+// Flush denormals to zero while rendering: the tails of reverb, delay and the filters decay into
+// denormal floats, which cost 10-100x more CPU each on x86 (and plugins expect a host to do this).
+class DenormalGuard {
+public:
+#ifdef DC_HAVE_MXCSR
+    DenormalGuard() : saved_(_mm_getcsr()) { _mm_setcsr(saved_ | 0x8040); } // FTZ | DAZ
+    ~DenormalGuard() { _mm_setcsr(saved_); }
+
+private:
+    unsigned saved_;
+#endif
+};
+
+} // namespace
 
 double qpcSecondsNow() {
     static const double freq = static_cast<double>(shm::qpcFrequency());
@@ -50,6 +74,7 @@ void Engine::adoptPending() {
 
 void Engine::render(const OutputPort* clockPort, float* out, int frames, int outChannels, double time) {
     const double start = qpcSecondsNow();
+    const DenormalGuard denormals;
     adoptPending();
     if (out) std::memset(out, 0, static_cast<std::size_t>(frames) * static_cast<std::size_t>(outChannels) * sizeof(float));
     const MixPlan* plan = current_;
@@ -64,10 +89,11 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
         for (std::size_t i = 0; i < plan->inputs.size(); ++i) {
             auto& port = *plan->inputs[i];
             float* buf = plan->inputScratch[i].data();
-            port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
+            if (port.lan) port.lan->pull(buf, static_cast<std::size_t>(n), chunkTime);
+            else port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
             inputPtrs_[i] = buf;
         }
-        mixer_.process(*plan, n, inputPtrs_.data(), shm_);
+        mixer_.process(*plan, n, inputPtrs_.data(), shm_, start + done / kSampleRate);
 
         for (std::size_t b = 0; b < plan->buses.size(); ++b) {
             const float* l = mixer_.bus(static_cast<int>(b), 0);
@@ -88,7 +114,9 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
                     interleave_[static_cast<std::size_t>(2 * i)] = l[i];
                     interleave_[static_cast<std::size_t>(2 * i + 1)] = r[i];
                 }
-                plan->buses[b]->bridge.push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
+                auto& port = *plan->buses[b];
+                if (port.lan) port.lan->push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
+                else port.bridge.push(interleave_.data(), static_cast<std::size_t>(n), chunkTime);
             }
         }
 

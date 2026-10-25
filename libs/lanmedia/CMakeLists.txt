@@ -6,8 +6,15 @@ add_library(dc_lanmedia
     src/net_sim.cpp
     src/packet.cpp
     src/udp_transport.cpp
+    src/video_link.cpp
+    src/video_receiver.cpp
+    src/video_sender.cpp
+    src/video_sim.cpp
 )
 add_library(dc::lanmedia ALIAS dc_lanmedia)
 target_include_directories(dc_lanmedia PUBLIC include)
 target_link_libraries(dc_lanmedia PUBLIC dc::clocksync dc_asio PRIVATE dc::shmaudio dc_opus)
+if(WIN32)
+    target_link_libraries(dc_lanmedia PRIVATE avrt)
+endif()
 dc_apply_options(dc_lanmedia)

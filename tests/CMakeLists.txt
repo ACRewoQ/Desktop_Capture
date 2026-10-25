@@ -1,21 +1,26 @@
 add_executable(dc_tests
     test_clocksync.cpp
     test_codec.cpp
+    test_fx.cpp
     test_integration.cpp
     test_lanmedia.cpp
     test_meter.cpp
     test_mixd.cpp
+    test_mixd_lan.cpp
+    test_mixd_io.cpp
     test_param_store.cpp
     test_param_tree.cpp
+    test_recorder_sampler.cpp
     test_routing.cpp
     test_schema.cpp
     test_shm.cpp
     test_vcam.cpp
+    test_video.cpp
 )
 target_link_libraries(dc_tests PRIVATE dc::protocol dc::control dc::shmaudio dc::clocksync dc::lanmedia dc::mock_engine dc::mixd_core dc_vcam_headers Catch2::Catch2WithMain)
 dc_apply_options(dc_tests)
 if(TARGET capd_core)
-    target_sources(dc_tests PRIVATE test_capd.cpp)
+    target_sources(dc_tests PRIVATE test_capd.cpp test_capd_video.cpp)
     target_link_libraries(dc_tests PRIVATE capd_core)
 endif()
 

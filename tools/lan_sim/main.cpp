@@ -1,6 +1,9 @@
-// dc-lan-sim: offline check of the LAN media transport (audio streams).
+// dc-lan-sim: offline check of the LAN media transport (audio and video streams).
 //
-//   dc-lan-sim [--minutes N] [--scenario NAME] [--list] [--quiet]
+//   dc-lan-sim [--minutes N] [--scenario NAME] [--list] [--quiet] [--video]
+//
+// --video runs the video stream scenarios instead (H.264 access units through VideoSender /
+// VideoReceiver: fragmentation, loss, keyframe requests, joining viewers, sender restarts).
 //
 // Simulates one LAN audio stream for N minutes (default 10) per scenario: a sender PC recording a
 // tone, a network with delay, jitter, reordering, duplicates, loss and outages, and a receiver PC on
@@ -8,6 +11,7 @@
 // and listens for clicks. Exit code 0 when every scenario passes.
 
 #include "dc/lanmedia/net_sim.hpp"
+#include "dc/lanmedia/video_sim.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -28,25 +32,57 @@ const char* codecName(AudioCodec c) {
     return "?";
 }
 
+int runVideo(double minutes, const std::string& only) {
+    int failed = 0, ran = 0;
+    for (auto s : standardVideoScenarios()) {
+        if (!only.empty() && s.name != only) continue;
+        ++ran;
+        s.seconds = minutes * 60;
+        for (auto& e : s.events) e.atSec = std::min(e.atSec, s.seconds / 2);
+        std::printf("== %s: %d fps, keyframe %zu B, frame %zu B, link %.0f Mbit/s, delay %.1f ms + jitter %.2f ms, "
+                    "loss %.2f %%, %.0f min\n",
+                    s.name.c_str(), s.encoder.fps, s.encoder.keyframeBytes, s.encoder.frameBytes, s.linkMbps,
+                    s.network.baseDelayMs, s.network.jitterMeanMs, 100 * s.network.lossProbability, minutes);
+        std::fflush(stdout);
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto r = runVideoSimulation(s);
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  %s  (%.1f s)\n", r.verdict().c_str(), wall);
+        std::fflush(stdout);
+        if (!r.passed()) ++failed;
+    }
+    if (ran == 0) {
+        std::fprintf(stderr, "unknown scenario: %s\n", only.c_str());
+        return 2;
+    }
+    std::printf("\n%s (%d of %d video scenarios passed)\n", failed ? "SIMULATION FAILED" : "ALL SCENARIOS PASSED",
+                ran - failed, ran);
+    return failed ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     double minutes = 10;
     std::string only;
-    bool quiet = false;
+    bool quiet = false, video = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--minutes" && i + 1 < argc) minutes = std::atof(argv[++i]);
         else if (a == "--scenario" && i + 1 < argc) only = argv[++i];
         else if (a == "--quiet") quiet = true;
+        else if (a == "--video") video = true;
         else if (a == "--list") {
             for (const auto& s : standardScenarios()) std::printf("%s\n", s.name.c_str());
+            for (const auto& s : standardVideoScenarios()) std::printf("%s (--video)\n", s.name.c_str());
             return 0;
         } else {
-            std::fprintf(stderr, "usage: dc-lan-sim [--minutes N] [--scenario NAME] [--list] [--quiet]\n");
+            std::fprintf(stderr, "usage: dc-lan-sim [--minutes N] [--scenario NAME] [--list] [--quiet] [--video]\n");
             return 2;
         }
     }
+
+    if (video) return runVideo(minutes, only);
 
     int failed = 0, ran = 0;
     for (auto s : standardScenarios()) {

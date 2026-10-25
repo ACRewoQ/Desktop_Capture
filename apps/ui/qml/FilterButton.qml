@@ -1,7 +1,8 @@
 import QtQuick
 
 // Low cut / high cut: tap switches it on and off, a vertical drag changes the frequency
-// (logarithmic, up = higher). Vertical so that a sideways swipe still scrolls the strips.
+// (logarithmic, up = higher), a long press opens the keypad. Vertical so that a sideways swipe
+// still scrolls the strips.
 Rectangle {
     id: root
     property string label
@@ -11,6 +12,7 @@ Rectangle {
     property real maxHz: 20000
     signal toggled()
     signal hzMoved(real hz)
+    signal hzEntry()
 
     height: Theme.touch
     radius: Theme.radius
@@ -34,7 +36,7 @@ Rectangle {
         }
     }
 
-    TapHandler { id: tap; onTapped: root.toggled() }
+    TapHandler { id: tap; onTapped: root.toggled(); onLongPressed: root.hzEntry() }
     DragHandler {
         id: drag
         target: null

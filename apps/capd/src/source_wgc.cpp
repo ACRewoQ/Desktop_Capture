@@ -1,10 +1,13 @@
-// Windows.Graphics.Capture source (monitor capture). Uses a free-threaded frame pool that the video mix drains with
+// Windows.Graphics.Capture source (monitor or window capture). Uses a free-threaded frame pool that the video mix drains with
 // TryGetNextFrame(), so no dispatcher queue or message loop is needed. The newest surface is copied (GPU to GPU) into
 // our own texture so the pool buffer can be returned at once.
 
 #include "capture_source.hpp"
 
 #include <inspectable.h>
+
+#include <atomic>
+#include <mutex>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Metadata.h>
@@ -26,7 +29,7 @@ constexpr int kPoolBuffers = 2;
 
 class WgcSource final : public CaptureSource {
 public:
-    WgcSource(const Device& dev, const MonitorInfo& monitor) : dev_(dev) {
+    WgcSource(const Device& dev, HMONITOR monitor, HWND window, bool cursor) : dev_(dev), window_(window) {
         if (!wgc::GraphicsCaptureSession::IsSupported())
             throw std::runtime_error("Windows.Graphics.Capture is not supported on this system");
 
@@ -37,14 +40,18 @@ public:
         rtDevice_ = inspectable.as<wgd::Direct3D11::IDirect3DDevice>();
 
         auto interop = winrt::get_activation_factory<wgc::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-        DC_HR(interop->CreateForMonitor(monitor.monitor, winrt::guid_of<wgc::GraphicsCaptureItem>(),
-                                        winrt::put_abi(item_)));
+        if (window)
+            DC_HR(interop->CreateForWindow(window, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(item_)));
+        else
+            DC_HR(interop->CreateForMonitor(monitor, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(item_)));
+        // The window closed or the monitor was detached.
+        closedToken_ = item_.Closed([this](auto&&, auto&&) { closed_ = true; });
 
         size_ = item_.Size();
         pool_ = wgc::Direct3D11CaptureFramePool::CreateFreeThreaded(
             rtDevice_, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized, kPoolBuffers, size_);
         session_ = pool_.CreateCaptureSession(item_);
-        session_.IsCursorCaptureEnabled(true);
+        session_.IsCursorCaptureEnabled(cursor);
         // Win11: no yellow border. Older builds lack the property; Win10 shows the yellow border (accepted in the design).
         try {
             if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
@@ -61,6 +68,7 @@ public:
 
     ~WgcSource() override {
         try {
+            item_.Closed(closedToken_);
             session_.Close();
             pool_.Close();
         } catch (const winrt::hresult_error&) {
@@ -120,9 +128,12 @@ public:
     UINT height() const override { return height_; }
     std::int64_t frameQpc() const override { return frameQpc_; }
     std::uint64_t recoveries() const override { return recoveries_; }
+    // Closed is not always raised for a window item when the window goes away, so the handle is checked as well.
+    bool closed() const override { return closed_ || (window_ && !IsWindow(window_)); }
 
 private:
     Device dev_;
+    HWND window_ = nullptr;
     wgd::Direct3D11::IDirect3DDevice rtDevice_{nullptr};
     wgc::GraphicsCaptureItem item_{nullptr};
     wgc::Direct3D11CaptureFramePool pool_{nullptr};
@@ -133,17 +144,31 @@ private:
     std::int64_t frameQpc_ = 0;
     std::int64_t qpcFreq_ = 1;
     std::uint64_t recoveries_ = 0;
+    winrt::event_token closedToken_{};
+    std::atomic<bool> closed_{false};
 };
+
+void initApartment() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        } catch (const winrt::hresult_error&) {
+            // already initialised on this thread in another mode; WGC's free-threaded pool works either way
+        }
+    });
+}
 
 }  // namespace
 
-std::unique_ptr<CaptureSource> createWgcSource(const Device& dev, const MonitorInfo& monitor) {
-    static bool apartment = false;
-    if (!apartment) {
-        winrt::init_apartment(winrt::apartment_type::multi_threaded);
-        apartment = true;
-    }
-    return std::make_unique<WgcSource>(dev, monitor);
+std::unique_ptr<CaptureSource> createWgcSource(const Device& dev, const MonitorInfo& monitor, bool cursor) {
+    initApartment();
+    return std::make_unique<WgcSource>(dev, monitor.monitor, nullptr, cursor);
+}
+
+std::unique_ptr<CaptureSource> createWgcWindowSource(const Device& dev, HWND window, bool cursor) {
+    initApartment();
+    return std::make_unique<WgcSource>(dev, nullptr, window, cursor);
 }
 
 }  // namespace dc::capd

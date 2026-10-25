@@ -6,11 +6,13 @@ endif()
 
 add_library(capd_core STATIC
     src/settings.cpp
+    src/video_config.cpp
     src/audio_capture.cpp
     src/audio_encoder.cpp
     src/muxer.cpp
     src/recorder.cpp
-    src/engine_follower.cpp)
+    src/engine_follower.cpp
+    src/avsync.cpp)
 target_include_directories(capd_core PUBLIC src)
 target_link_libraries(capd_core PUBLIC dc::protocol dc::control dc::shmaudio dc::clocksync dc_ffmpeg Threads::Threads)
 if(WIN32)
@@ -22,9 +24,14 @@ if(WIN32)
         src/compositor.cpp
         src/video_encoder.cpp
         src/video_mix.cpp
+        src/video_source.cpp
+        src/source_mf.cpp
+        src/text_renderer.cpp
+        src/mix_test.cpp
         src/vcam_output.cpp
         src/fullscreen_output.cpp)
-    target_link_libraries(capd_core PUBLIC dc_vcam_sender d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32)
+    target_link_libraries(capd_core PUBLIC dc_vcam_sender d3d11 dxgi d3dcompiler windowsapp avrt shell32 ole32 d2d1 dwrite
+                                              windowscodecs dwmapi mfplat mfreadwrite mf mfuuid)
 endif()
 dc_apply_options(capd_core)
 if(MSVC)

@@ -47,6 +47,9 @@ public:
         LevelLRole,
         LevelRRole,
         ClipRole,
+        CueRole,
+        RecordRole,
+        FxCountRole,
     };
 
     StripModel(Connection& connection, Kind kind, QObject* parent = nullptr);
@@ -58,7 +61,8 @@ public:
     int count() const { return static_cast<int>(rows_.size()); }
     bool canAdd() const;
     int maxTracks() const;
-    int trackIdAt(int row) const;
+    Q_INVOKABLE int trackIdAt(int row) const;
+    Q_INVOKABLE QString inputTextAt(int row) const { return row >= 0 && row < count() ? inputText(row) : QString(); }
     int rowOfTrack(int trackId) const;
     // Edits not yet confirmed by the server (sent or waiting for the 60Hz slot).
     bool hasPendingEdits() const { return !overrides_.empty(); }
@@ -75,11 +79,23 @@ public:
     Q_INVOKABLE void setPan(int row, double pan);
     Q_INVOKABLE void toggleMute(int row);
     Q_INVOKABLE void toggleSolo(int row);
+    Q_INVOKABLE void toggleCue(int row);
+    Q_INVOKABLE void toggleRecord(int row);
     Q_INVOKABLE void toggleLowcut(int row);
     Q_INVOKABLE void toggleHighcut(int row);
     Q_INVOKABLE void setLowcutHz(int row, double hz);
     Q_INVOKABLE void setHighcutHz(int row, double hz);
     Q_INVOKABLE void clearClip(int row);
+
+    // What the input (tracks) or output (master) can be set to, for the picker: a list of
+    // {label, detail, kind, source, channel, selected} (tracks) or {label, detail, target, selected}
+    // (master), from /devices/. Multi-channel devices are offered per channel (mono track) or per
+    // pair (stereo track).
+    Q_INVOKABLE QVariantList inputChoices(int row) const;
+    Q_INVOKABLE QVariantList outputChoices() const;
+    // Kind, source and channel go in one Set, so that the engine never opens a half-changed input.
+    Q_INVOKABLE void setInput(int row, const QString& kind, const QString& source, int channel);
+    Q_INVOKABLE void setOutput(const QString& target); // master output 1
 
     // Tracks only.
     Q_INVOKABLE void addTrack(int channels);
@@ -106,6 +122,7 @@ private:
     QString inputText(int row) const;
 
     void edit(int row, const char* leaf, proto::Value v);
+    void editTogether(int row, std::vector<std::pair<const char*, proto::Value>> leaves);
     void flush();
     void sendCall(std::string method, proto::Args args, std::function<void(const proto::Result&)> then = {});
 

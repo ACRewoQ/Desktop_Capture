@@ -66,6 +66,7 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
 | `tools\lan_sim\Debug\dc-lan-sim.exe` | LAN 音声伝送のネットワーク模擬シミュレーター |
 | `tools\lan_tone\Debug\dc-lan-tone.exe` | LAN 音声伝送の送受信テスト（実 UDP、PC 間でも使える） |
+| `tools\audio_check\Debug\dc-audio-check.exe` | 録音ファイル（WAV / FLAC / MP3 / Ogg）の長さ・レベル・テストトーンの途切れを調べる |
 | `tests\Debug\dc_tests.exe` | テスト本体 |
 
 ### モックサーバーで遊ぶ
@@ -83,6 +84,7 @@ $cli = '.\build\windows\tools\dc_cli\Debug\dc-cli.exe'
 & $cli set /track/2/out/2/target track/1   # ルーティング
 & $cli call /mixer/track/add channels=1 name=Guest
 & $cli call /capture/record/start
+& $cli call /sampler/trigger pad=1   # サンプラー（モックは playing を切り替えるだけ）
 & $cli watch --meters                 # 差分・イベント・メーターを表示し続ける（Ctrl+C で終了）
 & $cli schema --markdown              # パラメーター一覧（docs/spec/protocol-params.md の元）
 ```
@@ -107,11 +109,24 @@ $env:PATH = "$env:DC_QT_DIR\bin;$env:PATH"
 | LC / HC（ローカット・ハイカット） | タップで入切、縦ドラッグで周波数 |
 | M / S | ミュート / ソロ |
 | トラックの追加 | 一番右の「+ ステレオ」「+ モノ」（最大 64） |
+| 入力の選択 | トラック名をタップしてメニューの「入力を選ぶ」。エンジンのデバイス一覧から選ぶ（多チャンネルのデバイスはモノトラックならチャンネルごと、ステレオなら 2 チャンネルずつ） |
+| マスターの出力先 | マスターの名前をタップ |
 | 移動・削除 | トラック名をタップしてメニュー（削除は 2 回押し） |
 | 録画 | 右上の「録画」ボタン。録画中は経過時間を表示し、もう一度押すと停止 |
 | クリップ表示 | メーター上の赤い印をタップで消す |
 
 `dc-ui --selftest --connect 127.0.0.1:<port>` は、つないだ先でトラックの追加・編集・削除、録画の開始・停止、メーター受信、画面の描画を自動で確かめて終了します（つないだ先の状態を変えるので、モックサーバー相手に使います）。
+
+### 本物のエンジンで 3 プロセスを動かす（G2 結合）
+
+`scripts\g2-integration.ps1` が mixd・capd・dc-ui を同時に起動して確かめます。mixd はマスターに同期パルス（`--test-pulse`、QPC 時刻の 2 秒ごとに 50ms の 1kHz）を流し、`dc-av-flash` が同じ瞬間に主モニターの左上を白くします。dc-ui は `--exercise` で、トラック1の入力を一覧から選び、録画を始め、全トラックのフェーダー・パン・フィルターを動かし続けてから録画を止めます。その間の `/system/xruns`、capd の落ちたフレーム数、録画ファイルの音ズレ（`capd avsync`）を見て、`build\g2\integration_<日時>.md` に表を作ります。
+
+```powershell
+.\scripts\g2-integration.ps1 -Minutes 5                       # 予行
+.\scripts\g2-integration.ps1 -Minutes 60 -Mode exclusive -Block 128
+```
+
+試験中は 2 秒ごとにビープが鳴るのでスピーカーを絞り、主モニターの左上を空けておきます。
 
 ### 共有メモリ音声を試す
 
@@ -136,7 +151,7 @@ $env:PATH = "$env:DC_QT_DIR\bin;$env:PATH"
 プロトコル・モックサーバー・共有メモリのライブラリは Windows API に依存しないので、Linux でもビルドとテストができます（Claude のクラウド環境での確認用）。Windows 専用の機能（WASAPI、WGC など）が入るフェーズ 2 以降は Windows が正です。
 
 ```bash
-sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev
+sudo apt install cmake ninja-build g++ pkg-config libasio-dev libmsgpack-cxx-dev catch2 libopus-dev libflac-dev
 cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 ```
 
@@ -150,9 +165,16 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 
 FFmpeg（avcodec・avformat と NVENC・AMF・QSV）は V3 で追加しました（Windows のみ、初回ビルドは約 10 分）。Qt 6 は V5 で導入しました（vcpkg ではなく `scripts\install-qt.ps1` でビルド済みを `C:\dev\Qt` に入れ、環境変数 `DC_QT_DIR` で見つけます。見つからなければ Qt を使うターゲットは飛ばします）。JUCE は V7 で導入方法を確かめました（下記の 7 章）。
 
-## 7. JUCE を使うターゲット（VST3 ホスト、V7）
+## 7. JUCE を使うターゲット（VST3 ホスト）
 
-JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。重いので既定ではビルドせず、オプション `DC_WITH_JUCE` を ON にしたプリセット `windows-juce` を使います。
+JUCE 9 は vcpkg ではなく CMake の FetchContent で取得します（`cmake/DcJuce.cmake`）。mixd の VST3 ホスト（P3 A1）が使うので、Windows ではオプション `DC_WITH_JUCE` が既定で ON です（`windows` プリセットが `DC_WITH_JUCE=ON` を渡すので、前からある build\windows でも `scripts\test.ps1` でビルドされ、初回は取得とビルドに 10 分ほどかかります）。Linux では既定 OFF で、試すときは次のようにします（X11 などの開発パッケージが必要、プラグインの画面を開く `vst3_probe_test_plugin` は xvfb では通りません）。
+
+```bash
+cmake -S . -B build/linux-juce -G Ninja -DDC_WITH_JUCE=ON && cmake --build build/linux-juce
+cd build/linux-juce && xvfb-run -a ctest -E vst3_probe_test_plugin
+```
+
+V7 の検証用プローブは今もプリセット `windows-juce` で動かせます。
 
 ```powershell
 .\scripts\vst3-probe.ps1 -SkipScan     # 取得・ビルド・ctest（vst3_* の 3 件）
