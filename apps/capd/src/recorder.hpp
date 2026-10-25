@@ -49,6 +49,9 @@ public:
 #ifdef _WIN32
     // mix may be null for an audio-only recording.
     Recorder(const RecordSettings& s, VideoMix* mix, std::string path, std::string shmSuffix = "");
+    // Audio only.
+    Recorder(const RecordSettings& s, std::string path, std::string shmSuffix)
+        : Recorder(s, nullptr, std::move(path), std::move(shmSuffix)) {}
 #else
     Recorder(const RecordSettings& s, std::string path, std::string shmSuffix = "");
 #endif
