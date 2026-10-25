@@ -187,8 +187,14 @@ void PreviewVideo::poll() {
 
 QSGNode* PreviewVideo::updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) {
 #ifdef _WIN32
-    // Render thread, GUI thread blocked. Returning another node (or none) makes Qt delete the old one.
+    // Render thread, GUI thread blocked. Qt does not drop a paint node that is not returned again: it
+    // stays in the tree (and kept drawing the old picture after a size change), so delete it here.
     Q_UNUSED(data);
+    auto* node = static_cast<PreviewNode*>(old);
+    const auto none = [&]() -> QSGNode* {
+        delete node;
+        return nullptr;
+    };
     QQuickWindow* w = window();
     QSGRendererInterface* ri = w ? w->rendererInterface() : nullptr;
     if (!ri || ri->graphicsApi() != QSGRendererInterface::Direct3D11) {
@@ -197,12 +203,12 @@ QSGNode* PreviewVideo::updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) 
             notD3D11_ = true;
         }
         QMetaObject::invokeMethod(this, &PreviewVideo::follow, Qt::QueuedConnection);
-        return nullptr;
+        return none();
     }
     auto* dev = static_cast<ID3D11Device*>(ri->getResource(w, QSGRendererInterface::DeviceResource));
     auto* ctx = static_cast<ID3D11DeviceContext*>(ri->getResource(w, QSGRendererInterface::DeviceContextResource));
     auto* rhi = static_cast<QRhi*>(ri->getResource(w, QSGRendererInterface::RhiResource));
-    if (!dev || !ctx || !rhi) return nullptr;
+    if (!dev || !ctx || !rhi) return none();
     {
         std::lock_guard lock(adapterMutex_);
         if (!haveAdapter_) {
@@ -217,10 +223,11 @@ QSGNode* PreviewVideo::updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) 
         std::lock_guard lock(decoderMutex_);
         if (decoder_) ring = decoder_->ring();
     }
-    if (!ring) return nullptr;
+    if (!ring) return none();
 
-    auto* node = static_cast<PreviewNode*>(old);
     if (!node || node->ring() != ring.get()) {
+        delete node;  // a new size: a new ring
+        node = nullptr;
         try {
             node = new PreviewNode(ring, dev, rhi, w);
         } catch (const std::exception& e) {
