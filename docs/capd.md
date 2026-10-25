@@ -31,6 +31,9 @@
 - 保存：MKV（既定、途中で止まっても再生できる）または MP4。書き込みは専用スレッド
 - レート制御：VBR / CBR / CQP（エンコーダーの種類ごとのオプションに対応づけ）
 - エンジン追従（`capd` を引数なしで起動）：エンジンにサービスとして接続し、`/capture/state` の `starting` で録画を始めて `/capture/report` で `recording` を返し、`stopping` でファイルを閉じて `idle` を返す。失敗は `error` と理由を返す（`docs/spec/protocol.md` 5.4.1）。接続は1秒ごとに再試行し、録画中に切れたら録画を閉じる
+- 出力先（エンジン追従のとき）：`/video/vcam/mix`（仮想カメラ、`docs/vcam.md`）と `/video/monitor/mix`・`display`（全画面表示）のミックスに出力をつなぎ、状態を `/video/output/report` で返す（`protocol.md` 5.4.4。仮想カメラは `active` / `waiting` / `unavailable`、全画面は `active` / `no_display` / `error`）。モニターが外れたら全画面だけ止まり、戻れば自動で再開する
+- GPU リセット：映像エンジンがデバイスを作り直す間に録画中のファイルを閉じ、新しいデバイスで新しいファイル（同じ名前があれば `_2` を付ける）を開いて `/capture/report` `recording` + `reason="gpu_reset"` を返す（エンジンは `capture.segment` を配る）。15 秒たっても GPU が戻らなければ `error`
+- ディスク：録画の 30 秒分（最低 256MB）を予備として残す。空きがその 2 倍ないと開始を断り、録画中に予備を切ったら安全に止めてファイルを閉じる
 
 ## 時刻のそろえ方
 
@@ -64,9 +67,8 @@ mixd ができるまでは `dc-mock-server --capd` がエンジンの代わり�
 
 | 項目 | 予定 |
 |---|---|
-| GPU リセット時に新しいファイルで続ける | P3（B2+B3）。ミキサー側の作り直しは B1 でできている |
 | LAN 映像ストリームのソース | レーン N（今は `error` を報告する） |
-| プレビュー配信・仮想カメラ・全画面出力 | P3 / P4（ミックスの「出力先」として足す） |
+| プレビュー・LAN 映像の送出（`/video/preview`・`/video/lan`） | レーン N（`lan::VideoOutput` を出力先としてつなぐ） |
 
 ## 構成
 

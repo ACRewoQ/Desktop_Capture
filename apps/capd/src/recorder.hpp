@@ -85,6 +85,7 @@ private:
 
 #ifdef _WIN32
     VideoMix* mix_ = nullptr;
+    const void* videoDevice_ = nullptr;  // the mix's device when recording started (frames of another are skipped)
     std::unique_ptr<VideoEncoder> videoEncoder_;
     std::unique_ptr<Converter> converter_;
     int videoStream_ = -1;

@@ -86,6 +86,7 @@ void Recorder::start() {
         bool changed = false;
         v.codec = effectiveCodec(v, &changed);
         if (changed) log_.push_back("H.264 above 2560x1440 uses most of the encoder; recording in HEVC instead");
+        videoDevice_ = mix_->device().device.Get();
         videoEncoder_ = openVideoEncoder(mix_->device(), v, globalHeader, &log_);
         converter_ = std::make_unique<Converter>(mix_->device(), static_cast<UINT>(v.width),
                                                  static_cast<UINT>(v.height), static_cast<UINT>(v.fps));
@@ -120,8 +121,12 @@ void Recorder::start() {
         const std::int64_t freq = shm::qpcFrequency();
         const std::int64_t fps = settings_.video.fps;
         const auto keyEvery = static_cast<std::int64_t>(settings_.forceKeyframeSeconds * double(fps));
-        consumerId_ = mix_->addConsumer([this, freq, fps, keyEvery](ID3D11Texture2D* canvas, std::int64_t,
-                                                                    std::int64_t qpc) {
+        consumerId_ = mix_->addFrameConsumer([this, freq, fps, keyEvery](const MixFrame& f) {
+            // After a GPU reset the canvas lives on a new device this encoder cannot use: the follower starts a
+            // new file (segment) on it.
+            if (f.device->device.Get() != videoDevice_) return;
+            ID3D11Texture2D* canvas = f.canvas;
+            const std::int64_t qpc = f.qpc;
             if (qpc < startQpc_) return;
             // Frame number on the recording's time line; a mix faster than the recording skips ticks.
             const auto pts = static_cast<std::int64_t>(
