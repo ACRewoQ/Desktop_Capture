@@ -1,5 +1,6 @@
 add_library(dc_protocol
     src/codec.cpp
+    src/control.cpp
     src/defaults.cpp
     src/fx.cpp
     src/lan.cpp

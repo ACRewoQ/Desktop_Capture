@@ -23,6 +23,8 @@ P2 レーンA の骨格と P3 レーン A2（入出力の拡張）。設計書�
 | `recorder` | トラック別録音のテイク：ファイルごとのロックフリー FIFO と書き込みスレッド | 音声（書き込み）、ディスク |
 | `audio_file` | 24bit WAV / FLAC の書き出し、WAV / FLAC / MP3 / Ogg Vorbis の読み込みと 48kHz への変換 | ディスク、読み込み |
 | `sampler` | パッドの発音（ボイス、モード、バンクごとのバス）と読み込みスレッド | 音声、読み込み |
+| `control_bindings` | ホットキーと MIDI の割り当て（`/control/*`）：状態の検査、ホットキーの登録、MIDI 入力の一覧と開閉、動作の実行、学習、保存（`%APPDATA%\DesktopCapture\mixd-control.txt`） | 制御 |
+| `control_input_win` / `control_input_fake` | エンジンの PC のキーボード（`RegisterHotKey`、学習中だけ低レベルキーボードフック）と MIDI 入力（winmm）。テスト用の偽物 | ホットキー用スレッド、MIDI ドライバー |
 
 JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台と出力1台を1本のスレッドで組にし、エンドポイント ID も公開しないので、「トラックごとに別の入力デバイス」に合わない。JUCE は VST3 ホストだけに使う（内蔵エフェクトは自前）。
 
@@ -123,6 +125,18 @@ docs/spec/protocol.md 5.4.3 のとおり。
 - 各バンクがステレオのバスに鳴り、`input/kind = sampler` のトラックが全バンクの和か 1 バンクを入力に足す（トラックのフィルター・録音・キューの前）。
 - `playing` はメーターと同じ約 30Hz で、変わったパッドだけ配る。
 
+## ホットキーと MIDI
+
+docs/spec/protocol.md 5.9 のとおり（P4 C7）。
+
+- 割り当てが変わるたびと、トラック・映像ミックス・エフェクトが増減するたびに全部の割り当てを検査し直し、`state`・`error` を書く。同じキーの組み合わせは 1 回だけ登録し、全部の割り当てに配る。
+- ホットキーはメッセージ専用ウィンドウを持つ専用スレッドで `RegisterHotKey`。押されたら 15ms ごとに `GetAsyncKeyState` を見て離したことを知る（パッドの「押す間」用）。`step` の割り当てがあるキーだけ自動の繰り返しを受ける。他のアプリが持っている組み合わせは `conflict` で、3 秒ごとに登録し直してみる。
+- 学習中だけ `WH_KEYBOARD_LL` のフックを入れ、修飾キー以外のキーが押された瞬間の修飾の状態で組み合わせを決める。そのキーの押下と離しは他のアプリに渡さない。
+- MIDI 入力は 3 秒ごと（と `/devices/refresh`）に一覧を取り直し、`enabled` の機器を開く。他のアプリが開いていると `busy`（`MMSYSERR_ALLOCATED`）で、次の見直しで開き直す。消えた機器は閉じる。
+- ボタンとして使う CC とノートは、押した・離したの変わり目だけで動く（127 を 2 回送るパッドでも 1 回）。`param` の値は割り当てごとに約 60Hz に間引き、最初の値はすぐ反映する。
+- 動作はクライアント名 `control` の Set / Call として、クライアントと同じ検査を通す（`ControlServer::applyLocalSet`・`callLocal`）。
+- `mixd --control-store FILE` で保存ファイルを変える。`--no-hotkeys` はホットキーも MIDI も使わない（割り当ては `unsupported`。本物のエンジンと並べて試験するとき）。
+
 ## 共有と排他
 
 `/system/audio_mode`：
@@ -161,4 +175,6 @@ docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/sta
 - A2 の実機試験：`scripts\a2-io.ps1 -Cases list,process,rate,asio,vmic,unplug`（詳細はスクリプト冒頭）。
 - `[recorder]` `[sampler]` のテスト（tests/test_recorder_sampler.cpp）：WAV / FLAC の往復、リサンプラー、パッドのモード、テイクの長さ、制御サーバー越しの録音とサンプラー。
 - A3 の実機確認：`scripts\a3-check.ps1`（`-Minutes`、`-Formats`、`-InputDevice`）。テストトーン入りのマスターと、サンプラー・入力のトラックをフェーダーを動かしながら録音し、全ファイルの長さ・欠落・xrun・トーンの途切れを調べる。続けて Windows の効果音 16 個をパッドに読み込み、各モードの動きを確かめる。
+- `[control]` のテスト（tests/test_control.cpp）：きっかけの読み書き、キー名、MIDI の解読、割り当ての検査、MIDI の値の当てはめ、偽のキーボード・MIDI での実行・conflict・学習・機器の開閉・保存と読み込み。
+- C7 の実機確認：`scripts\c7-control.ps1`（`-Midi` で MIDI 機器の学習も）。SendInput でキーを押して、ホットキー・自動の繰り返し・conflict・学習・無効・再起動後の復元を確かめる。
 - G2「バッファ128〜256で音切れなし」：`scripts\g2-engine.ps1`（`-Device` で出力、`-WithInput -InputDevice` で入力を選ぶ）。xrun のログ行には時刻、ストリームごとの実測レート、ブリッジの比率、入力欠落の様子が出る。1kHz のテストトーンをマスターに流し、共有モードはループバックの正弦波フィットで音切れを数え、両モードで `/system/xruns`（デバイスの欠落、周期の取りこぼし、ブリッジのアンダーラン）と `/system/cpu_load` を記録する。

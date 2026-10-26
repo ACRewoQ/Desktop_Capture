@@ -19,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -37,6 +38,7 @@ public:
         bool verbose = true;
         PluginHost* plugins = nullptr; // VST3 host, null when the build has none
         LanService* lan = nullptr; // LAN streams, inputs and pairing (optional)
+        std::function<void()> onDevicesRefresh; // /devices/refresh also looks for MIDI inputs
     };
 
     Controller(asio::io_context& io, control::ControlServer& server, DeviceManager& devices, Engine& engine,

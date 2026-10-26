@@ -355,6 +355,32 @@ void ControlServer::handleCall(const std::shared_ptr<Session>& s, const Call& ca
     s->send(result);
 }
 
+Result ControlServer::applyLocalSet(const Set& set, const std::string& clientName) {
+    auto outcome = store_.applySet(set, clientName);
+    if (outcome.delta) emitDelta(*outcome.delta);
+    return outcome.result;
+}
+
+Result ControlServer::callLocal(const Call& call, const ClientInfo& client) {
+    const CallHandler* handler = isValidPath(call.method) ? findHandler(call.method) : nullptr;
+    Result result;
+    if (!handler) {
+        result.code = ErrorCode::UnknownMethod;
+        result.message = "unknown method " + call.method;
+    } else {
+        CallContext ctx{call, client, *this};
+        try {
+            result = (*handler)(ctx);
+        } catch (const std::exception& e) {
+            result = {};
+            result.code = ErrorCode::Internal;
+            result.message = e.what();
+        }
+    }
+    result.id = call.id;
+    return result;
+}
+
 void ControlServer::broadcast(const Message& msg) {
     auto frame = std::make_shared<Bytes>(encodeFrame(msg));
     auto copy = sessions_; // sending may close a session and modify the map

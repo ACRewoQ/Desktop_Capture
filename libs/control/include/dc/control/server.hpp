@@ -98,6 +98,11 @@ public:
                     std::uint64_t originId = 0, const std::string& originClient = {});
     void broadcastEventNow(const proto::Event& ev);
 
+    // Network-thread only: a Set or a method call made inside the engine on behalf of a local input
+    // (hotkeys, MIDI). Checked exactly like a client's; the deltas are broadcast as usual.
+    proto::Result applyLocalSet(const proto::Set& set, const std::string& clientName);
+    proto::Result callLocal(const proto::Call& call, const ClientInfo& client);
+
     // Thread-safe wrappers that post to the network thread.
     void publish(std::vector<proto::Change> changes, std::vector<std::string> removed = {});
     void broadcastEvent(proto::Event ev);

@@ -37,18 +37,53 @@ std::string trackBase(int n) { return "/track/" + std::to_string(n); }
 
 MockEngine::MockEngine(asio::io_context& io, control::ControlServer& server, Options options)
     : io_(io), server_(server), options_(options), meterTimer_(io), recordTimer_(io),
-      fx_(io, server, &plugins_, nullptr, false) {}
+      fx_(io, server, &plugins_, nullptr, false), learnTimer_(io) {}
 
 void MockEngine::start() {
     seed();
     registerMethods();
     fx_.start();
+    midi_.setDevices({"nanoKONTROL2", "Launchpad Mini"});
+    mixd::ControlBindings::Options bo;
+    bo.verbose = false;
+    bindings_ = std::make_unique<mixd::ControlBindings>(io_, server_, keys_, midi_, bo);
+    bindings_->start();
+    auto bind = [&](int n, const char* trigger, const char* device, const char* action, const char* target, const char* value) {
+        const std::string b = "/control/binding/" + std::to_string(n) + "/";
+        server_.publishNow({{b + "trigger", std::string(trigger)}, {b + "device", std::string(device)},
+                            {b + "action", std::string(action)}, {b + "target", std::string(target)},
+                            {b + "value", std::string(value)}, {b + "enabled", true}, {b + "state", std::string("off")},
+                            {b + "error", std::string()}});
+    };
+    bind(1, "key:ctrl+shift+r", "", "record_toggle", "", "");
+    bind(2, "midi:note/1/36", "Launchpad Mini", "pad", "1", "");
+    bind(3, "midi:cc/1/0", "nanoKONTROL2", "param", "/track/1/volume_db", "");
+    bind(4, "key:ctrl+1", "", "set", "/video/mix/1/program_scene", "1");
+    bind(5, "key:f13", "", "toggle", "/track/9/mute", "");
+    keys_.setTaken({{proto::ctl::ModCtrl, '1'}}); // binding 4 shows a conflict
     if (options_.meters) scheduleMeters();
+}
+
+void MockEngine::onDelta(const proto::Delta& delta) {
+    fx_.onDelta(delta);
+    if (bindings_) bindings_->onDelta(delta);
+    for (const auto& c : delta.changes) {
+        if (c.path != "/control/learn/binding" || c.value == Value{std::int64_t{0}}) continue;
+        // someone presses something on the "engine PC" a moment later
+        learnTimer_.expires_after(std::chrono::milliseconds(800));
+        learnTimer_.async_wait([this](const asio::error_code& ec) {
+            if (ec || stopped_) return;
+            if (server_.store().tree().getAs<std::string>("/control/learn/source") == "key") keys_.learn("key:ctrl+alt+f5");
+            else midi_.send("nanoKONTROL2", 0xB0, 16, 100);
+        });
+    }
 }
 
 void MockEngine::stop() {
     asio::post(io_, [this] {
         stopped_ = true;
+        learnTimer_.cancel();
+        if (bindings_) bindings_->stop();
         fx_.stop();
         meterTimer_.cancel();
         recordTimer_.cancel();

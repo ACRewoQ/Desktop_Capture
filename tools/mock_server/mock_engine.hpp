@@ -1,5 +1,6 @@
 #pragma once
 
+#include "control_bindings.hpp"
 #include "fx_manager.hpp"
 #include "mock_plugins.hpp"
 
@@ -9,6 +10,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 
 namespace dc::mock {
 
@@ -31,8 +33,8 @@ public:
     // Seeds the tree and starts timers. Call once before running the io_context.
     void start();
     void stop();
-    // ControlServer::Options::onDelta: effect parameter / bypass / editor changes.
-    void onDelta(const proto::Delta& delta) { fx_.onDelta(delta); }
+    // ControlServer::Options::onDelta: effect parameter / bypass / editor changes, bindings.
+    void onDelta(const proto::Delta& delta);
 
 private:
     void seed();
@@ -59,6 +61,11 @@ private:
     bool stopped_ = false;
     MockPluginHost plugins_;
     mixd::FxManager fx_;
+    // hotkeys and MIDI: the engine's bindings with pretend inputs; learning completes by itself
+    mixd::FakeHotkeys keys_;
+    mixd::FakeMidi midi_;
+    std::unique_ptr<mixd::ControlBindings> bindings_;
+    asio::steady_timer learnTimer_;
 };
 
 } // namespace dc::mock

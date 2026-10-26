@@ -63,6 +63,7 @@ set(DC_UI_QML
     CapturePage.qml
     SamplerPage.qml
     LanPage.qml
+    ControlPage.qml
     # mixer
     Strip.qml
     Fader.qml
@@ -88,6 +89,9 @@ set(DC_UI_QML
     SourceSheet.qml
     # sampler
     PadSheet.qml
+    # hotkeys and MIDI
+    Bindings.qml
+    BindingSheet.qml
     # shared parts
     MenuButton.qml
     Toast.qml
@@ -116,7 +120,7 @@ list(TRANSFORM DC_UI_QML PREPEND qml/ OUTPUT_VARIABLE DC_UI_QML_FILES)
 foreach(f IN LISTS DC_UI_QML)
     set_source_files_properties(qml/${f} PROPERTIES QT_RESOURCE_ALIAS ${f})
 endforeach()
-set_source_files_properties(qml/Theme.qml qml/Sheets.qml qml/Video.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/Theme.qml qml/Sheets.qml qml/Video.qml qml/Bindings.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(dc-ui
     URI DcUi
     VERSION 1.0
