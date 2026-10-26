@@ -10,11 +10,15 @@
 #include "lan_store.hpp"
 
 #include "dc/control/client.hpp"
+#include "dc/lanmedia/audio_link.hpp"
 #include "dc/protocol/lan.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -253,6 +257,110 @@ TEST_CASE("two engines: a bus sent as a LAN stream plays on the other engine's t
     // forgetting the peer removes it (it was added by address)
     REQUIRE(cb->call("/lan/peers/forget", {{"id", idA}}).get().code == proto::ErrorCode::Ok);
     CHECK(waitFor(*cb, [](const proto::ParamTree& t) { return !t.contains("/lan/peers/1/id"); }));
+}
+
+TEST_CASE("four remote controllers at once: the same tree, monitor audio each, a fifth refused", "[mixd][lan][integration]") {
+    Rig a;
+    auto ca = a.local();
+    // the master (line tone) also goes to LAN stream 1 in Opus: the remotes' monitor audio
+    REQUIRE(setOk(*ca, {{"/track/1/input/kind", std::string("device")},
+                        {"/track/1/input/source", std::string("fake-line")},
+                        {"/lan/stream/1/codec", std::string("opus")},
+                        {"/master/out/2/target", std::string("lan/1")}}) == proto::ErrorCode::Ok);
+
+    struct Remote {
+        std::unique_ptr<control::ControlClient> client;
+        std::unique_ptr<lan::AudioInput> monitor;
+        std::atomic<float> peak{0};
+    };
+    std::vector<std::unique_ptr<Remote>> remotes;
+    auto open = [&](const std::string& name, std::string* err = nullptr) {
+        control::ControlClient::Options o;
+        o.port = a.server->port();
+        o.clientName = name;
+        o.clientId = name;
+        o.role = proto::ClientRole::Remote;
+        auto c = std::make_unique<control::ControlClient>(o);
+        return c->connect(3s, err) ? std::move(c) : nullptr;
+    };
+    for (int i = 0; i < 4; ++i) {
+        auto r = std::make_unique<Remote>();
+        r->client = open("remote-" + std::to_string(i));
+        REQUIRE(r->client);
+        lan::AudioInput::Options ao;
+        ao.bindAddress = "127.0.0.1";
+        r->monitor = std::make_unique<lan::AudioInput>(ao);
+        REQUIRE(r->client->call("/lan/subscribe", {{"stream", std::string("audio/1")},
+                                                   {"port", std::int64_t{r->monitor->localPort()}}}).get().code ==
+                proto::ErrorCode::Ok);
+        remotes.push_back(std::move(r));
+    }
+    CHECK(waitFor(*ca, [](const proto::ParamTree& t) {
+        return t.getAs<std::int64_t>("/remote/clients") == 4 && t.getAs<std::int64_t>("/lan/stream/1/subscribers") == 4;
+    }));
+
+    // a fifth is refused while four are connected
+    std::string err;
+    CHECK_FALSE(open("remote-5", &err));
+    CHECK(err.find("too many remote controllers") != std::string::npos);
+
+    // every remote plays the master (each pulled like an audio device, 10 ms blocks)
+    std::atomic<bool> playing{true};
+    std::thread audio([&] {
+        std::vector<float> buf(480 * 2);
+        auto next = std::chrono::steady_clock::now();
+        while (playing) {
+            for (auto& r : remotes) {
+                if (!r->monitor) continue;
+                r->monitor->pull(buf.data(), 480, lan::nowSeconds());
+                float p = 0;
+                for (float v : buf) p = std::max(p, std::abs(v));
+                if (p > r->peak.load()) r->peak = p;
+            }
+            next += 10ms;
+            std::this_thread::sleep_until(next);
+        }
+    });
+    std::this_thread::sleep_for(1500ms);
+    for (auto& r : remotes) r->peak = 0;
+    std::this_thread::sleep_for(500ms);
+    for (auto& r : remotes) CHECK(r->peak.load() == Approx(0.25).margin(0.05));
+
+    // each remote changes something; all five clients end up with the same tree
+    REQUIRE(setOk(*remotes[0]->client, {{"/track/1/volume_db", -6.0}}) == proto::ErrorCode::Ok);
+    REQUIRE(setOk(*remotes[1]->client, {{"/track/1/pan", 0.5}}) == proto::ErrorCode::Ok);
+    REQUIRE(setOk(*remotes[2]->client, {{"/master/volume_db", -3.0}}) == proto::ErrorCode::Ok);
+    REQUIRE(setOk(*remotes[3]->client, {{"/track/1/mute", true}}) == proto::ErrorCode::Ok);
+    auto same = [&] {
+        for (int tries = 0; tries < 100; ++tries) {
+            const auto ref = ca->tree();
+            bool all = ref.getAs<bool>("/track/1/mute") == true;
+            for (auto& r : remotes)
+                if (r->client && !(r->client->tree() == ref)) all = false;
+            if (all) return true;
+            std::this_thread::sleep_for(20ms);
+        }
+        return false;
+    };
+    CHECK(same());
+    CHECK(remotes[3]->client->tree().getAs<double>("/track/1/volume_db") == Approx(-6.0));
+    CHECK(remotes[0]->client->tree().getAs<double>("/track/1/pan") == Approx(0.5));
+
+    // one leaves: its subscription goes, the others keep playing, and a new one may come in
+    remotes[1]->client.reset();
+    CHECK(waitFor(*ca, [](const proto::ParamTree& t) {
+        return t.getAs<std::int64_t>("/remote/clients") == 3 && t.getAs<std::int64_t>("/lan/stream/1/subscribers") == 3;
+    }));
+    REQUIRE(setOk(*ca, {{"/track/1/mute", false}}) == proto::ErrorCode::Ok);
+    std::this_thread::sleep_for(500ms);
+    for (auto& r : remotes) r->peak = 0;
+    std::this_thread::sleep_for(500ms);
+    CHECK(remotes[0]->peak.load() == Approx(0.25 * std::pow(10.0, -6.0 / 20) * std::pow(10.0, -3.0 / 20)).margin(0.05));
+    CHECK(remotes[1]->peak.load() < 0.01);
+    auto fifth = open("remote-5");
+    CHECK(fifth);
+    playing = false;
+    audio.join();
 }
 
 TEST_CASE("pairing: LAN clients need a code once, then their token", "[mixd][lan][integration]") {

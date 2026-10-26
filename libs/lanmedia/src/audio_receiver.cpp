@@ -11,6 +11,7 @@ namespace {
 constexpr std::size_t kHistoryFrames = 2048; // insertions repeat at most half of this at once
 constexpr std::size_t kCrossfadeFrames = 96; // PCM: concealment -> real audio
 constexpr std::size_t kSkipFadeFrames = 64;
+constexpr std::size_t kOpusPlcFrames = 1920; // Opus: the codec's own concealment for 40 ms, then a fade
 constexpr std::size_t kBadRunResync = 8;     // consecutive packets far outside the play window
 
 } // namespace
@@ -291,7 +292,18 @@ void AudioReceiver::decodeNext() {
             const Slot* next = slotFor(pos + n);
             if (next->used && next->pos == pos + n) rebuilt = decoder_->decodeFec({next->data, next->size}, decodeBuf_.data());
             if (rebuilt) ++fec_;
-            else decoder_->conceal(decodeBuf_.data());
+            else {
+                decoder_->conceal(decodeBuf_.data());
+                // libopus keeps extrapolating a stopped stream for a long time: fade it out as PCM does
+                if (missRun_ * n > kOpusPlcFrames) {
+                    const double fade = std::max(1.0, cfg_.concealFadeMs * cfg_.nominalRate / 1000.0);
+                    for (std::size_t i = 0; i < n; ++i) {
+                        const float g = float(concealGain_);
+                        for (std::size_t c = 0; c < ch; ++c) decodeBuf_[i * ch + c] *= g;
+                        concealGain_ = std::max(0.0, concealGain_ - 1.0 / fade);
+                    }
+                }
+            }
         } else {
             concealPcm(decodeBuf_.data(), n);
         }
