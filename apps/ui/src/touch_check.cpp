@@ -6,6 +6,7 @@
 #include <QPointingDevice>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QtGui/private/qhighdpiscaling_p.h>
 #include <qpa/qwindowsysteminterface.h>
 
 #include <cmath>
@@ -48,8 +49,9 @@ private:
             p.id = int(i);
             p.state = state;
             p.pressure = state == QEventPoint::State::Released ? 0 : 1;
+            // the platform plugin reports touches in native (device) pixels: 150 % scaling on Windows
             p.area = QRectF(0, 0, 4, 4);
-            p.area.moveCenter(window_->mapToGlobal(at[i]));
+            p.area.moveCenter(QHighDpi::toNativeGlobalPosition(window_->mapToGlobal(at[i]), window_));
             points << p;
         }
         QWindowSystemInterface::handleTouchEvent<QWindowSystemInterface::SynchronousDelivery>(window_, device_, points);

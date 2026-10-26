@@ -112,7 +112,8 @@ int runMeasure(QQuickWindow* window, PreviewStream& stream, MonitorAudio* monito
         return failures;
     }
     const bool showing = waitUntil([&] { return video->showing(); }, 15000);
-    check(showing, QStringLiteral("preview picture shown (%1)").arg(video->error().isEmpty() ? stream.statusText() : video->error()));
+    check(showing, showing ? QStringLiteral("preview picture shown (%1 frames received)").arg(stream.frames())
+                           : QStringLiteral("preview picture shown (%1)").arg(video->error().isEmpty() ? stream.statusText() : video->error()));
     if (!showing) return failures;
     check(waitUntil([&] { return stream.clockKnown(); }, 5000), QStringLiteral("engine clock offset known"));
     sleepMs(2000);  // past the first keyframe and the decoder start

@@ -40,10 +40,11 @@ MonitorAudio::MonitorAudio(Connection& connection, Options options, QObject* par
         follow();
     });
     connect(&connection_, &Connection::stateChanged, this, [this] {
+        // The engine forgets the subscription with the connection (and may have restarted): start the
+        // receiver over, so the loss shown afterwards is not the gap while away.
         if (!connection_.ready()) {
             subscription_ = 0;
-            ++generation_;
-            requesting_ = false;
+            close();
         }
         follow();
     });

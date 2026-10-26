@@ -49,6 +49,10 @@ $mixd = Join-Path $bin 'apps/mixd/Release/mixd.exe'
 $capd = Join-Path $bin 'apps/capd/Release/capd.exe'
 $ui = Join-Path $bin 'apps/ui/Release/dc-ui.exe'
 $cli = Join-Path $bin 'tools/dc_cli/Release/dc-cli.exe'
+# dc-ui needs the Qt DLLs: from DC_QT_DIR unless they were deployed next to it (as in scripts\test.ps1).
+if ($env:DC_QT_DIR -and -not (Test-Path (Join-Path (Split-Path $ui) 'Qt6Core.dll'))) {
+    $env:PATH = (Join-Path $env:DC_QT_DIR 'bin') + ';' + $env:PATH
+}
 $port = 47800
 $out = Join-Path $root "build/g4/$((Get-Date).ToString('yyyyMMdd_HHmmss'))"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
@@ -89,11 +93,11 @@ try {
     Write-Host "`n=== setup ===" -ForegroundColor Cyan
     $procs.mixd = Start-Logged $mixd @('--port', $port, '--allow-remote', '--test-tone', '440', '--lan-store', "`"$LanStore`"") 'mixd'
     if (-not (Wait-Until { Get-Param '/system/version' } 15)) { throw 'mixd did not start' }
-    $cable = & $cli --port $port snapshot /devices/output | Where-Object { $_ -match '/name = "CABLE Input' } | Select-Object -First 1
-    if ($cable -match '^/devices/output/(\d+)/name') {
-        $cableId = Get-Param "/devices/output/$($Matches[1])/id"
-        Set-Param '/master/out/1/target' "vmic/$cableId"
-    }
+    # as scripts\g3-integration.ps1 picks it: "out  ok  ... CABLE Input ... [<id>]"
+    $cable = & $mixd --list-devices | Where-Object { $_ -like 'out *' -and $_ -like '* ok *' -and $_ -like '*CABLE Input*' } |
+             Select-Object -First 1
+    if ($cable -and $cable -match '\[(.+)\]$') { Set-Param '/master/out/1/target' "vmic/$($Matches[1])" }
+    else { Write-Warning 'VB-CABLE (CABLE Input) not found: the test tone plays on the default output' }
     Set-Param '/lan/stream/1/name' 'Monitor'
     Set-Param '/lan/stream/1/codec' 'opus'
     Set-Param '/master/out/2/target' 'lan/1'
