@@ -15,6 +15,7 @@
 | `apps/mixd` | 音声エンジン（設定の正本を持つ）。P0 は空の骨格 |
 | `apps/capd` | キャプチャー（画面取得・合成・エンコード・録画）。P2 で録画の骨格（[docs/capd.md](docs/capd.md)） |
 | `apps/ui` | UI（ローカル／リモート共通、Qt 6 Quick 予定）。P0 は仮の実行ファイル |
+| `apps/tray` | 通知領域の常駐アプリ dc-tray（mixd・capd の起動と見張り、UI の呼び出し、ログオン時の起動）。[docs/tray.md](docs/tray.md) |
 | `libs/protocol` | 制御プロトコル：メッセージ、MessagePack コーデック、パラメーターツリー、スキーマ、ルーティング検証、メーターパケット |
 | `libs/control` | 制御プロトコルの TCP サーバー／クライアント（asio） |
 | `libs/shmaudio` | エンジン→キャプチャーの共有メモリ音声リング |

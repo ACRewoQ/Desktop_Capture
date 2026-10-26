@@ -6,7 +6,7 @@
 //   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
 //        [--media-port N] [--lan-store FILE] [--no-discovery] [--control-store FILE] [--no-hotkeys]
 //        [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--plugin-cache FILE] [--no-plugins]
-//        [--quiet] [--list-devices] [--version]
+//        [--stop-event NAME] [--quiet] [--list-devices] [--version]
 //   mixd --scan-plugin FILE --out JSON      (the VST3 scanner child process, started by mixd itself)
 //
 // With VST3 (DC_WITH_JUCE) the main thread runs JUCE's message loop (plugin creation and windows)
@@ -22,6 +22,7 @@
 #include "vst3_host.hpp"
 #endif
 
+#include "dc/control/stop_event.hpp"
 #include "dc/protocol/constants.hpp"
 #include "dc/shmaudio/layout.hpp"
 #include "dc/shmaudio/shared_memory.hpp"
@@ -49,7 +50,7 @@ int usage() {
                  "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
                  "            [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio]\n"
                  "            [--plugin-cache FILE] [--no-plugins] [--control-store FILE] [--no-hotkeys]\n"
-                 "            [--quiet] [--list-devices] [--version]\n"
+                 "            [--stop-event NAME] [--quiet] [--list-devices] [--version]\n"
                  "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
                  "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
                  "  --allow-remote  accept LAN clients without pairing (development only)\n"
@@ -65,6 +66,7 @@ int usage() {
                  "  --no-plugins    no VST3 host (built-in effects only)\n"
                  "  --control-store hotkey and MIDI bindings file (default %APPDATA%\\DesktopCapture\\mixd-control.txt)\n"
                  "  --no-hotkeys    no hotkeys and no MIDI input (tests running next to a real engine)\n"
+                 "  --stop-event    stop cleanly when this named event is set (dc-tray, which has no console for Ctrl+C)\n"
                  "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
@@ -83,7 +85,7 @@ int main(int argc, char** argv) {
     mixd::LanService::Options lanOpt;
     lanOpt.storePath = mixd::LanStore::defaultPath();
     bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, asioDrivers = true, plugins = true;
-    std::string shmSuffix, pluginCache, scanFile, scanOut;
+    std::string shmSuffix, pluginCache, scanFile, scanOut, stopEvent;
     mixd::ControlBindings::Options bindOpt;
     bindOpt.storePath = mixd::ControlBindings::defaultPath();
     bool hotkeys = true;
@@ -122,6 +124,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-plugins") plugins = false;
         else if (a == "--control-store") bindOpt.storePath = next();
         else if (a == "--no-hotkeys") hotkeys = false;
+        else if (a == "--stop-event") stopEvent = next();
         else if (a == "--scan-plugin") scanFile = next();
         else if (a == "--out") scanOut = next();
         else if (a == "--list-devices") list = true;
@@ -230,14 +233,24 @@ int main(int argc, char** argv) {
                       << (host ? ", VST3 on" : "") << ". Ctrl+C to stop."
                       << std::endl;
 
-            asio::signal_set signals(io, SIGINT, SIGTERM);
-            signals.async_wait([&](const asio::error_code&, int) {
+            bool stopping = false;
+            auto stopEngine = [&] {
+                if (stopping) return;
+                stopping = true;
                 if (lan) lan->stop();
                 ctl.stop();
                 bindings = nullptr;
                 bind.stop();
                 server.stop();
                 asio::post(io, [&] { io.stop(); });
+            };
+            asio::signal_set signals(io, SIGINT, SIGTERM);
+            signals.async_wait([&](const asio::error_code& ec, int) {
+                if (!ec) stopEngine();
+            });
+            control::StopEventWatcher stopWatch(stopEvent, [&] {
+                if (!quiet) std::cout << "stop requested" << std::endl;
+                asio::post(io, stopEngine);
             });
             io.run();
             controller = nullptr;

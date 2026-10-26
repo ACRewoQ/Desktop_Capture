@@ -61,6 +61,7 @@ Visual Studio で開く場合は、フォルダーを「フォルダーを開く
 | `apps\mixd\Debug\mixd.exe` | 音声エンジン（P0 では起動して待つだけ） |
 | `apps\capd\Debug\capd.exe` | キャプチャー（P2 骨格：`capd list`、`capd record`。[capd.md](capd.md)） |
 | `apps\ui\Debug\dc-ui.exe` | UI（Qt 6 Quick。Qt が見つからないときは仮の実行ファイル） |
+| `apps\tray\Debug\dc-tray.exe` | 通知領域の常駐アプリ（[tray.md](tray.md)）。普段使いは `scripts\package.ps1` で 1 フォルダにまとめたものを使う |
 | `tools\mock_server\Debug\dc-mock-server.exe` | モックサーバー（偽エンジン） |
 | `tools\dc_cli\Debug\dc-cli.exe` | テスト用クライアント |
 | `tools\shm_tone\Debug\dc-shm-tone.exe` | 共有メモリ音声の書き手・読み手 |
