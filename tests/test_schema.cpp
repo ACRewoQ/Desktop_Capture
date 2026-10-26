@@ -100,3 +100,23 @@ TEST_CASE("default parameter sets are complete and valid", "[schema]") {
     for (const auto& c : globalDefaults())
         if (c.path == "/sampler/bank/3/name") CHECK(c.value == Value{std::string("Bank 3")});
 }
+
+TEST_CASE("control bindings (hotkeys and MIDI) are in the schema", "[schema]") {
+    const auto& s = schemaV1();
+    REQUIRE(s.find("/control/binding/128/trigger") != nullptr);
+    CHECK(s.find("/control/binding/3/state")->access == Access::ReadOnly);
+    CHECK(s.find("/control/midi/device/2/enabled")->access == Access::ReadWrite);
+    const ParamSpec& action = *s.find("/control/binding/1/action");
+    CHECK_FALSE(s.validate(action, std::string("record_toggle"), true));
+    CHECK(s.validate(action, std::string("shutdown"), true).code == ErrorCode::OutOfRange);
+    CHECK(s.findMethod("/control/binding/add") != nullptr);
+    CHECK(s.findMethod("/control/learn/cancel") != nullptr);
+
+    // bindings and MIDI devices are created by the engine, only the learn state is global
+    std::set<std::string> global;
+    for (const auto& c : globalDefaults()) global.insert(c.path);
+    CHECK(global.count("/control/learn/binding"));
+    CHECK(global.count("/control/midi/last/trigger"));
+    CHECK_FALSE(global.count("/control/binding/1/trigger"));
+    CHECK_FALSE(global.count("/control/midi/device/1/name"));
+}

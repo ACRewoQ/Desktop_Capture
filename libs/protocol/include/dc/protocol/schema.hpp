@@ -29,6 +29,8 @@ inline constexpr int kMaxLanPeers = 16;         // /lan/peers/#
 inline constexpr int kMaxPairedClients = 16;    // /remote/paired/#
 inline constexpr int kSamplerBanks = 8;
 inline constexpr int kSamplerPads = 16; // per bank
+inline constexpr int kMaxBindings = 128;   // /control/binding/# (hotkeys and MIDI)
+inline constexpr int kMaxMidiDevices = 16; // /control/midi/device/#
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 
