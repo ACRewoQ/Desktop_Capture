@@ -297,4 +297,122 @@ AvSyncReport analyzeAvSync(const std::string& file, const AvSyncOptions& o) {
     return r;
 }
 
+double toneLevelDb(const float* samples, std::size_t count, int sampleRate, double hz) {
+    if (count == 0 || sampleRate <= 0) return -200;
+    const double w = 2.0 * 3.14159265358979323846 * hz / sampleRate;
+    const double coeff = 2.0 * std::cos(w);
+    double s1 = 0, s2 = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        const double s0 = samples[i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    const double re = s1 - s2 * std::cos(w), im = s2 * std::sin(w);
+    const double amplitude = 2.0 * std::sqrt(re * re + im * im) / static_cast<double>(count);
+    return amplitude > 1e-10 ? 20.0 * std::log10(amplitude) : -200;
+}
+
+double rmsDb(const float* samples, std::size_t count) {
+    if (count == 0) return -200;
+    double sum = 0;
+    for (std::size_t i = 0; i < count; ++i) sum += double(samples[i]) * samples[i];
+    const double rms = std::sqrt(sum / static_cast<double>(count));
+    return rms > 1e-10 ? 20.0 * std::log10(rms) : -200;
+}
+
+std::vector<AudioStreamLevels> analyzeAudioStreams(const std::string& file, double toneHz, std::string* error) {
+    std::vector<AudioStreamLevels> out;
+    std::string err;
+    AVFormatContext* raw = nullptr;
+    if (const int e = avformat_open_input(&raw, file.c_str(), nullptr, nullptr); e < 0) {
+        if (error) *error = "cannot open " + file + ": " + averr(e);
+        return out;
+    }
+    std::unique_ptr<AVFormatContext, FormatCloser> fmt(raw);
+    avformat_find_stream_info(fmt.get(), nullptr);
+
+    struct State {
+        AudioStreamLevels levels;
+        std::unique_ptr<AVCodecContext, CodecFreer> dec;
+        int rate = 48000;
+        std::vector<float> block;
+        double sumSquares = 0;
+        std::size_t samples = 0;
+        double toneSum = 0; // tone power of the blocks, weighted by their length
+    };
+    std::vector<int> streamToState(fmt->nb_streams, -1);
+    std::vector<State> states;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        const AVStream* st = fmt->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        State s;
+        s.levels.index = static_cast<int>(states.size());
+        if (const AVDictionaryEntry* t = av_dict_get(st->metadata, "title", nullptr, 0)) s.levels.title = t->value;
+        s.dec = openDecoder(st, err);
+        if (!s.dec) {
+            if (error) *error = err;
+            return {};
+        }
+        if (s.dec->sample_rate > 0) s.rate = s.dec->sample_rate;
+        streamToState[i] = static_cast<int>(states.size());
+        states.push_back(std::move(s));
+    }
+    if (states.empty()) {
+        if (error) *error = "no audio stream";
+        return out;
+    }
+
+    auto finishBlock = [&](State& s) {
+        if (s.block.empty()) return;
+        const double level = rmsDb(s.block.data(), s.block.size());
+        const double tone = toneLevelDb(s.block.data(), s.block.size(), s.rate, toneHz);
+        ++s.levels.blocks;
+        if (level < -80) ++s.levels.silentBlocks;
+        else if (toneHz > 0 && tone > level - 20) ++s.levels.toneBlocks;
+        s.toneSum += std::pow(10.0, tone / 10.0) * static_cast<double>(s.block.size());
+        for (float v : s.block) s.sumSquares += double(v) * v;
+        s.samples += s.block.size();
+        s.block.clear();
+    };
+
+    std::unique_ptr<AVPacket, PacketFreer> pkt(av_packet_alloc());
+    std::unique_ptr<AVFrame, FrameFreer> frame(av_frame_alloc());
+    std::vector<float> tmp;
+    auto drain = [&](State& s) {
+        while (avcodec_receive_frame(s.dec.get(), frame.get()) == 0) {
+            tmp.clear();
+            appendChannel0(frame.get(), tmp);
+            for (float v : tmp) {
+                s.block.push_back(v);
+                if (s.block.size() >= static_cast<std::size_t>(s.rate)) finishBlock(s);
+            }
+            av_frame_unref(frame.get());
+        }
+    };
+    while (av_read_frame(fmt.get(), pkt.get()) >= 0) {
+        const int k = pkt->stream_index >= 0 && pkt->stream_index < static_cast<int>(streamToState.size())
+                          ? streamToState[static_cast<std::size_t>(pkt->stream_index)]
+                          : -1;
+        if (k >= 0) {
+            State& s = states[static_cast<std::size_t>(k)];
+            if (avcodec_send_packet(s.dec.get(), pkt.get()) == 0) drain(s);
+        }
+        av_packet_unref(pkt.get());
+    }
+    for (auto& s : states) {
+        avcodec_send_packet(s.dec.get(), nullptr);
+        drain(s);
+        if (s.block.size() >= static_cast<std::size_t>(s.rate / 2)) finishBlock(s); // a short tail is skipped
+        s.levels.seconds = static_cast<double>(s.samples) / s.rate;
+        if (s.samples > 0) {
+            const double rms = std::sqrt(s.sumSquares / static_cast<double>(s.samples));
+            s.levels.rmsDb = rms > 1e-10 ? 20.0 * std::log10(rms) : -200;
+            const double tonePower = s.toneSum / static_cast<double>(s.samples);
+            s.levels.toneDb = tonePower > 1e-20 ? 10.0 * std::log10(tonePower) : -200;
+        }
+        out.push_back(s.levels);
+    }
+    return out;
+}
+
 } // namespace dc::capd

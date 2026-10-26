@@ -89,7 +89,9 @@ void Engine::render(const OutputPort* clockPort, float* out, int frames, int out
         for (std::size_t i = 0; i < plan->inputs.size(); ++i) {
             auto& port = *plan->inputs[i];
             float* buf = plan->inputScratch[i].data();
-            if (port.lan) port.lan->pull(buf, static_cast<std::size_t>(n), chunkTime);
+            // The LAN receiver measures packet arrivals in QPC time now; `time` is when the block will be played (a
+            // shared-mode device queues ~20 ms ahead), which made every packet look late (found in G3).
+            if (port.lan) port.lan->pull(buf, static_cast<std::size_t>(n), start + done / kSampleRate);
             else port.bridge.pull(buf, static_cast<std::size_t>(n), chunkTime);
             inputPtrs_[i] = buf;
         }

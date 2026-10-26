@@ -17,7 +17,9 @@ extern "C" {
 }
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 namespace dc::capd {
@@ -26,6 +28,14 @@ namespace {
 
 std::optional<std::uint64_t> filesystemFreeSpace(const std::string& path) {
     std::error_code ec;
+    // Test switch for the G3 disconnect checks: with DC_CAPD_TEST_DIR set, a file "disk_free" there holding a
+    // number of bytes stands in for the free space (filling a real disk is not practical in a test).
+    if (const char* dir = std::getenv("DC_CAPD_TEST_DIR"); dir && *dir) {
+        const std::string d(dir);
+        std::ifstream f(std::filesystem::path(std::u8string(d.begin(), d.end())) / "disk_free");
+        std::uint64_t bytes = 0;
+        if (f >> bytes) return bytes;
+    }
     auto p = std::filesystem::path(std::u8string(path.begin(), path.end())).parent_path();
     if (p.empty()) p = ".";
     const auto info = std::filesystem::space(p, ec);

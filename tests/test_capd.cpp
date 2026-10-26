@@ -619,3 +619,60 @@ TEST_CASE("avsync reads the offset from a recording", "[capd][avsync]") {
     CHECK(r.stats.meanMs == Catch::Approx(40.0).margin(1.0));
     CHECK(std::fabs(r.stats.driftMs) < 1.0);
 }
+
+TEST_CASE("levels: tone and level of a block", "[capd][levels]") {
+    std::vector<float> s(48000);
+    for (std::size_t i = 0; i < s.size(); ++i) s[i] = 0.1f * static_cast<float>(std::sin(2 * 3.14159265 * 700 * double(i) / 48000.0));
+    CHECK(toneLevelDb(s.data(), s.size(), 48000, 700) == Catch::Approx(-20.0).margin(0.1));
+    CHECK(toneLevelDb(s.data(), s.size(), 48000, 1000) < -60);
+    CHECK(rmsDb(s.data(), s.size()) == Catch::Approx(-23.0).margin(0.1));
+    std::vector<float> zero(100, 0.0f);
+    CHECK(rmsDb(zero.data(), zero.size()) == -200);
+}
+
+TEST_CASE("levels: each audio stream of a recording on its own", "[capd][levels]") {
+    av_log_set_level(AV_LOG_ERROR);
+    const auto path = (std::filesystem::temp_directory_path() / ("dc_levels_" + std::to_string(testPid()) + ".mkv")).string();
+    {
+        Muxer mux(path, "mkv");
+        AudioStreamSettings as;
+        as.codec = "pcm";
+        AudioEncoder tone(as, mux.needsGlobalHeader());
+        AudioEncoder quiet(as, mux.needsGlobalHeader());
+        const int a = mux.addStream(tone.context(), "Master");
+        const int b = mux.addStream(quiet.context(), "Mic");
+        tone.setSink([&](AVPacket* p) { mux.write(a, p); });
+        quiet.setSink([&](AVPacket* p) { mux.write(b, p); });
+        mux.start();
+        std::vector<float> t(4800 * 2), q(4800 * 2);
+        for (int block = 0; block < 50; ++block) { // 5 s
+            for (int k = 0; k < 4800; ++k) {
+                const double x = (block * 4800 + k) / 48000.0;
+                t[static_cast<size_t>(2 * k)] = t[static_cast<size_t>(2 * k + 1)] =
+                    0.1f * static_cast<float>(std::sin(2 * 3.14159265 * 700 * x));
+                // the second stream: silent for the first 2 s, then a quiet 300 Hz hum
+                q[static_cast<size_t>(2 * k)] = q[static_cast<size_t>(2 * k + 1)] =
+                    x < 2.0 ? 0.0f : 0.01f * static_cast<float>(std::sin(2 * 3.14159265 * 300 * x));
+            }
+            tone.push(t, 4800);
+            quiet.push(q, 4800);
+        }
+        tone.finish();
+        quiet.finish();
+        mux.finish();
+        REQUIRE_FALSE(mux.failed());
+    }
+    std::string error;
+    const auto streams = analyzeAudioStreams(path, 700, &error);
+    if (!std::getenv("DC_KEEP")) std::filesystem::remove(path);
+    REQUIRE(error.empty());
+    REQUIRE(streams.size() == 2);
+    CHECK(streams[0].title == "Master");
+    CHECK(streams[0].seconds == Catch::Approx(5.0).margin(0.05));
+    CHECK(streams[0].toneDb == Catch::Approx(-20.0).margin(0.5));
+    CHECK(streams[0].toneBlocks == 5);
+    CHECK(streams[1].title == "Mic");
+    CHECK(streams[1].toneBlocks == 0);
+    CHECK(streams[1].silentBlocks == 2);
+    CHECK(streams[1].toneDb < -60);
+}

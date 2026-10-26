@@ -10,6 +10,7 @@
 //   capd vcam [options]           feed the virtual camera from a monitor (or a stamped test pattern)
 //   capd fullscreen [options]     show a monitor's picture full screen on another (or the same) monitor
 //   capd avsync FILE [options]    A/V offset from dc-av-flash flashes and mixd --test-pulse bursts (G2)
+//   capd levels FILE [--tone HZ]  level of each audio stream and how much of it carries a tone (G3)
 //
 
 #include "src/avsync.hpp"
@@ -83,6 +84,7 @@ usage:
                           ID: \\.\DISPLAY2 or an index from "capd list"; --monitor is the captured one
   capd mixtest [--out DIR] [--media FILE]   video mixer self-test: pixels of scenes, transitions, sources
   capd avsync FILE [--region X,Y,W,H] [--audio-stream N] [--csv FILE]
+  capd levels FILE [--tone HZ]
 
 record options:
   --seconds S             stop after S seconds (default: run until Ctrl+C)
@@ -555,6 +557,29 @@ int cmdRecord(const std::vector<std::string>& args) {
 }
 
 // A/V offset of a recording made while dc-av-flash and mixd --test-pulse ran (docs/capd.md).
+// One line per audio stream: "STREAM index=0 title="Master" seconds=.. rms_db=.. tone_db=.. blocks=.. tone_blocks=..
+// silent_blocks=..", for scripts.
+int cmdLevels(const std::vector<std::string>& args) {
+    std::string file;
+    double tone = 0;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--tone" && i + 1 < args.size()) tone = std::stod(args[++i]);
+        else if (file.empty()) file = args[i];
+        else throw std::runtime_error("unknown option " + args[i]);
+    }
+    std::string error;
+    const auto streams = analyzeAudioStreams(file, tone, &error);
+    if (!error.empty()) {
+        std::cerr << "levels: " << error << "\n";
+        return 3;
+    }
+    for (const auto& s : streams)
+        std::printf("STREAM index=%d title=\"%s\" seconds=%.1f rms_db=%.1f tone_db=%.1f blocks=%d tone_blocks=%d "
+                    "silent_blocks=%d\n",
+                    s.index, s.title.c_str(), s.seconds, s.rmsDb, s.toneDb, s.blocks, s.toneBlocks, s.silentBlocks);
+    return 0;
+}
+
 int cmdAvSync(const std::vector<std::string>& args) {
     AvSyncOptions o;
     std::string file, csv;
@@ -635,6 +660,7 @@ int main(int argc, char** argv) {
         if (cmd == "serve") return cmdServe(args);
         if (cmd == "probe" && args.size() == 1) return cmdProbe(args[0]);
         if (cmd == "avsync" && !args.empty()) return cmdAvSync(args);
+        if (cmd == "levels" && !args.empty()) return cmdLevels(args);
         usage();
         return 1;
     } catch (const std::exception& e) {
