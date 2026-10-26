@@ -198,7 +198,7 @@ try {
     $procs.mixd = Start-Mixd 'mixd-2'
     $checks = @{
         '/profile/current' = 'p5a'; '/track/1/volume_db' = '-7.5'; '/track/1/name' = 'P5 Mic'; '/track/2/pan' = '-0.4'
-        '/mixer/track_count' = '5'; '/capture/video/bitrate_kbps' = '33000'; '/capture/directory' = ($recDir -replace '\\', '\\'); '/sampler/bank/1/pad/1/name' = 'pon'
+        '/mixer/track_count' = '5'; '/capture/video/bitrate_kbps' = '33000'; '/capture/directory' = $recDir; '/sampler/bank/1/pad/1/name' = 'pon'
         '/track/1/fx/1/type' = 'eq4'; '/track/1/fx/1/param/output_db' = '-2.5'; '/video/mix/1/program_scene' = $scene2
         "/video/scene/$scene2/layer/1/x" = '0.25'; "/snapshot/$snap/name" = 'snapA'
     }
@@ -217,6 +217,7 @@ try {
     $r = Invoke-Method '/profile/new' @('name=s:p5b')
     Add-Row 'new profile from the fresh state' ($r -like 'ok*' -and (Get-Param '/mixer/track_count') -eq '4' -and -not (Get-Param '/master/fx/1/type')) "$r, tracks $(Get-Param '/mixer/track_count'), current $(Get-Param '/profile/current')"
     Set-Param '/track/3/mute' true
+    Set-Param '/capture/directory' $recDir # p5b records below
     $t0 = Get-Date
     $r = Invoke-Method '/profile/load' @('name=s:p5a')
     $ms = [int]((Get-Date) - $t0).TotalMilliseconds
