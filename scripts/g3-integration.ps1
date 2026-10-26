@@ -296,14 +296,10 @@ try {
     Set-Param "/video/scene/1/layer/$l/width" 0.4; Set-Param "/video/scene/1/layer/$l/height" 0.4
     $cam = 0
     if ($vcamCtl -and (Test-Path $vcamCtl)) {
-        # Windows lists it as "Desktop Capture Camera (Windows Virtual Camera)" in the user's language: take id and name from capd's list
-        $camLine = & $cli --port $port snapshot /video/devices/camera | Where-Object { $_ -match '/name = "Desktop Capture Camera' } | Select-Object -First 1
-        $camName = if ($camLine -match '= "(.*)"$') { $Matches[1] } else { 'Desktop Capture Camera' }
-        $camId = if ($camLine -match '/camera/(\d+)/name') { Get-Param "/video/devices/camera/$($Matches[1])/id" } else { '' }
-        $info.camera = "$camName [$camId]"
+        # No id or name: capd takes the first camera. Reo's PC has no other camera, so that is the virtual camera
+        # (setting its id or its Japanese name from here did not match capd's list).
+        $info.camera = (& $cli --port $port snapshot /video/devices/camera | Where-Object { $_ -match '/name = ' }) -join '; '
         $cam = Call '/video/source/add' @('kind=camera')
-        if ($camId) { Set-Param "/video/source/$cam/camera/id" $camId }
-        Set-Param "/video/source/$cam/camera/name" $camName
         $l = Call '/video/scene/1/layer/add' @("source=$cam")
         Set-Param "/video/scene/1/layer/$l/x" 0.55; Set-Param "/video/scene/1/layer/$l/y" 0.05
         Set-Param "/video/scene/1/layer/$l/width" 0.4; Set-Param "/video/scene/1/layer/$l/height" 0.4
@@ -339,7 +335,7 @@ try {
             foreach ($k in $procs.Keys) { if ($k -in 'mixdA', 'mixdB', 'capd' -and $procs[$k].HasExited) { throw "$k exited early" } }
             $vmicMin = [math]::Min($vmicMin, (Meter-Db $meter[3] 3))
             $vs = Get-Param '/video/vcam/state'; if ($vs -ne 'active') { $vcamBad += $vs }
-            if ($cam) { $cs = Get-Param "/video/source/$cam/state"; if ($cs -ne 'ok') { $camBad += $cs } }
+            if ($cam) { $cs = Get-Param "/video/source/$cam/state"; if ($cs -ne 'ok') { $camBad += "$cs $(Get-Param "/video/source/$cam/error")" } }
             foreach ($t in 1, 2, 4) { $s = Get-Param "/track/$t/input/state"; if ($s -ne 'ok') { $trackBad += "track $t $s" } }
         }
         $x1 = Xruns
@@ -402,24 +398,34 @@ try {
         $w0 = Get-Param '/video/source/1/width'
         $res = @'
 Add-Type @"
-using System; using System.Runtime.InteropServices;
+using System; using System.Runtime.InteropServices; using System.Threading;
 public static class Disp {
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  public struct DEVMODE { [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName; public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput; public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName; public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency, dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight; }
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsEx(string dev, ref DEVMODE mode, IntPtr hwnd, int flags, IntPtr param);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsEx(string dev, IntPtr mode, IntPtr hwnd, int flags, IntPtr param);
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public char[] dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public char[] dmFormName;
+    public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency, dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+  }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettingsW(string dev, int mode, ref DEVMODE dm);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettingsExW(string dev, ref DEVMODE mode, IntPtr hwnd, int flags, IntPtr param);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettingsExW(string dev, IntPtr mode, IntPtr hwnd, int flags, IntPtr param);
+  // the primary monitor at w x h (temporary, CDS_FULLSCREEN) for some seconds, then back to the saved mode
+  public static string Run(int w, int h, int seconds) {
+    var m = new DEVMODE { dmDeviceName = new char[32], dmFormName = new char[32] };
+    m.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+    bool ok = EnumDisplaySettingsW(null, -1, ref m);
+    string r = "current " + ok + " " + m.dmPelsWidth + "x" + m.dmPelsHeight + "@" + m.dmDisplayFrequency + " size " + m.dmSize;
+    m.dmPelsWidth = w; m.dmPelsHeight = h; m.dmFields = 0x80000 | 0x100000;
+    r += ", change " + ChangeDisplaySettingsExW(null, ref m, IntPtr.Zero, 4, IntPtr.Zero);
+    Thread.Sleep(seconds * 1000);
+    r += ", restore " + ChangeDisplaySettingsExW(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
+    return r;
+  }
 }
 "@
-$m = New-Object Disp+DEVMODE; $m.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($m)
-$ok = [Disp]::EnumDisplaySettings($null, -1, [ref]$m)   # the current mode, then only the size changes
-"current $ok $($m.dmPelsWidth)x$($m.dmPelsHeight)@$($m.dmDisplayFrequency) size $($m.dmSize)"
-$m.dmPelsWidth = 1920; $m.dmPelsHeight = 1080; $m.dmFields = 0x80000 -bor 0x100000
-$r = [Disp]::ChangeDisplaySettingsEx($null, [ref]$m, [IntPtr]::Zero, 4, [IntPtr]::Zero)   # CDS_FULLSCREEN: temporary
-"change $r"
-Start-Sleep -Seconds 10
-$r = [Disp]::ChangeDisplaySettingsEx($null, [IntPtr]::Zero, [IntPtr]::Zero, 0, [IntPtr]::Zero)  # back to the saved mode
-"restore $r"
+[Disp]::Run(1920, 1080, 10)
 '@
         $job = Start-Job -ScriptBlock ([scriptblock]::Create($res))
         Start-Sleep -Seconds 6
