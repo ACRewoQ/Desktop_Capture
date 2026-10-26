@@ -50,6 +50,7 @@ Item {
                 color: Theme.text
                 font.pixelSize: 13
                 text: previewStream.infoText + (video.decoderName.indexOf("[D3D11") >= 0 ? "・GPU デコード" : video.decoderName ? "・CPU デコード" : "")
+                      + (video.latencyMs >= 0 ? "・表示まで " + Math.round(video.latencyMs) + " ms" : "")
             }
         }
 
@@ -69,10 +70,12 @@ Item {
         }
         ParamPick {
             objectName: "previewMixPick"
-            width: Math.min(260, bar.width - 120)
+            width: Math.max(120, Math.min(260, bar.width - 120 - monitor.width - 12))
             path: "/video/preview/mix"
             title: "プレビューに出すミックス"
             choices: () => Video.mixChoices(true)
         }
+        // The sound that goes with the picture (the same control as in the top bar).
+        MonitorButton { id: monitor }
     }
 }

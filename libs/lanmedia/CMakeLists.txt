@@ -1,6 +1,7 @@
 add_library(dc_lanmedia
     src/arrival_clock.cpp
     src/audio_codec.cpp
+    src/audio_link.cpp
     src/audio_receiver.cpp
     src/audio_sender.cpp
     src/net_sim.cpp

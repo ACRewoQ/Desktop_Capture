@@ -4,16 +4,21 @@
 //
 //   dc-ui [--connect HOST[:PORT]] [--remote] [--fullscreen] [--backend default|d3d11|software]
 //         [--page KEY] [--screenshot FILE [--size WxH]] [--selftest] [--exercise MINUTES [--input ID|first] [--input-channel N] [--record]]
+//         [--monitor N] [--measure SECONDS]
 
 #include "connection.hpp"
 #include "exercise.hpp"
+#include "measure.hpp"
+#include "monitor_audio.hpp"
 #include "param_hub.hpp"
 #include "preview_stream.hpp"
 #include "preview_video.hpp"
 #include "recorder.hpp"
+#include "remote_check.hpp"
 #include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
+#include "touch_check.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/version.hpp"
@@ -77,6 +82,7 @@ int main(int argc, char** argv) {
         {"connect", "Engine (mixd or dc-mock-server) to control.", "host[:port]", "127.0.0.1"},
         {"remote", "Connect as a remote controller (role 1) instead of the local UI."},
         {"fullscreen", "Show full screen (remote controller)."},
+        {"monitor", "Play the engine's LAN send stream N on this device from the start (monitor audio).", "n"},
         {"pair", "With --remote: pair with the 6-digit CODE the engine shows (instead of typing it).", "code"},
         {"backend", "Scene graph backend: default (D3D11 on Windows), d3d11 or software.", "name", "default"},
         {"selftest", "Run the scripted check against the engine, print the result and exit (changes its state)."},
@@ -86,6 +92,9 @@ int main(int argc, char** argv) {
         {"input", "With --exercise: input device of the first track (an id from /devices/input, or \"first\").", "id"},
         {"input-channel", "With --exercise: first channel of that device to use.", "n", "1"},
         {"record", "With --exercise: record from start to end through the record button's logic."},
+        {"g4", "G4 on the remote: --measure SECONDS plus mixer / scene / recording from here, seen by a second connection, "
+               "and a recording that survives this remote reconnecting. Changes the engine's state (and puts it back).", "seconds"},
+        {"measure", "G4 on the remote: preview delay, frame rate, memory and CPU for SECONDS, then exit.", "seconds"},
         {"page", "Page to show first (mixer, settings, ...).", "key"},
         {"screenshot", "Save the window as PNG FILE once connected and drawn, then exit.", "file"},
         {"size", "With --screenshot: window size.", "WxH", "1280x800"},
@@ -134,6 +143,8 @@ int main(int argc, char** argv) {
     dc::ui::ParamHub params(connection);
     dc::ui::RouteChoices routes(connection);
     dc::ui::PreviewStream preview(connection);
+    dc::ui::MonitorAudio monitor(connection);
+    if (cli.isSet("monitor")) monitor.setStream(cli.value("monitor").toInt());
     qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
     qmlRegisterType<dc::ui::ParamList>("DcUi.Params", 1, 0, "ParamList");
     qmlRegisterType<dc::ui::PreviewVideo>("DcUi.Preview", 1, 0, "PreviewVideo");
@@ -146,6 +157,7 @@ int main(int argc, char** argv) {
     engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
     engine.rootContext()->setContextProperty(QStringLiteral("routes"), &routes);
     engine.rootContext()->setContextProperty(QStringLiteral("previewStream"), &preview);
+    engine.rootContext()->setContextProperty(QStringLiteral("monitorAudio"), &monitor);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
     engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));
     engine.rootContext()->setContextProperty(QStringLiteral("startDemo"), cli.value("demo"));
@@ -191,6 +203,28 @@ int main(int argc, char** argv) {
         });
         return QGuiApplication::exec();
     }
+    if (cli.isSet("g4")) {
+        QTimer::singleShot(0, [&] {
+            print(QStringLiteral("dc-ui G4 check against %1").arg(connection.address()));
+            int failures = dc::ui::runRemoteCheck(connection, recorder, opt, print);
+            failures += dc::ui::runMeasure(window, preview, &monitor, cli.value("g4").toDouble(), print);
+            print(failures ? QStringLiteral("G4 FAILED (%1)").arg(failures) : QStringLiteral("G4 PASSED"));
+            connection.stop();
+            QGuiApplication::exit(failures ? 1 : 0);
+        });
+        return QGuiApplication::exec();
+    }
+    if (cli.isSet("measure")) {
+        QTimer::singleShot(0, [&] {
+            const bool up = dc::ui::waitUntil([&] { return connection.ready(); }, 15000);
+            print(QStringLiteral("dc-ui measure against %1: %2").arg(connection.address(), up ? "connected" : connection.statusText()));
+            const int failures = up ? dc::ui::runMeasure(window, preview, &monitor, cli.value("measure").toDouble(), print) : 1;
+            print(failures ? QStringLiteral("MEASURE FAILED (%1)").arg(failures) : QStringLiteral("MEASURE PASSED"));
+            connection.stop();
+            QGuiApplication::exit(failures ? 1 : 0);
+        });
+        return QGuiApplication::exec();
+    }
     if (!selfTest) return QGuiApplication::exec();
 
     int frames = 0;
@@ -207,6 +241,7 @@ int main(int argc, char** argv) {
             dc::ui::waitUntil([] { return false; }, 300);
         }
         window->setProperty("currentPage", QStringLiteral("mixer"));
+        failures += dc::ui::runTouchCheck(window, print);
         print(QStringLiteral("%1 pages shown (%2)").arg(pages.size() > 1 ? "  OK  " : "  FAIL", pages.join(QLatin1Char(' '))));
         if (pages.size() <= 1) ++failures;
         // The screen kept drawing while the models changed (catches the D3D11 first-frame freeze).

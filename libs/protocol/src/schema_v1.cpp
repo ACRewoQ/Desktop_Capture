@@ -352,6 +352,8 @@ Schema buildV1() {
 
     // --- methods ---
     sc.addMethod({"/session/resync", "", "nil", "スナップショットを送り直す（rev の飛びを検出したとき）", "P0"});
+    sc.addMethod({"/session/clock", "", "int（マイクロ秒）",
+                  "エンジンの PC の時計（QPC、LAN メディアの時刻と同じ）。リモコンがプレビューの遅延を測るのに使う", "P4"});
     sc.addMethod({"/mixer/track/add", "channels:int?, name:string?, position:int?", "int（新しいトラック番号）",
                   "トラックを追加。番号は空いている最小の番号", "P0"});
     sc.addMethod({"/mixer/track/remove", "track:int", "nil", "トラックを削除。番号は詰めない", "P0"});

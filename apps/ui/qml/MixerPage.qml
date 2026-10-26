@@ -1,9 +1,29 @@
 import QtQuick
 
-// Track strips (scroll sideways) with the master on the right, and the track menus.
+// Track strips (scroll sideways) with the master on the right, and the track menus. Two fingers
+// pinched sideways change the width of the track strips (narrow: more tracks on screen); the strip
+// under the fingers stays where it is.
 Item {
     id: page
+    objectName: "mixerPage"
     readonly property bool swipeable: false // the strips scroll sideways
+    readonly property real minStripWidth: 72
+    readonly property real maxStripWidth: 216
+    property real stripWidth: Theme.stripWidth
+    // While pinching: the width at the start times how far the fingers spread since then.
+    property real pinchBaseWidth: Theme.stripWidth
+    property real pinchBaseScale: 1
+    property real pinchX: 0           // where the fingers are, in the list
+    property real pinchTrack: 0       // and which track (fractional) is there
+    readonly property real pinchedWidth: pinch.active
+        ? Math.max(minStripWidth, Math.min(maxStripWidth, pinchBaseWidth * pinch.scale / Math.max(0.01, pinchBaseScale)))
+        : stripWidth
+
+    onPinchedWidthChanged: {
+        if (!pinch.active) return
+        stripWidth = Math.round(pinchedWidth)
+        list.contentX = Math.max(0, Math.min(list.contentWidth - list.width, pinchTrack * stripWidth - pinchX))
+    }
 
     function openDemo(name) {
         if (name === "menu") trackPanel.open(0, "Track")
@@ -23,6 +43,7 @@ Item {
         clip: true
         model: tracks
         delegate: Strip {
+            width: page.stripWidth
             height: list.height
             model: tracks
             scroller: list
@@ -38,6 +59,23 @@ Item {
         Connections {
             target: tracks
             function onTrackAdded(row) { list.positionViewAtIndex(row, ListView.Contain) }
+        }
+    }
+
+    PinchHandler {
+        id: pinch
+        objectName: "stripPinch"
+        target: null
+        minimumPointCount: 2
+        maximumPointCount: 2
+        minimumRotation: 0
+        maximumRotation: 0
+        onActiveChanged: {
+            if (!active) return
+            page.pinchBaseWidth = page.stripWidth
+            page.pinchBaseScale = scale
+            page.pinchX = Math.max(0, Math.min(list.width, centroid.position.x - list.x))
+            page.pinchTrack = (list.contentX + page.pinchX) / page.stripWidth
         }
     }
 

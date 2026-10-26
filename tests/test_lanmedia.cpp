@@ -267,6 +267,23 @@ TEST_CASE("lanmedia: receiver reorders, drops duplicates and conceals lost packe
     CHECK(tone.glitchBlocks <= 3);
 }
 
+TEST_CASE("lanmedia: a stream that stops fades to silence (PCM and Opus)", "[lanmedia]") {
+    for (const auto& [codec, frames] : {std::pair{AudioCodec::Pcm24, std::size_t{120}}, std::pair{AudioCodec::Opus, std::size_t{480}}}) {
+        INFO("codec " << int(codec));
+        auto packets = makeStream(codec, frames, 2);
+        packets.resize(packets.size() / 2); // the sender stops after 1 s
+        AudioReceiver r({});
+        const auto out = play(r, arrivals(packets, frames, std::vector<double>(packets.size(), 0.0005)), 2);
+        auto peak = [&](double from, double to) {
+            float p = 0;
+            for (std::size_t i = std::size_t(from * 48000) * 2; i < std::size_t(to * 48000) * 2; ++i) p = std::max(p, std::abs(out[i]));
+            return p;
+        };
+        CHECK(peak(0.5, 0.9) > 0.4);   // playing
+        CHECK(peak(1.2, 2.0) < 0.001); // silent within 0.2 s of the last packet
+    }
+}
+
 TEST_CASE("lanmedia: a mono stream plays on both channels", "[lanmedia]") {
     const auto packets = makeStream(AudioCodec::Pcm16, 240, 2, 1);
     AudioReceiver r({});

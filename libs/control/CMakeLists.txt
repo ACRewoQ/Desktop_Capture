@@ -5,5 +5,5 @@ add_library(dc_control
 )
 add_library(dc::control ALIAS dc_control)
 target_include_directories(dc_control PUBLIC include)
-target_link_libraries(dc_control PUBLIC dc::protocol dc_asio)
+target_link_libraries(dc_control PUBLIC dc::protocol dc_asio PRIVATE dc::shmaudio)
 dc_apply_options(dc_control)

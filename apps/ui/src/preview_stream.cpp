@@ -6,7 +6,10 @@
 
 #include <QDateTime>
 
+#include <algorithm>
+#include <cmath>
 #include <exception>
+#include <limits>
 
 namespace dc::ui {
 
@@ -17,6 +20,16 @@ namespace {
 constexpr int kRetryMs = 3000;
 constexpr int kTickMs = 500;
 constexpr qint64 kStalledMs = 1500;  // no frame for this long = not receiving
+constexpr qint64 kClockFirstMs = 300;   // clock samples while the offset is young
+constexpr qint64 kClockEveryMs = 5000;  // then now and then (the two clocks drift a little)
+constexpr std::size_t kClockSamples = 8;
+constexpr std::size_t kNetworkSamples = 64;
+
+double median(std::vector<double> v) {
+    if (v.empty()) return -1;
+    std::nth_element(v.begin(), v.begin() + std::ptrdiff_t(v.size() / 2), v.end());
+    return v[v.size() / 2];
+}
 
 qint64 num(const Connection& c, const char* path) {
     return static_cast<qint64>(c.tree().getAs<std::int64_t>(path).value_or(0));
@@ -99,6 +112,11 @@ void PreviewStream::follow() {
         try {
             input_ = std::make_unique<lan::VideoInput>(lan::VideoInput::Options{}, [this](const Frame& f) {
                 frames_.fetch_add(1, std::memory_order_relaxed);
+                if (clockKnown()) {
+                    std::lock_guard lock(networkMutex_);
+                    if (networkSamples_.size() >= kNetworkSamples) networkSamples_.erase(networkSamples_.begin());
+                    networkSamples_.push_back((f.arrival - toLocalTime(f.captureTime)) * 1000.0);
+                }
                 std::lock_guard lock(sinkMutex_);
                 for (auto& [id, sink] : sinks_) sink(f);
             });
@@ -156,6 +174,37 @@ void PreviewStream::closeInput() {
     receiving_ = false;
     fps_ = 0;
     input_.reset();  // joins the receive threads; the sinks are gone or about to be
+    std::lock_guard lock(networkMutex_);
+    networkSamples_.clear();
+    networkMs_ = -1;
+}
+
+double PreviewStream::toLocalTime(double engineTime) const {
+    if (!clockKnown()) return std::numeric_limits<double>::quiet_NaN();
+    return engineTime - clockOffset_.load(std::memory_order_relaxed);
+}
+
+void PreviewStream::syncClock() {
+    if (clockPending_ || clockUnsupported_ || !connection_.ready()) return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - lastClockCall_ < (clockSamples_.size() < kClockSamples ? kClockFirstMs : kClockEveryMs)) return;
+    lastClockCall_ = now;
+    clockPending_ = true;
+    const double t0 = lan::nowSeconds();
+    connection_.call("/session/clock", {}, [this, t0](const Result& r) {
+        const double t1 = lan::nowSeconds();
+        clockPending_ = false;
+        const auto* us = std::get_if<std::int64_t>(&r.value);
+        if (r.code == ErrorCode::UnknownMethod) clockUnsupported_ = true;  // an older engine
+        if (r.code != ErrorCode::Ok || !us) return;
+        // NTP style: the engine read its clock halfway through the round trip, give or take rtt / 2.
+        if (clockSamples_.size() >= kClockSamples) clockSamples_.erase(clockSamples_.begin());
+        clockSamples_.push_back({t1 - t0, double(*us) / 1e6 - (t0 + t1) / 2});
+        const auto best = std::min_element(clockSamples_.begin(), clockSamples_.end(),
+                                           [](const ClockSample& a, const ClockSample& b) { return a.rtt < b.rtt; });
+        clockOffset_.store(best->offset, std::memory_order_relaxed);
+        clockKnown_.store(true, std::memory_order_release);
+    });
 }
 
 void PreviewStream::tick() {
@@ -167,6 +216,11 @@ void PreviewStream::tick() {
     lastTick_ = now;
     const bool receiving = now - lastFrameTick_ < kStalledMs && n > 0;
     receiving_ = receiving;
+    syncClock();
+    {
+        std::lock_guard lock(networkMutex_);
+        networkMs_ = median(networkSamples_);
+    }
     emit changed();
 }
 
@@ -188,6 +242,7 @@ QString PreviewStream::infoText() const {
                        .arg(num(connection_, "/video/preview/height"))
                        .arg(num(connection_, "/video/preview/fps"));
     if (input_ && receiving_) text += QStringLiteral("・受信 %1 fps").arg(fps_, 0, 'f', 1);
+    if (input_ && receiving_ && networkMs_ >= 0) text += QStringLiteral("・届くまで %1 ms").arg(std::lround(networkMs_));
     return text;
 }
 
