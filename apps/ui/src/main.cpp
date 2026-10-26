@@ -7,6 +7,7 @@
 
 #include "connection.hpp"
 #include "exercise.hpp"
+#include "monitor_audio.hpp"
 #include "param_hub.hpp"
 #include "preview_stream.hpp"
 #include "preview_video.hpp"
@@ -77,6 +78,7 @@ int main(int argc, char** argv) {
         {"connect", "Engine (mixd or dc-mock-server) to control.", "host[:port]", "127.0.0.1"},
         {"remote", "Connect as a remote controller (role 1) instead of the local UI."},
         {"fullscreen", "Show full screen (remote controller)."},
+        {"monitor", "Play the engine's LAN send stream N on this device from the start (monitor audio).", "n"},
         {"pair", "With --remote: pair with the 6-digit CODE the engine shows (instead of typing it).", "code"},
         {"backend", "Scene graph backend: default (D3D11 on Windows), d3d11 or software.", "name", "default"},
         {"selftest", "Run the scripted check against the engine, print the result and exit (changes its state)."},
@@ -134,6 +136,8 @@ int main(int argc, char** argv) {
     dc::ui::ParamHub params(connection);
     dc::ui::RouteChoices routes(connection);
     dc::ui::PreviewStream preview(connection);
+    dc::ui::MonitorAudio monitor(connection);
+    if (cli.isSet("monitor")) monitor.setStream(cli.value("monitor").toInt());
     qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
     qmlRegisterType<dc::ui::ParamList>("DcUi.Params", 1, 0, "ParamList");
     qmlRegisterType<dc::ui::PreviewVideo>("DcUi.Preview", 1, 0, "PreviewVideo");
@@ -146,6 +150,7 @@ int main(int argc, char** argv) {
     engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
     engine.rootContext()->setContextProperty(QStringLiteral("routes"), &routes);
     engine.rootContext()->setContextProperty(QStringLiteral("previewStream"), &preview);
+    engine.rootContext()->setContextProperty(QStringLiteral("monitorAudio"), &monitor);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
     engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));
     engine.rootContext()->setContextProperty(QStringLiteral("startDemo"), cli.value("demo"));

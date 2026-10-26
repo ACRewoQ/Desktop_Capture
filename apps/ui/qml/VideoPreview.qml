@@ -69,10 +69,12 @@ Item {
         }
         ParamPick {
             objectName: "previewMixPick"
-            width: Math.min(260, bar.width - 120)
+            width: Math.max(120, Math.min(260, bar.width - 120 - monitor.width - 12))
             path: "/video/preview/mix"
             title: "プレビューに出すミックス"
             choices: () => Video.mixChoices(true)
         }
+        // The sound that goes with the picture (the same control as in the top bar).
+        MonitorButton { id: monitor }
     }
 }

@@ -1,6 +1,7 @@
 // The UI's protocol client and models against the mock engine on a real TCP socket.
 
 #include "connection.hpp"
+#include "monitor_audio.hpp"
 #include "param_hub.hpp"
 #include "preview_stream.hpp"
 #include "recorder.hpp"
@@ -11,6 +12,8 @@
 #include "mock_engine.hpp"
 
 #include "dc/control/client.hpp"
+#include "dc/lanmedia/audio_sender.hpp"
+#include "dc/lanmedia/udp_transport.hpp"
 #include "dc/lanmedia/video_link.hpp"
 
 #include <QJSEngine>
@@ -18,6 +21,8 @@
 #include <QTest>
 
 #include <atomic>
+#include <cmath>
+#include <numbers>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -164,6 +169,100 @@ private slots:
         out.send(au, true, lan::nowSeconds());
         ui::waitUntil([] { return false; }, 100);
         QCOMPARE(int(frames), before);
+    }
+
+    void monitorAudioPlaysTheChosenStream() {
+        // mixd's side: subscription number 9 (and 10 for the second stream), stream and port recorded.
+        std::mutex m;
+        std::vector<std::string> streams;
+        std::vector<std::int64_t> unsubscribed;
+        std::int64_t port = 0;
+        Harness h(0, 77, [&](control::ControlServer& s) {
+            s.registerMethod("/lan/subscribe", [&](control::CallContext& ctx) {
+                std::lock_guard lock(m);
+                streams.push_back(std::get<std::string>(ctx.call.args.at("stream")));
+                port = std::get<std::int64_t>(ctx.call.args.at("port"));
+                proto::Result r;
+                r.value = std::int64_t{8 + static_cast<std::int64_t>(streams.size())};
+                return r;
+            });
+            s.registerMethod("/lan/unsubscribe", [&](control::CallContext& ctx) {
+                std::lock_guard lock(m);
+                unsubscribed.push_back(std::get<std::int64_t>(ctx.call.args.at("id")));
+                return proto::Result{};
+            });
+        });
+        ui::Connection c(options(h.port()));
+        ui::MonitorAudio monitor(c, ui::MonitorAudio::Options{true});
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        ui::waitUntil([] { return false; }, 100);
+        QVERIFY(!monitor.subscribed());  // off: nothing asked for
+        QVERIFY(monitor.statusText().isEmpty());
+
+        monitor.setStream(2);
+        QVERIFY(ui::waitUntil([&] { return monitor.subscribed(); }, 2000));
+        QCOMPARE(monitor.subscription(), 9);
+        {
+            std::lock_guard lock(m);
+            QCOMPARE(streams.size(), std::size_t{1});
+            QCOMPARE(streams[0], std::string("audio/2"));
+            QCOMPARE(port, std::int64_t{monitor.localPort()});
+        }
+
+        // mixd's sender: a -12 dBFS 1 kHz tone in Opus, 10 ms blocks on the real clock.
+        std::atomic<bool> sending{true};
+        std::atomic<std::uint16_t> to{monitor.localPort()};
+        std::thread sender([&] {
+            lan::UdpTransport::Options to_;
+            to_.bindAddress = "127.0.0.1";
+            to_.port = 0;
+            lan::UdpTransport udp(to_);
+            udp.start([](std::span<const std::uint8_t>, const lan::UdpTransport::Endpoint&, double) {});
+            lan::AudioSender::Config sc;
+            sc.encoder.codec = lan::AudioCodec::Opus;
+            sc.encoder.frames = 480;
+            lan::AudioSender tx(sc);
+            std::vector<float> block(480 * 2);
+            std::uint64_t pos = 0;
+            auto next = std::chrono::steady_clock::now();
+            while (sending) {
+                for (std::size_t i = 0; i < 480; ++i, ++pos)
+                    block[2 * i] = block[2 * i + 1] = 0.25f * static_cast<float>(std::sin(2 * std::numbers::pi * 1000.0 * double(pos) / 48000.0));
+                tx.push(block.data(), 480, lan::nowSeconds());
+                const lan::UdpTransport::Endpoint ep(asio::ip::make_address("127.0.0.1"), to.load());
+                tx.pump([&](std::span<const std::uint8_t> d) { udp.send(d, ep); });
+                next += 10ms;
+                std::this_thread::sleep_until(next);
+            }
+            udp.stop();
+        });
+        QVERIFY(ui::waitUntil([&] { return monitor.playing(); }, 3000));
+        QVERIFY2(monitor.statusText().isEmpty(), qPrintable(monitor.statusText()));
+        QVERIFY(ui::waitUntil([&] { return monitor.level() > -14 && monitor.level() < -10; }, 2000));
+        QVERIFY2(monitor.infoText().startsWith(QStringLiteral("Opus")), qPrintable(monitor.infoText()));
+        monitor.setVolume(0.5);
+        QVERIFY(ui::waitUntil([&] { return monitor.level() > -20 && monitor.level() < -16; }, 2000));
+
+        // Another stream: the first subscription ends, a new one starts on a new port.
+        monitor.setStream(3);
+        QVERIFY(ui::waitUntil([&] { return monitor.subscription() == 10; }, 2000));
+        to = monitor.localPort();
+        QVERIFY(ui::waitUntil([&] { return monitor.playing(); }, 3000));
+
+        // Off: unsubscribed, silent.
+        monitor.setStream(0);
+        QVERIFY(!monitor.subscribed());
+        QCOMPARE(monitor.localPort(), std::uint16_t{0});
+        QVERIFY(ui::waitUntil([&] { std::lock_guard lock(m); return unsubscribed.size() == 2; }, 2000));
+        {
+            std::lock_guard lock(m);
+            QCOMPARE(unsubscribed[0], std::int64_t{9});
+            QCOMPARE(unsubscribed[1], std::int64_t{10});
+        }
+        QCOMPARE(monitor.level(), -120.0);
+        sending = false;
+        sender.join();
     }
 
     void otherClientsChangesShow() {

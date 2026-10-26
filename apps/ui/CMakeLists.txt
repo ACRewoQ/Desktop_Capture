@@ -16,10 +16,14 @@ endif()
 
 # Everything except the screen: protocol client, models, self test. Also linked by tests/ui.
 add_library(dc_ui_core STATIC
+    src/audio_out.hpp
+    src/audio_out_null.cpp
     src/connection.cpp
     src/connection.hpp
     src/exercise.cpp
     src/exercise.hpp
+    src/monitor_audio.cpp
+    src/monitor_audio.hpp
     src/param_hub.cpp
     src/param_hub.hpp
     src/preview_stream.cpp
@@ -37,6 +41,11 @@ add_library(dc::ui_core ALIAS dc_ui_core)
 set_target_properties(dc_ui_core PROPERTIES AUTOMOC ON)
 target_include_directories(dc_ui_core PUBLIC src)
 target_link_libraries(dc_ui_core PUBLIC Qt6::Core Qt6::Network Qt6::Qml dc::protocol dc::lanmedia)
+if(WIN32)
+    # The monitor audio's output (WASAPI).
+    target_sources(dc_ui_core PRIVATE src/audio_out_wasapi.cpp)
+    target_link_libraries(dc_ui_core PRIVATE ole32)
+endif()
 dc_apply_options(dc_ui_core)
 
 qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp)
@@ -55,6 +64,7 @@ set(DC_UI_QML
     TopBar.qml
     NavRail.qml
     RecordButton.qml
+    MonitorButton.qml
     PairingPanel.qml
     # pages
     MixerPage.qml

@@ -1,6 +1,6 @@
 import QtQuick
 
-// Connection state, track count and the recording button.
+// Connection state, track count, the monitor audio and the recording button.
 Rectangle {
     id: bar
     height: 60
@@ -39,7 +39,7 @@ Rectangle {
         Column {
             anchors.verticalCenter: parent.verticalCenter
             width: Math.max(0, Math.min(Math.max(summaryText.implicitWidth, Math.min(fileText.implicitWidth, 420)),
-                                        bar.width - left.width - recordButton.width - 60))
+                                        bar.width - left.width - recordButton.width - monitorButton.width - 72))
             visible: width > 80
             Text {
                 id: summaryText
@@ -60,6 +60,7 @@ Rectangle {
                 text: recorder.error ? recorder.error : recorder.file
             }
         }
+        MonitorButton { id: monitorButton; anchors.verticalCenter: parent.verticalCenter }
         RecordButton { id: recordButton; anchors.verticalCenter: parent.verticalCenter }
     }
 }
