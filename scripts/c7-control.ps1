@@ -15,7 +15,7 @@
        - after a restart of mixd the bindings are back (saved file)
   3. MIDI: lists the MIDI inputs mixd sees. With -Midi, asks you to press a button or move a fader
      on a connected MIDI device within 60 s (learn), then to move it again (runs the binding).
-  4. dc-ui screenshot of the "キー・MIDI" page against this mixd.
+  4. dc-ui screenshot of the hotkey / MIDI page (--page control) against this mixd.
   5. Writes build\c7\<time>\c7.md and prints the table.
 
   Pressing keys while it runs may disturb the checks. It uses Ctrl+Alt+Shift+F9..F12, which nothing
@@ -195,13 +195,13 @@ try {
         } else {
             $b6 = Add-Binding @('action=toggle', 'target=/track/2/mute')
             Invoke-Method '/control/learn' @("binding=$b6", 'source=midi') | Out-Null
-            Write-Host 'MIDI 機器のボタンを押すか、フェーダー・つまみを動かしてください（60 秒）' -ForegroundColor Yellow
+            Write-Host 'Press a button or move a fader / knob on the MIDI device (60 s)' -ForegroundColor Yellow
             $ok = Wait-Until { (Get-Param "/control/binding/$b6/trigger") -like 'midi:*' } 60
             $trig = Get-Param "/control/binding/$b6/trigger"
             Add-Row 'MIDI learn' $ok "$trig from $(Get-Param "/control/binding/$b6/device")"
             if ($ok) {
                 $m0 = Get-Param '/track/2/mute'
-                Write-Host 'もう一度、同じボタンを押してください（30 秒）' -ForegroundColor Yellow
+                Write-Host 'Press the same button again (30 s)' -ForegroundColor Yellow
                 $ok = Wait-Until { (Get-Param '/track/2/mute') -ne $m0 } 30
                 Add-Row 'MIDI binding runs' $ok "track 2 mute $(Get-Param '/track/2/mute')"
             }
