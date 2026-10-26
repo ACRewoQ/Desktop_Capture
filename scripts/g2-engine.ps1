@@ -74,7 +74,7 @@ foreach ($mode in $Modes) {
     foreach ($block in $Blocks) {
         Write-Host "`n=== $mode, block $block, $Minutes min ===" -ForegroundColor Cyan
         $log = Join-Path $out "mixd_${stamp}_${mode}_$block.log"
-        $proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm' `
+        $proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm', '--no-profiles' `
             -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
         $row = [ordered]@{ mode = $mode; block = $block; clock = ''; latency_ms = ''; xruns = '';
                            cpu_max = ''; loopback = ''; result = 'FAIL'; note = '' }

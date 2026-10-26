@@ -61,12 +61,47 @@ void MockEngine::start() {
     bind(4, "key:ctrl+1", "", "set", "/video/mix/1/program_scene", "1");
     bind(5, "key:f13", "", "toggle", "/track/9/mute", "");
     keys_.setTaken({{proto::ctl::ModCtrl, '1'}}); // binding 4 shows a conflict
+
+    mixd::ProfileManager::Hooks hooks;
+    hooks.restoreFx = [this](const auto& slots, const auto& states) { return fx_.restore(slots, states); };
+    hooks.restored = [this] { fx_.restored(); };
+    hooks.pluginStates = [this] { return fx_.pluginStates(); };
+    hooks.deviceNames = [this](const std::vector<std::string>& ids) {
+        std::vector<SavedDevice> out;
+        const auto& tree = server_.store().tree();
+        for (const char* dir : {"input", "output"})
+            for (int n = 1; tree.contains("/devices/" + std::string(dir) + "/" + std::to_string(n) + "/id"); ++n) {
+                const auto base = "/devices/" + std::string(dir) + "/" + std::to_string(n);
+                const auto id = *tree.getAs<std::string>(base + "/id");
+                if (std::find(ids.begin(), ids.end(), id) != ids.end())
+                    out.push_back({id, tree.getAs<std::string>(base + "/name").value_or(""), dir == std::string("input")});
+            }
+        return out;
+    };
+    mixd::ProfileManager::Options po;
+    po.directory = options_.profileDir;
+    po.statePath = po.directory.empty() ? std::string() : po.directory + "/mixd-profile.txt";
+    po.verbose = false;
+    profiles_ = std::make_unique<mixd::ProfileManager>(io_, server_, std::move(hooks), po);
+    profiles_->start();
+    if (!server_.store().tree().contains("/snapshot/1/name")) {
+        // something to show: two snapshots of the seeded mixer
+        Call c;
+        c.method = "/snapshot/save";
+        control::ClientInfo self;
+        self.name = "mock";
+        c.args = {{"name", std::string("トーク")}};
+        server_.callLocal(c, self);
+        c.args = {{"name", std::string("ゲーム")}};
+        server_.callLocal(c, self);
+    }
     if (options_.meters) scheduleMeters();
 }
 
 void MockEngine::onDelta(const proto::Delta& delta) {
     fx_.onDelta(delta);
     if (bindings_) bindings_->onDelta(delta);
+    if (profiles_) profiles_->onDelta(delta);
     for (const auto& c : delta.changes) {
         if (c.path != "/control/learn/binding" || c.value == Value{std::int64_t{0}}) continue;
         // someone presses something on the "engine PC" a moment later
@@ -83,6 +118,7 @@ void MockEngine::stop() {
     asio::post(io_, [this] {
         stopped_ = true;
         learnTimer_.cancel();
+        if (profiles_) profiles_->stop();
         if (bindings_) bindings_->stop();
         fx_.stop();
         meterTimer_.cancel();

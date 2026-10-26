@@ -10,6 +10,7 @@
 #include "plan.hpp"
 
 #include "dc/control/server.hpp"
+#include "dc/protocol/profile.hpp"
 
 #include <asio.hpp>
 
@@ -43,6 +44,19 @@ public:
 
     const FxRack& rack() const { return rack_; }
 
+    // Profiles (docs/spec/protocol.md 5.10). restore() replaces every rack by the plan's slots and returns
+    // their tree values, to be published together with the rest of the profile (the caller removes the
+    // old /…/fx subtrees in the same delta); call restored() right after publishing. states holds the
+    // saved plugin states by the slot's base in the file. VST3 slots load in the background and get
+    // their state back before they enter the rack; plugins this PC does not have become "missing" and
+    // keep their state for the next save.
+    std::vector<proto::Change> restore(const std::map<int, std::vector<proto::FxRestore>>& slots,
+                                       const std::map<std::string, std::string>& states);
+    void restored();
+    // The state of every VST3 slot, by its base path ("/track/3/fx/2"): asked from the loaded plugins,
+    // the saved one for slots that are still loading, missing or failed.
+    std::map<std::string, std::string> pluginStates() const;
+
     // Paths that are handled here and never need a plan rebuild (fx slot contents, the plugin list).
     static bool handlesPath(const std::string& path);
 
@@ -54,8 +68,18 @@ private:
         std::shared_ptr<PluginInstance> plugin; // VST3 only
         std::shared_ptr<FxSlot> slot;
         std::set<std::string> publishedKeys;    // VST3 parameters in the tree
+        std::string state;                      // VST3: the saved state (set on load, kept while not loaded)
     };
     using SlotValues = std::vector<std::pair<std::string, proto::Value>>; // path suffix after /fx/N -> value
+
+    // A new slot of the given type with its tree values (suffixes after /fx/N). Starts loading a VST3.
+    // restoring: an unknown or unusable plugin gives a "missing" / "failed" slot instead of an error.
+    struct NewSlot {
+        Entry entry;
+        SlotValues values;
+        proto::Result error; // code != Ok: nothing was made
+    };
+    NewSlot makeSlot(const std::string& type, bool restoring);
 
     proto::Result add(control::CallContext& ctx);
     proto::Result remove(control::CallContext& ctx);

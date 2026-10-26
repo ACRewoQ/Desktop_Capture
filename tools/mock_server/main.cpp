@@ -1,6 +1,7 @@
 // dc-mock-server: fake engine for UI development and protocol tests.
-//   dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--quiet]
+//   dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--profile-dir DIR] [--quiet]
 //   --capd: recording is done by a connected capd (starting/stopping + /capture/report) instead of faked
+//   --profile-dir: profiles there (default: dc-mock-profiles in the temp folder; "" = no files)
 
 #include "mock_engine.hpp"
 
@@ -11,6 +12,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <string>
@@ -23,6 +25,7 @@ int main(int argc, char** argv) {
     opt.sessionId = std::random_device{}();
     dc::mock::MockEngine::Options mockOpt;
     bool quiet = false;
+    std::string profileDir = (std::filesystem::temp_directory_path() / "dc-mock-profiles").string();
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -38,16 +41,18 @@ int main(int argc, char** argv) {
         else if (a == "--allow-remote") opt.allowRemote = true;
         else if (a == "--no-meters") mockOpt.meters = false;
         else if (a == "--capd") mockOpt.delegateCapture = true;
+        else if (a == "--profile-dir") profileDir = next();
         else if (a == "--quiet") quiet = true;
         else if (a == "--version") {
             std::cout << "dc-mock-server " << dc::kVersionString << " (protocol " << dc::proto::kProtocolVersion
                       << ")\n";
             return 0;
         } else {
-            std::cerr << "usage: dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--quiet]\n";
+            std::cerr << "usage: dc-mock-server [--port N] [--bind ADDR] [--allow-remote] [--no-meters] [--capd] [--profile-dir DIR] [--quiet]\n";
             return 2;
         }
     }
+    mockOpt.profileDir = profileDir;
     if (opt.allowRemote && opt.bindAddress == "127.0.0.1") opt.bindAddress = "0.0.0.0";
     if (!quiet) {
         opt.log = [](const dc::control::ClientInfo& c, const std::string& text) {

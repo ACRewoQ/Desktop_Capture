@@ -230,7 +230,7 @@ $recordingAlive = $false
 
 try {
     Write-Host "`n=== setup ===" -ForegroundColor Cyan
-    $procs.mixdA = Start-Hidden $mixd @('--port', $port, '--bind', '127.0.0.1', '--no-discovery', '--test-pulse', '2', '--lan-store', "`"$storeA`"") 'mixd-a'
+    $procs.mixdA = Start-Hidden $mixd @('--port', $port, '--bind', '127.0.0.1', '--no-discovery', '--no-profiles', '--test-pulse', '2', '--lan-store', "`"$storeA`"") 'mixd-a'
     if (-not (Wait-Until { (Get-Param '/system/version') } 10)) { throw 'mixd A did not start' }
     $procs.watch = Start-Process -FilePath $cli -ArgumentList '--port', $port, 'watch', '--meters' -PassThru -WindowStyle Hidden -RedirectStandardOutput $watchFile
     Set-Param '/system/audio_mode' $Mode

@@ -57,6 +57,12 @@ public:
     // The LAN service added or removed ports (network thread).
     void portsChanged() { scheduleRebuild(); }
 
+    // Profiles (network thread): the effect racks, the names of device ids seen since the start, and
+    // the device names a restored profile brought (remembered, then moved ids are matched, 4.4).
+    FxManager& fx() { return fx_; }
+    std::vector<proto::SavedDevice> deviceNames(const std::vector<std::string>& ids) const;
+    void rememberDevices(const std::vector<proto::SavedDevice>& devices);
+
 private:
     void seed(const std::vector<DeviceInfo>& devices);
     void registerMethods();

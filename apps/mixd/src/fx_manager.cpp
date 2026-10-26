@@ -237,6 +237,61 @@ void FxManager::clearStrip(int strip) {
 
 // --- methods ---
 
+FxManager::NewSlot FxManager::makeSlot(const std::string& type, bool restoring) {
+    NewSlot n;
+    Entry& e = n.entry;
+    e.serial = nextSerial_++;
+    e.type = type;
+    auto values = [&](const std::string& name, const char* status, const std::string& err) {
+        n.values = {{"/type", type},
+                    {"/name", name},
+                    {"/bypass", false},
+                    {"/status", std::string(status)},
+                    {"/error", err},
+                    {"/latency_samples", std::int64_t{0}},
+                    {"/param_count", std::int64_t{0}},
+                    {"/editor", false}};
+    };
+    if (const auto* spec = findBuiltinFx(type)) {
+        auto fx = makeBuiltinEffect(type);
+        e.effect = fx;
+        e.slot = std::make_shared<FxSlot>(fx);
+        values(spec->name, "ok", {});
+        n.values[5].second = std::int64_t{spec->latencySamples};
+        n.values[6].second = static_cast<std::int64_t>(spec->params.size());
+        for (const auto& p : spec->params) n.values.push_back({"/param/" + p.key, p.defaultValue});
+        return n;
+    }
+    if (!isVst3Type(type)) {
+        n.error = error(ErrorCode::NotFound, "unknown effect type " + type);
+        return n;
+    }
+    std::vector<PluginInfo> list;
+    if (host_) list = host_->plugins();
+    const auto it = std::find_if(list.begin(), list.end(), [&](const PluginInfo& p) { return p.id == type; });
+    if (!host_ || it == list.end() || it->status != "ok") {
+        if (!restoring) {
+            if (!host_) n.error = error(ErrorCode::NotFound, "VST3 plugins are not available in this build of the engine");
+            else if (it == list.end()) n.error = error(ErrorCode::NotFound, "unknown plugin " + type + " (scan with /plugins/scan)");
+            else n.error = error(ErrorCode::Conflict, it->name + " did not pass the scan (" + it->status + ")");
+            return n;
+        }
+        if (it == list.end()) values(type, "missing", "この PC にないプラグイン");
+        else values(it->name, "failed", "スキャンで失敗したプラグイン（" + it->status + "）");
+        return n;
+    }
+    values(it->name, "loading", {});
+    const auto serial = e.serial;
+    std::weak_ptr<int> alive = alive_;
+    host_->create(type, [this, alive, serial](std::shared_ptr<PluginInstance> plugin, std::string err) {
+        if (alive.expired()) return;
+        asio::post(io_, [this, alive, serial, plugin = std::move(plugin), err = std::move(err)]() mutable {
+            if (!alive.expired()) onPluginLoaded(serial, std::move(plugin), err);
+        });
+    });
+    return n;
+}
+
 Result FxManager::add(CallContext& ctx) {
     const int strip = stripOfMethod(ctx.call.method);
     if (strip < 0) return error(ErrorCode::NotFound, "no such track");
@@ -248,58 +303,76 @@ Result FxManager::add(CallContext& ctx) {
     const auto index = intArg(ctx.call.args, "index").value_or(count + 1);
     if (index < 1 || index > count + 1) return error(ErrorCode::OutOfRange, "index out of range");
 
-    Entry e;
-    e.serial = nextSerial_++;
-    e.type = *type;
-    SlotValues values;
-    if (const auto* spec = findBuiltinFx(*type)) {
-        auto fx = makeBuiltinEffect(*type);
-        e.effect = fx;
-        e.slot = std::make_shared<FxSlot>(fx);
-        values = {{"/type", *type},
-                  {"/name", spec->name},
-                  {"/bypass", false},
-                  {"/status", std::string("ok")},
-                  {"/error", std::string()},
-                  {"/latency_samples", std::int64_t{spec->latencySamples}},
-                  {"/param_count", static_cast<std::int64_t>(spec->params.size())},
-                  {"/editor", false}};
-        for (const auto& p : spec->params) values.push_back({"/param/" + p.key, p.defaultValue});
-    } else if (isVst3Type(*type)) {
-        if (!host_) return error(ErrorCode::NotFound, "VST3 plugins are not available in this build of the engine");
-        const auto list = host_->plugins();
-        const auto it = std::find_if(list.begin(), list.end(), [&](const PluginInfo& p) { return p.id == *type; });
-        if (it == list.end()) return error(ErrorCode::NotFound, "unknown plugin " + *type + " (scan with /plugins/scan)");
-        if (it->status != "ok") return error(ErrorCode::Conflict, it->name + " did not pass the scan (" + it->status + ")");
-        values = {{"/type", *type},
-                  {"/name", it->name},
-                  {"/bypass", false},
-                  {"/status", std::string("loading")},
-                  {"/error", std::string()},
-                  {"/latency_samples", std::int64_t{0}},
-                  {"/param_count", std::int64_t{0}},
-                  {"/editor", false}};
-        const auto serial = e.serial;
-        std::weak_ptr<int> alive = alive_;
-        host_->create(*type, [this, alive, serial](std::shared_ptr<PluginInstance> plugin, std::string err) {
-            if (alive.expired()) return;
-            asio::post(io_, [this, alive, serial, plugin = std::move(plugin), err = std::move(err)]() mutable {
-                if (!alive.expired()) onPluginLoaded(serial, std::move(plugin), err);
-            });
-        });
-    } else {
-        return error(ErrorCode::NotFound, "unknown effect type " + *type);
-    }
-
+    auto made = makeSlot(*type, false);
+    if (made.error.code != ErrorCode::Ok) return made.error;
     auto slots = readSlots(strip);
-    slots.insert(slots.begin() + (index - 1), std::move(values));
-    entries.insert(entries.begin() + (index - 1), std::move(e));
+    slots.insert(slots.begin() + (index - 1), std::move(made.values));
+    entries.insert(entries.begin() + (index - 1), std::move(made.entry));
     writeSlots(strip, slots, ctx.call.id, ctx.client.name);
     updateRack(strip);
     if (verbose_) std::cout << "fx add " << stripBase(strip) << "/fx/" << index << " " << *type << std::endl;
     Result r;
     r.value = std::int64_t{index};
     return r;
+}
+
+std::vector<Change> FxManager::restore(const std::map<int, std::vector<FxRestore>>& slots,
+                                       const std::map<std::string, std::string>& states) {
+    for (auto& v : strips_) {
+        for (auto& e : v)
+            if (e.plugin) {
+                e.plugin->setListener({});
+                e.plugin->setEditorOpen(false);
+            }
+        v.clear();
+    }
+    std::vector<Change> c;
+    for (const auto& [strip, list] : slots) {
+        if (strip < 0 || strip >= kMaxStrips) continue;
+        auto& entries = strips_[static_cast<std::size_t>(strip)];
+        for (const auto& r : list) {
+            auto made = makeSlot(r.type, true);
+            if (made.error.code != ErrorCode::Ok) continue;
+            if (const auto st = states.find(r.fileSlot); st != states.end() && isVst3Type(r.type)) made.entry.state = st->second;
+            for (const auto& [suffix, value] : r.values) {
+                auto it = std::find_if(made.values.begin(), made.values.end(), [&](const auto& v) { return v.first == suffix; });
+                if (it != made.values.end()) it->second = value;
+                else made.values.push_back({suffix, value});
+                if (suffix == "/bypass" && made.entry.slot) made.entry.slot->setBypass(std::get_if<bool>(&value) && std::get<bool>(value));
+                if (suffix.rfind("/param/", 0) == 0 && made.entry.effect)
+                    if (const auto d = asNumber(value)) made.entry.effect->setParam(suffix.substr(7), *d);
+            }
+            const auto prefix = stripBase(strip) + "/fx/" + std::to_string(entries.size() + 1);
+            for (const auto& [suffix, value] : made.values) c.push_back({prefix + suffix, value});
+            entries.push_back(std::move(made.entry));
+        }
+    }
+    return c;
+}
+
+void FxManager::restored() {
+    for (int s = 0; s < kMaxStrips; ++s) {
+        auto& r = rack_[static_cast<std::size_t>(s)];
+        r.clear();
+        for (const auto& e : strips_[static_cast<std::size_t>(s)])
+            if (e.slot) r.push_back(e.slot);
+    }
+    if (onRackChanged_) onRackChanged_();
+}
+
+std::map<std::string, std::string> FxManager::pluginStates() const {
+    std::map<std::string, std::string> out;
+    for (int s = 0; s < kMaxStrips; ++s) {
+        const auto& v = strips_[static_cast<std::size_t>(s)];
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const auto& e = v[i];
+            if (!isVst3Type(e.type)) continue;
+            std::string st = e.plugin ? e.plugin->state() : std::string();
+            if (st.empty()) st = e.state;
+            if (!st.empty()) out[stripBase(s) + "/fx/" + std::to_string(i + 1)] = std::move(st);
+        }
+    }
+    return out;
 }
 
 Result FxManager::remove(CallContext& ctx) {
@@ -473,6 +546,13 @@ void FxManager::onPluginLoaded(std::uint64_t serial, std::shared_ptr<PluginInsta
         return;
     }
     const auto& tree = server_.store().tree();
+    if (!e->state.empty()) {
+        // a profile's slot: the plugin's own state first (its parameters follow from it)
+        if (!plugin->setState(e->state) && verbose_) std::cout << "fx state not restored " << slotBase << std::endl;
+    } else {
+        for (const auto& path : tree.pathsUnder(slotBase + "/param"))
+            if (const auto v = asNumber(*tree.get(path))) plugin->setParam(path.substr(slotBase.size() + 7), *v);
+    }
     e->plugin = plugin;
     e->effect = plugin;
     e->slot = std::make_shared<FxSlot>(plugin, tree.getAs<bool>(slotBase + "/bypass").value_or(false));

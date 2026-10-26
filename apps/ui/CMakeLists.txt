@@ -82,6 +82,7 @@ set(DC_UI_QML
     SamplerPage.qml
     LanPage.qml
     ControlPage.qml
+    ProfilePage.qml
     # mixer
     Strip.qml
     Fader.qml

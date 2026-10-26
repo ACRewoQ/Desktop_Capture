@@ -91,7 +91,7 @@ $report.Add('')
 $report.Add("engine $ip`:$port, $Remotes PC remote(s) for $Seconds s$(if ($Here) { ', the first runs --g4' })")
 try {
     Write-Host "`n=== setup ===" -ForegroundColor Cyan
-    $procs.mixd = Start-Logged $mixd @('--port', $port, '--allow-remote', '--test-tone', '440', '--lan-store', "`"$LanStore`"") 'mixd'
+    $procs.mixd = Start-Logged $mixd @('--port', $port, '--allow-remote', '--no-profiles', '--test-tone', '440', '--lan-store', "`"$LanStore`"") 'mixd'
     if (-not (Wait-Until { Get-Param '/system/version' } 15)) { throw 'mixd did not start' }
     # as scripts\g3-integration.ps1 picks it: "out  ok  ... CABLE Input ... [<id>]"
     $cable = & $mixd --list-devices | Where-Object { $_ -like 'out *' -and $_ -like '* ok *' -and $_ -like '*CABLE Input*' } |

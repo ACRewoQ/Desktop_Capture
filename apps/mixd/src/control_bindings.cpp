@@ -471,6 +471,8 @@ void ControlBindings::fire(int binding, const ctl::Binding& b, bool press, bool 
         call("/sampler/stop", std::move(args));
     } else if (a == "take") {
         call("/video/mix/" + b.target + "/take");
+    } else if (a == "snapshot") {
+        call("/snapshot/recall", {{"snapshot", std::int64_t{std::atoi(b.target.c_str())}}});
     } else if (a == "toggle") {
         set(b.target, Value{!tree.getAs<bool>(b.target).value_or(false)});
     } else if (a == "set") {

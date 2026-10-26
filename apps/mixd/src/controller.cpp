@@ -326,6 +326,21 @@ void Controller::applyDeviceState(const DeviceManager::State& state) {
     }
 }
 
+std::vector<proto::SavedDevice> Controller::deviceNames(const std::vector<std::string>& ids) const {
+    std::vector<proto::SavedDevice> out;
+    for (const auto& id : ids)
+        if (const auto it = known_.find(id); it != known_.end()) out.push_back({id, it->second.name, it->second.input});
+    return out;
+}
+
+void Controller::rememberDevices(const std::vector<proto::SavedDevice>& devices) {
+    // what this engine saw itself is more recent than what a file says
+    for (const auto& d : devices) known_.try_emplace(d.id, KnownDevice{d.name, d.input});
+    asio::post(io_, [this] {
+        if (!stopped_) rematch();
+    });
+}
+
 void Controller::rematch() {
     const auto r = rematchDevices(server_.store().tree(), deviceList_, known_);
     if (r.changes.empty()) return;

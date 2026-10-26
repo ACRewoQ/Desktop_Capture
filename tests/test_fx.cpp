@@ -7,6 +7,7 @@
 #include "fake_backend.hpp"
 #include "fx/builtin.hpp"
 #include "fx/plugin_host.hpp"
+#include "profile_manager.hpp"
 
 #include "dc/control/client.hpp"
 #include "dc/protocol/fx.hpp"
@@ -15,6 +16,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <future>
 #include <mutex>
 #include <random>
 #include <thread>
@@ -236,6 +240,25 @@ public:
             for (int i = 0; i < frames; ++i) x[c][i] *= g;
     }
     void reset() override {}
+    // the whole state: every value, as text
+    std::string state() const override {
+        std::string out = "fake:";
+        for (const auto& v : values) out += std::to_string(v.load()) + ",";
+        return out;
+    }
+    bool setState(const std::string& data) override {
+        if (data.rfind("fake:", 0) != 0) return false;
+        std::size_t pos = 5;
+        for (auto& v : values) {
+            const auto comma = data.find(',', pos);
+            if (comma == std::string::npos) return false;
+            v = std::stod(data.substr(pos, comma - pos));
+            pos = comma + 1;
+        }
+        ++restored;
+        return true;
+    }
+    std::atomic<int> restored{0};
     // the plugin's own window moves a knob
     void edit(int id, double v) {
         values[static_cast<std::size_t>(id)] = v;
@@ -445,4 +468,284 @@ TEST_CASE("effect racks behind the control server", "[fx][integration]") {
     net.join();
     ctlPtr = nullptr;
     devices.stop();
+}
+
+namespace {
+
+// An engine (fake devices, the fake plugin host) with profiles in dir, on its own network thread.
+struct ProfileRig {
+    asio::io_context io;
+    proto::ParamStore store;
+    Controller* ctlPtr = nullptr;
+    ProfileManager* profPtr = nullptr;
+    FakeBackend backend;
+    Engine engine{nullptr};
+    std::unique_ptr<control::ControlServer> server;
+    std::unique_ptr<DeviceManager> devices;
+    std::unique_ptr<Controller> ctl;
+    std::unique_ptr<ProfileManager> prof;
+    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> work;
+    std::thread net;
+
+    ProfileRig(FakeHost& host, const std::string& dir, std::string startProfile = {}) {
+        control::ControlServer::Options opt;
+        opt.port = 0;
+        opt.onDelta = [this](const proto::Delta& d) {
+            if (ctlPtr) ctlPtr->onDelta(d);
+            if (profPtr) profPtr->onDelta(d);
+        };
+        server = std::make_unique<control::ControlServer>(io, store, opt);
+        devices = std::make_unique<DeviceManager>(backend, engine, DeviceManager::Options{});
+        Controller::Options co;
+        co.verbose = false;
+        co.plugins = &host;
+        ctl = std::make_unique<Controller>(io, *server, *devices, engine, nullptr, co);
+        ProfileManager::Hooks hooks;
+        hooks.restoreFx = [this](const auto& slots, const auto& states) { return ctl->fx().restore(slots, states); };
+        hooks.restored = [this] { ctl->fx().restored(); };
+        hooks.pluginStates = [this] { return ctl->fx().pluginStates(); };
+        hooks.deviceNames = [this](const std::vector<std::string>& ids) { return ctl->deviceNames(ids); };
+        hooks.rememberDevices = [this](const std::vector<proto::SavedDevice>& d) { ctl->rememberDevices(d); };
+        ProfileManager::Options po;
+        po.directory = dir;
+        po.statePath = dir.empty() ? std::string() : dir + "/mixd-profile.txt";
+        po.startProfile = std::move(startProfile);
+        po.autosaveDelay = 100ms;
+        po.verbose = false;
+        prof = std::make_unique<ProfileManager>(io, *server, std::move(hooks), po);
+        server->start();
+        ctl->start(devices->enumerateNow());
+        ctlPtr = ctl.get();
+        prof->start();
+        profPtr = prof.get();
+        devices->start([this](const DeviceManager::State& s) { ctl->onDeviceState(s); });
+        work.emplace(asio::make_work_guard(io));
+        net = std::thread([this] { io.run(); });
+    }
+    ~ProfileRig() {
+        std::promise<void> done;
+        asio::post(io, [&] {
+            prof->stop();
+            profPtr = nullptr;
+            ctl->stop();
+            server->stop();
+            done.set_value();
+        });
+        done.get_future().wait();
+        work.reset();
+        asio::post(io, [&] { io.stop(); });
+        net.join();
+        ctlPtr = nullptr;
+        devices->stop();
+    }
+    std::uint16_t port() const { return server->port(); }
+};
+
+std::string tempDir(const char* name) {
+    const auto d = std::filesystem::temp_directory_path() / (std::string("dc-profile-test-") + name);
+    std::filesystem::remove_all(d);
+    std::filesystem::create_directories(d);
+    return d.string();
+}
+
+} // namespace
+
+TEST_CASE("profiles: save, restart, switch and snapshots", "[profile][integration]") {
+    using proto::ErrorCode;
+    const auto dir = tempDir("main");
+    FakeHost host;
+    auto connect = [](ProfileRig& rig) {
+        control::ControlClient::Options o;
+        o.port = rig.port();
+        o.clientName = "test";
+        auto c = std::make_unique<control::ControlClient>(o);
+        REQUIRE(c->connect(3s));
+        return c;
+    };
+    auto waitFor = [](control::ControlClient& c, auto pred) {
+        for (int i = 0; i < 100; ++i) {
+            if (pred(c.tree())) return true;
+            std::this_thread::sleep_for(30ms);
+        }
+        return false;
+    };
+
+    {
+        ProfileRig rig(host, dir);
+        auto client = connect(rig);
+        auto tree = [&] { return client->tree(); };
+        CHECK(tree().getAs<std::string>("/profile/current") == "標準");
+        CHECK(tree().getAs<std::string>("/profile/directory") == dir);
+        CHECK_FALSE(tree().contains("/profile/list/1/name")); // saved on the first change
+
+        REQUIRE(client->set({{"/track/1/volume_db", -6.0}, {"/track/1/name", std::string("Mic")},
+                             {"/track/1/input/kind", std::string("device")}, {"/track/1/input/source", std::string("fake-line")},
+                             {"/capture/video/bitrate_kbps", std::int64_t{40000}}})
+                    .get()
+                    .code == ErrorCode::Ok);
+        REQUIRE(client->call("/mixer/track/add").get().code == ErrorCode::Ok);
+        REQUIRE(client->call("/track/1/fx/add", {{"type", std::string("eq4")}}).get().code == ErrorCode::Ok);
+        REQUIRE(client->set({{"/track/1/fx/1/param/output_db", -3.0}}).get().code == ErrorCode::Ok);
+        REQUIRE(client->call("/master/fx/add", {{"type", std::string("vst3:00000007")}}).get().code == ErrorCode::Ok);
+        REQUIRE(waitFor(*client, [](const proto::ParamTree& t) { return t.getAs<std::string>("/master/fx/1/status") == "ok"; }));
+        REQUIRE(client->set({{"/master/fx/1/param/p7", 0.25}}).get().code == ErrorCode::Ok);
+        host.last->values[280] = 0.9; // only in the plugin's own state
+
+        // a snapshot, then the fader moves on
+        auto r = client->call("/snapshot/save", {{"name", std::string("Talk")}}).get();
+        REQUIRE(r.code == ErrorCode::Ok);
+        CHECK(std::get<std::int64_t>(r.value) == 1);
+        CHECK(tree().getAs<std::string>("/snapshot/1/name") == "Talk");
+        CHECK(tree().getAs<std::int64_t>("/snapshot/last") == 1);
+        REQUIRE(client->set({{"/track/1/volume_db", -20.0}, {"/track/1/name", std::string("Mic 2")}}).get().code == ErrorCode::Ok);
+        CHECK(waitFor(*client, [](const proto::ParamTree& t) { return t.getAs<bool>("/profile/modified") == true; }));
+
+        // autosave
+        REQUIRE(waitFor(*client, [](const proto::ParamTree& t) {
+            return t.getAs<bool>("/profile/modified") == false && t.getAs<std::string>("/profile/list/1/name") == "標準";
+        }));
+        CHECK(std::filesystem::exists(std::filesystem::path(dir) / std::filesystem::path(u8"標準.dcprofile")));
+
+        // recall: the fader and the effect, not the name
+        REQUIRE(client->set({{"/track/1/fx/1/param/output_db", 0.0}}).get().code == ErrorCode::Ok);
+        REQUIRE(client->call("/snapshot/recall", {{"snapshot", std::int64_t{1}}}).get().code == ErrorCode::Ok);
+        CHECK(tree().getAs<double>("/track/1/volume_db") == -6.0);
+        CHECK(tree().getAs<double>("/track/1/fx/1/param/output_db") == -3.0);
+        CHECK(tree().getAs<std::string>("/track/1/name") == "Mic 2");
+        CHECK(client->call("/snapshot/recall", {{"snapshot", std::int64_t{5}}}).get().code == ErrorCode::NotFound);
+        REQUIRE(client->set({{"/track/1/volume_db", -7.5}}).get().code == ErrorCode::Ok);
+        client->disconnect();
+    } // the engine stops: the last change is saved
+
+    {
+        ProfileRig rig(host, dir);
+        auto client = connect(rig);
+        auto tree = [&] { return client->tree(); };
+        CHECK(tree().getAs<std::string>("/profile/current") == "標準");
+        CHECK(tree().getAs<double>("/track/1/volume_db") == -7.5);
+        CHECK(tree().getAs<std::string>("/track/1/name") == "Mic 2");
+        CHECK(tree().getAs<std::string>("/track/1/input/source") == "fake-line");
+        CHECK(tree().getAs<std::int64_t>("/mixer/track_count") == 5);
+        CHECK(tree().getAs<std::int64_t>("/capture/video/bitrate_kbps") == 40000);
+        CHECK(tree().getAs<std::string>("/track/1/fx/1/type") == "eq4");
+        CHECK(tree().getAs<double>("/track/1/fx/1/param/output_db") == -3.0);
+        CHECK(tree().getAs<std::string>("/snapshot/1/name") == "Talk");
+        CHECK(tree().getAs<std::int64_t>("/snapshot/last") == 0);
+        REQUIRE(waitFor(*client, [](const proto::ParamTree& t) { return t.getAs<std::string>("/master/fx/1/status") == "ok"; }));
+        REQUIRE(host.last);
+        CHECK(host.last->restored.load() == 1);
+        CHECK(host.last->values[280].load() == Approx(0.9));
+        CHECK(tree().getAs<double>("/master/fx/1/param/p7") == Approx(0.25));
+        REQUIRE(waitFor(*client, [](const proto::ParamTree& t) { return t.getAs<std::string>("/track/1/input/state") == "ok"; }));
+
+        // a second profile from the fresh state, and back
+        CHECK(client->call("/profile/new", {{"name", std::string("a/b")}}).get().code == ErrorCode::BadRequest);
+        REQUIRE(client->call("/profile/new", {{"name", std::string("配信")}}).get().code == ErrorCode::Ok);
+        CHECK(tree().getAs<std::string>("/profile/current") == "配信");
+        CHECK(tree().getAs<std::int64_t>("/mixer/track_count") == 4);
+        CHECK(tree().pathsUnder("/master/fx").empty());
+        CHECK_FALSE(tree().contains("/snapshot/1/name"));
+        CHECK(tree().getAs<std::string>("/profile/list/1/name") == "標準");
+        CHECK(tree().getAs<std::string>("/profile/list/2/name") == "配信");
+        CHECK(client->call("/profile/new", {{"name", std::string("配信")}}).get().code == ErrorCode::Conflict);
+        REQUIRE(client->set({{"/track/2/pan", -0.5}}).get().code == ErrorCode::Ok);
+
+        CHECK(client->call("/profile/load", {{"name", std::string("nope")}}).get().code == ErrorCode::NotFound);
+        REQUIRE(client->call("/profile/load", {{"name", std::string("標準")}}).get().code == ErrorCode::Ok);
+        CHECK(tree().getAs<double>("/track/1/volume_db") == -7.5);
+        CHECK(tree().getAs<std::int64_t>("/mixer/track_count") == 5);
+        REQUIRE(waitFor(*client, [](const proto::ParamTree& t) { return t.getAs<std::string>("/master/fx/1/status") == "ok"; }));
+        REQUIRE(client->call("/profile/load", {{"name", std::string("配信")}}).get().code == ErrorCode::Ok);
+        CHECK(tree().getAs<double>("/track/2/pan") == -0.5); // saved before switching away
+
+        // rename, save as, remove
+        CHECK(client->call("/profile/remove", {{"name", std::string("配信")}}).get().code == ErrorCode::Conflict);
+        REQUIRE(client->call("/profile/rename", {{"name", std::string("配信")}, {"new_name", std::string("Stream")}}).get().code ==
+                ErrorCode::Ok);
+        CHECK(tree().getAs<std::string>("/profile/current") == "Stream");
+        CHECK(client->call("/profile/rename", {{"name", std::string("Stream")}, {"new_name", std::string("標準")}}).get().code ==
+              ErrorCode::Conflict);
+        auto r = client->call("/profile/save", {{"name", std::string("Copy")}}).get();
+        REQUIRE(r.code == ErrorCode::Ok);
+        CHECK(std::get<std::string>(r.value) == "Copy");
+        CHECK(tree().getAs<std::string>("/profile/current") == "Copy");
+        REQUIRE(client->call("/profile/remove", {{"name", std::string("stream")}}).get().code == ErrorCode::Ok); // any case
+        CHECK(tree().getAs<std::string>("/profile/list/1/name") == "Copy");
+        CHECK(tree().getAs<std::string>("/profile/list/2/name") == "標準");
+        CHECK_FALSE(tree().contains("/profile/list/3/name"));
+
+        // snapshots are kept per profile
+        REQUIRE(client->call("/snapshot/save").get().code == ErrorCode::Ok);
+        CHECK(tree().getAs<std::string>("/snapshot/1/name") == "Snapshot 1");
+        REQUIRE(client->call("/snapshot/remove", {{"snapshot", std::int64_t{1}}}).get().code == ErrorCode::Ok);
+        CHECK_FALSE(tree().contains("/snapshot/1/name"));
+        CHECK(tree().getAs<std::int64_t>("/snapshot/last") == 0);
+        client->disconnect();
+    }
+
+    {
+        ProfileRig rig(host, dir); // starts with the last one used
+        auto client = connect(rig);
+        CHECK(client->tree().getAs<std::string>("/profile/current") == "Copy");
+        client->disconnect();
+    }
+    {
+        ProfileRig rig(host, dir, "標準"); // --profile
+        auto client = connect(rig);
+        CHECK(client->tree().getAs<std::string>("/profile/current") == "標準");
+        CHECK(client->tree().getAs<std::string>("/snapshot/1/name") == "Talk");
+        client->disconnect();
+    }
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("profiles: a broken file", "[profile][integration]") {
+    const auto dir = tempDir("broken");
+    const auto file = std::filesystem::path(dir) / std::filesystem::path(u8"標準.dcprofile");
+    FakeHost host;
+    {
+        std::ofstream(file) << "dcprofile\t1\nv\t/track/1/volume_db\tf\t-3\n"; // cut short
+        ProfileRig rig(host, dir);
+        control::ControlClient::Options o;
+        o.port = rig.port();
+        control::ControlClient client(o);
+        REQUIRE(client.connect(3s));
+        CHECK(client.tree().getAs<std::string>("/profile/current") == "標準");
+        CHECK(client.tree().getAs<std::string>("/profile/error").value_or("").find("標準") != std::string::npos);
+        CHECK(client.tree().getAs<double>("/track/1/volume_db") == 0.0);
+        CHECK(std::filesystem::exists(std::filesystem::path(file.string() + ".broken")));
+        client.disconnect();
+    }
+    {
+        // a broken file with a good backup
+        std::ofstream(file) << "garbage";
+        std::ofstream(std::filesystem::path(file.string() + ".bak")) << "dcprofile\t1\nv\t/track/1/position\ti\t1\n"
+                                                                         "v\t/track/1/volume_db\tf\t-3\nend\n";
+        ProfileRig rig(host, dir);
+        control::ControlClient::Options o;
+        o.port = rig.port();
+        control::ControlClient client(o);
+        REQUIRE(client.connect(3s));
+        CHECK(client.tree().getAs<double>("/track/1/volume_db") == -3.0);
+        CHECK(client.tree().getAs<std::int64_t>("/mixer/track_count") == 1);
+        CHECK(client.tree().getAs<std::string>("/profile/error").value_or("").find(".bak") != std::string::npos);
+        client.disconnect();
+    }
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("profiles off: snapshots still work", "[profile][integration]") {
+    FakeHost host;
+    ProfileRig rig(host, "");
+    control::ControlClient::Options o;
+    o.port = rig.port();
+    control::ControlClient client(o);
+    REQUIRE(client.connect(3s));
+    CHECK(client.tree().getAs<std::string>("/profile/current") == "");
+    CHECK(client.call("/profile/save").get().code == proto::ErrorCode::Conflict);
+    REQUIRE(client.call("/snapshot/save").get().code == proto::ErrorCode::Ok);
+    REQUIRE(client.set({{"/master/volume_db", -10.0}}).get().code == proto::ErrorCode::Ok);
+    REQUIRE(client.call("/snapshot/recall", {{"snapshot", std::int64_t{1}}}).get().code == proto::ErrorCode::Ok);
+    CHECK(client.tree().getAs<double>("/master/volume_db") == 0.0);
+    client.disconnect();
 }
