@@ -10,7 +10,8 @@
     mixd A     the engine under test on 0.0.0.0:47800 (--allow-remote: the remotes need no pairing here),
                --test-pulse 2 (a 1 kHz burst on the master every 2 s, for capd avsync), -Mode, -BlockSize.
                  track 1 "Mic"   -InputDevice (UR22), recorded before the fader, fader closed
-                 track 2 "Game"  process dc-p5-app.exe (a copy of dc-loopback-probe playing 700 Hz quietly), also
+                 track 2 "Game"  process dc-p5-app.exe (a copy of dc-loopback-probe playing 700 Hz at -30 dBFS:
+                                 dc-audio-check fits blocks above -40 dBFS only), also
                                  recorded to WAV by the track recorder (glitch check over the whole run)
                  track 3 "LAN"   LAN input from mixd B (500 Hz test tone), -40 dB
                  track 4 "Vmic"  CABLE Output (what the virtual mic receives), no output: its meter checks the vmic
@@ -67,10 +68,13 @@ Set-Location $root
 
 if (-not $NoBuild) {
     if (-not $env:VCPKG_ROOT) { throw 'VCPKG_ROOT is not set. See docs/build-and-test.md (section 1).' }
+    # cmake writes warnings to stderr: with 'Stop' a redirected run (*>&1 | Tee-Object) would turn them into errors
+    $ErrorActionPreference = 'Continue'
     cmake --preset windows
     if ($LASTEXITCODE) { throw "configure failed ($LASTEXITCODE)" }
     cmake --build --preset windows-release --target mixd capd dc-ui dc-cli dc-av-flash dc-loopback-probe dc-audio-check dc-v6-preview
     if ($LASTEXITCODE) { throw "build failed ($LASTEXITCODE)" }
+    $ErrorActionPreference = 'Stop'
 }
 
 $bin = Join-Path $root 'build/windows'
@@ -143,8 +147,12 @@ Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class P5Win {
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
+  [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
 }
 '@
+# The monitor must stay on and the PC unlocked for the whole run (the recording captures it): ES_CONTINUOUS |
+# ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED for as long as this script runs, without touching the power settings.
+$null = [P5Win]::SetThreadExecutionState(0x80000003)
 # Windows go to the right half of the primary monitor, away from the flash in the top-left quarter.
 Add-Type -AssemblyName System.Windows.Forms
 $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -223,7 +231,7 @@ try {
     Set-Param '/master/out/3/target' 'lan/1'
     Call '/master/fx/add' @('type=s:limiter') | Out-Null
 
-    $procs.game = Start-Process -FilePath $gameApp -ArgumentList 'tone', '--freq', '700', '--amp', '0.005', '--seconds', ($seconds + 3600) -PassThru -WindowStyle Hidden
+    $procs.game = Start-Process -FilePath $gameApp -ArgumentList 'tone', '--freq', '700', '--amp', '0.03', '--seconds', ($seconds + 3600) -PassThru -WindowStyle Hidden
 
     # mixd B, paired with A, sends its 500 Hz to LAN stream 1
     $procs.mixdB = Start-Logged $mixd @('--port', $portB, '--media-port', $mediaB, '--bind', '127.0.0.1', '--no-discovery', '--fake-devices',
