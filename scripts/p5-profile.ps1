@@ -133,6 +133,9 @@ function Add-Row([string]$check, [bool]$pass, [string]$detail) {
     Write-Host ("{0,-4} {1} {2}" -f $(if ($pass) { 'PASS' } else { 'FAIL' }), $check, $detail) -ForegroundColor $(if ($pass) { 'Green' } else { 'Red' })
 }
 
+# the recording of the conflict check goes here, not into the Videos folder
+$recDir = Join-Path $out 'rec'
+New-Item -ItemType Directory -Force $recDir | Out-Null
 $procs = @{}
 try {
     Write-Host "`n=== set up profile p5a ===" -ForegroundColor Cyan
@@ -141,10 +144,11 @@ try {
     Add-Row 'starts with --profile' ((Get-Param '/profile/current') -eq 'p5a') "current $(Get-Param '/profile/current'), folder $(Get-Param '/profile/directory')"
 
     Set-Param '/track/1/volume_db' -6.5
-    Set-Param '/track/1/name' 's:P5 Mic'
+    Set-Param '/track/1/name' 'P5 Mic'
     Set-Param '/track/2/pan' -0.4
     Set-Param '/capture/video/bitrate_kbps' 33000
-    Set-Param '/sampler/bank/1/pad/1/name' 's:pon'
+    Set-Param '/sampler/bank/1/pad/1/name' 'pon'
+    Set-Param '/capture/directory' $recDir
     $null = Invoke-Method '/mixer/track/add' @('name=s:Fifth')
     $null = Invoke-Method '/track/1/fx/add' @('type=eq4')
     Set-Param '/track/1/fx/1/param/output_db' -2.5
@@ -194,7 +198,7 @@ try {
     $procs.mixd = Start-Mixd 'mixd-2'
     $checks = @{
         '/profile/current' = 'p5a'; '/track/1/volume_db' = '-7.5'; '/track/1/name' = 'P5 Mic'; '/track/2/pan' = '-0.4'
-        '/mixer/track_count' = '5'; '/capture/video/bitrate_kbps' = '33000'; '/sampler/bank/1/pad/1/name' = 'pon'
+        '/mixer/track_count' = '5'; '/capture/video/bitrate_kbps' = '33000'; '/capture/directory' = ($recDir -replace '\\', '\\'); '/sampler/bank/1/pad/1/name' = 'pon'
         '/track/1/fx/1/type' = 'eq4'; '/track/1/fx/1/param/output_db' = '-2.5'; '/video/mix/1/program_scene' = $scene2
         "/video/scene/$scene2/layer/1/x" = '0.25'; "/snapshot/$snap/name" = 'snapA'
     }
