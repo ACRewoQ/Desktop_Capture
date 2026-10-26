@@ -3,6 +3,7 @@
 #include "control_bindings.hpp"
 #include "fx_manager.hpp"
 #include "mock_plugins.hpp"
+#include "profile_manager.hpp"
 
 #include "dc/control/server.hpp"
 
@@ -26,6 +27,8 @@ public:
         // Leave recording to a connected capd (protocol.md 5.4.1: starting/stopping + /capture/report)
         // instead of pretending to record at once.
         bool delegateCapture = false;
+        // Profiles in this folder (mixd's ProfileManager); "" = no files (snapshots only).
+        std::string profileDir;
     };
 
     MockEngine(asio::io_context& io, control::ControlServer& server, Options options);
@@ -65,6 +68,7 @@ private:
     mixd::FakeHotkeys keys_;
     mixd::FakeMidi midi_;
     std::unique_ptr<mixd::ControlBindings> bindings_;
+    std::unique_ptr<mixd::ProfileManager> profiles_;
     asio::steady_timer learnTimer_;
 };
 

@@ -25,6 +25,7 @@ P2 レーンA の骨格と P3 レーン A2（入出力の拡張）。設計書�
 | `sampler` | パッドの発音（ボイス、モード、バンクごとのバス）と読み込みスレッド | 音声、読み込み |
 | `control_bindings` | ホットキーと MIDI の割り当て（`/control/*`）：状態の検査、ホットキーの登録、MIDI 入力の一覧と開閉、動作の実行、学習、保存（`%APPDATA%\DesktopCapture\mixd-control.txt`） | 制御 |
 | `control_input_win` / `control_input_fake` | エンジンの PC のキーボード（`RegisterHotKey`、学習中だけ低レベルキーボードフック）と MIDI 入力（winmm）。テスト用の偽物 | ホットキー用スレッド、MIDI ドライバー |
+| `profile_manager` | プロファイルとミキサースナップショット（`/profile/*`・`/snapshot/*`）：ファイルの読み書き（`%APPDATA%\DesktopCapture\profiles\<名前>.dcprofile`、PC ごとの状態は `mixd-profile.txt`）、自動保存、切り替え、起動時の復元 | 制御 |
 
 JUCE はデバイス入出力には使わない。JUCE の WASAPI は入力1台と出力1台を1本のスレッドで組にし、エンドポイント ID も公開しないので、「トラックごとに別の入力デバイス」に合わない。JUCE は VST3 ホストだけに使う（内蔵エフェクトは自前）。
 
@@ -136,6 +137,17 @@ docs/spec/protocol.md 5.9 のとおり（P4 C7）。
 - ボタンとして使う CC とノートは、押した・離したの変わり目だけで動く（127 を 2 回送るパッドでも 1 回）。`param` の値は割り当てごとに約 60Hz に間引き、最初の値はすぐ反映する。
 - 動作はクライアント名 `control` の Set / Call として、クライアントと同じ検査を通す（`ControlServer::applyLocalSet`・`callLocal`）。
 - `mixd --control-store FILE` で保存ファイルを変える。`--no-hotkeys` はホットキーも MIDI も使わない（割り当ては `unsupported`。本物のエンジンと並べて試験するとき）。
+
+## プロファイルとスナップショット
+
+docs/spec/protocol.md 5.10 のとおり（P5-A）。
+
+- 保存するのはスキーマで「保存 P」の値と、エフェクトの種類・VST3 の状態（プラグインの `getStateInformation` を base64 で）、トラックの入出力デバイスの名前（ID が変わっていたら名前で照合し直す）、スナップショット。ホットキー・MIDI の割り当てと LAN のペアリングはプロファイルに入れない（PC で共通）。
+- ファイルはタブ区切りのテキスト（1 行目 `dcprofile\t1`、最後に `end`）。書くときは一時ファイル → 古いものを `.bak` → 置き換え。読めないファイルは `.bak` を読み、それも駄目なら `.broken` に名前を変えて初期状態から始め、`/profile/error` に書く。
+- 自動保存（`/profile/autosave`）は最後の変更から 2 秒後、変更が続いても 10 秒以内に保存する。切り替えの前、終了時（Ctrl+C / SIGTERM）、VST3 のエディターを閉じたときにも保存する。強制終了では最後の数秒が残らないことがある。
+- 読み込みは 1 つの大きなデルタで `/track`・`/master/fx`・`/video/source`・`/video/scene`・`/video/mix`・`/snapshot` を消して作り直す。値は 1 つずつスキーマで検査し、通らないもの（範囲外、知らない項目、なくなったプラグイン）は飛ばして `profile.loaded` の `skipped` に数える。見つからない VST3 は `missing` のスロットとして残す。録画中・録音中（`/capture/state` が idle・error 以外、`/recorder/state` = recording）は読み込みを断る。
+- スナップショットは 64 個まで、プロファイルの中に入る。呼び出しは保存してある値のうち今もある項目だけを、クライアント名 `profile` の Set として通常の検査で反映する。割り当ての動作 `snapshot`（対象 `<n>`）からも呼べる。
+- `mixd --profile-dir DIR` でプロファイルのフォルダーを変える（状態ファイルもそのフォルダーに置く）。`--profile NAME` で起動時のプロファイルを指定、`--no-profiles` でファイルを使わない（スナップショットはメモリーだけ）。`--fake-devices` のときと Windows 以外は、`--profile-dir` を付けない限りファイルを使わない。試験スクリプトの mixd は `--no-profiles` で、Reo の普段のプロファイルに触らない。
 
 ## 共有と排他
 

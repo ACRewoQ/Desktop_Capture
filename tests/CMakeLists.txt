@@ -11,6 +11,7 @@ add_executable(dc_tests
     test_mixd_io.cpp
     test_param_store.cpp
     test_param_tree.cpp
+    test_profile.cpp
     test_recorder_sampler.cpp
     test_routing.cpp
     test_schema.cpp

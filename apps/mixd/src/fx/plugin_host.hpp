@@ -57,6 +57,14 @@ public:
 
     virtual bool hasEditor() const = 0;
     virtual void setEditorOpen(bool open) = 0;
+
+    // The plugin's own saved state (all of its parameters and data), kept in profiles. "" = nothing to
+    // save. setState() restores it before the instance is put in the rack; false when it was refused.
+    virtual std::string state() const { return {}; }
+    virtual bool setState(const std::string& data) {
+        (void)data;
+        return false;
+    }
 };
 
 class PluginHost {

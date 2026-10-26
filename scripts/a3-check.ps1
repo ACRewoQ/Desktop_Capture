@@ -86,7 +86,7 @@ Write-Host "`n=== Devices ===" -ForegroundColor Cyan
 & $mixd --list-devices
 
 $log = Join-Path $out 'mixd.log'
-$proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm' `
+$proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm', '--no-profiles' `
     -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 $rows = @()
 $samplerRows = @()

@@ -318,6 +318,12 @@ BindingCheck checkBinding(const ParamTree& tree, const Binding& b, const Schema&
         if (!tree.contains("/video/mix/" + b.target + "/name")) return invalid("その映像ミックスがない");
         return {"ok", {}};
     }
+    if (a == "snapshot") {
+        const auto n = toInt(b.target);
+        if (!n || *n < 1 || *n > kMaxSnapshots) return invalid("スナップショットは 1〜64");
+        if (!tree.contains("/snapshot/" + b.target + "/name")) return invalid("そのスナップショットがない");
+        return {"ok", {}};
+    }
     if (a == "toggle" || a == "set" || a == "step" || a == "param") {
         const ParamSpec* spec = writable(tree, b.target, schema, &why);
         if (!spec) return invalid(why);

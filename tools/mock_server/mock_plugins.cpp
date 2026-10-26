@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 namespace dc::mock {
@@ -69,6 +70,22 @@ public:
     }
     void process(float* const*, int, int) override {}
     void reset() override {}
+    std::string state() const override {
+        std::string out = "mock:";
+        for (const auto& v : values_) out += std::to_string(v.load()) + ",";
+        return out;
+    }
+    bool setState(const std::string& data) override {
+        if (data.rfind("mock:", 0) != 0) return false;
+        std::size_t pos = 5;
+        for (auto& v : values_) {
+            const auto comma = data.find(',', pos);
+            if (comma == std::string::npos) return false;
+            v = std::strtod(data.c_str() + pos, nullptr);
+            pos = comma + 1;
+        }
+        return true;
+    }
 
 private:
     // params after the strip are "Macro N" with IDs 5000 + N

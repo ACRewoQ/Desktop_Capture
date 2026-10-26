@@ -113,7 +113,7 @@ function Measure-Run([int]$sec, [scriptblock]$each = $null) {
 }
 
 Write-Host "`n=== Start mixd ===" -ForegroundColor Cyan
-$proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--test-tone', '1000', '--no-shm', '--plugin-cache', "`"$cache`"" `
+$proc = Start-Process -FilePath $mixd -ArgumentList '--port', $port, '--no-profiles', '--test-tone', '1000', '--no-shm', '--plugin-cache', "`"$cache`"" `
     -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 try {
     Start-Sleep -Milliseconds 2000

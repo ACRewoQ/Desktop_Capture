@@ -180,6 +180,16 @@ Sheet {
             onTapped: root.pick("シーン", Bindings.sceneChoices(Number(value_.value)), v => value_.set(String(v)))
         }
     }
+    SettingRow {
+        visible: root.mode === "snapshot"
+        label: "スナップショット"
+        controlWidth: 300
+        MenuButton {
+            width: parent.width; height: Theme.touch; fontSize: 14
+            label: Bindings.snapshotName(Number(target_.value))
+            onTapped: root.pick("スナップショット", Bindings.snapshotChoices(Number(target_.value)), v => target_.set(String(v)))
+        }
+    }
     // a parameter
     SettingRow {
         visible: root.mode === "toggle" || root.mode === "step" || root.mode === "param" || root.mode === "set"

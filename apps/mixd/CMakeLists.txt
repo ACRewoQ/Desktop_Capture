@@ -26,6 +26,7 @@ add_library(dc_mixd_core STATIC
     src/lan_store.cpp
     src/mixer.cpp
     src/plan_builder.cpp
+    src/profile_manager.cpp
     src/recorder.cpp
     src/sampler.cpp
     src/timer_clock.cpp

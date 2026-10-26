@@ -14,6 +14,7 @@ QtObject {
         { value: "bank", label: "サンプラーのバンク切替" },
         { value: "scene", label: "シーン切替", detail: "本番のシーンを替える" },
         { value: "take", label: "TAKE", detail: "次のシーンを本番に出す" },
+        { value: "snapshot", label: "スナップショット呼び出し", detail: "ミキサーの値を撮ったときに戻す" },
         { value: "toggle", label: "オン・オフの切り替え", detail: "ミュート・ソロ・キュー・録音・エフェクトのバイパス" },
         { value: "step", label: "値の上げ下げ", detail: "音量など。キーを押し続けると続けて変わる" },
         { value: "param", label: "MIDI のフェーダー・つまみで動かす", detail: "音量・パン・フィルター" },
@@ -40,6 +41,7 @@ QtObject {
         case "bank": return { action: "set", target: "/sampler/active_bank", value: "1" }
         case "scene": return { action: "set", target: "/video/mix/1/program_scene", value: String(firstScene()) }
         case "take": return { action: "take", target: "1", value: "" }
+        case "snapshot": return { action: "snapshot", target: String(firstSnapshot()), value: "" }
         case "toggle": return { action: "toggle", target: firstStrip() + "/mute", value: "" }
         case "step": return { action: "step", target: "/master/volume_db", value: "-1" }
         case "param": return { action: "param", target: "/master/volume_db", value: "" }
@@ -126,6 +128,7 @@ QtObject {
             return Video.mixName(Number(mix)) + " を " + Video.sceneName(Number(value)) + " に"
         }
         case "take": return "TAKE（" + Video.mixName(Number(target)) + "）"
+        case "snapshot": return "スナップショット「" + snapshotName(Number(target)) + "」"
         case "toggle": return targetText(target) + " のオン・オフ"
         case "step": return targetText(target) + " を " + (Number(value) > 0 ? "+" : "") + value
         case "param": return targetText(target) + " を動かす"
@@ -200,6 +203,17 @@ QtObject {
                         detail: file ? file.split(/[\\/]/).pop() : "空", value: p, selected: current === p })
         }
         return list
+    }
+    function snapshotName(n) {
+        const name = params.value("/snapshot/" + n + "/name")
+        return name !== undefined ? (name || ("Snapshot " + n)) : n + "（ない）"
+    }
+    function firstSnapshot() {
+        const nums = params.indices("/snapshot")
+        return nums.length > 0 ? nums[0] : 1
+    }
+    function snapshotChoices(current) {
+        return params.indices("/snapshot").map(n => ({ label: snapshotName(n), value: n, selected: current === n }))
     }
     function sceneChoices(current) {
         const nums = params.indices("/video/scene")

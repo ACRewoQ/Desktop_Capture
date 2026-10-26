@@ -81,7 +81,7 @@ function Wait-Param([string]$path, [string]$want, [int]$seconds = 10) {
 }
 function Start-Mixd([string]$name, [string[]]$extra = @()) {
     $log = Join-Path $out "mixd_${stamp}_$name.log"
-    $p = Start-Process -FilePath $mixd -ArgumentList (@('--port', $port, '--no-shm') + $extra) -PassThru -WindowStyle Hidden `
+    $p = Start-Process -FilePath $mixd -ArgumentList (@('--port', $port, '--no-shm', '--no-profiles') + $extra) -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err"
     Start-Sleep -Milliseconds 1500
     return @{ proc = $p; log = $log }

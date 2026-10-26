@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdio>
 #include <future>
+#include <limits>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -212,6 +213,33 @@ public:
         runOnMessageThread([weak, open] {
             if (auto self = weak.lock()) self->setEditorOpenOnMessageThread(open);
         });
+    }
+
+    // The plugin's own chunk (VST3 component and controller state), on the message thread like a DAW.
+    std::string state() const override {
+        std::weak_ptr<const Instance> weak = shared_from_this();
+        return onMessageThread<std::string>(
+            [weak] {
+                auto self = weak.lock();
+                if (!self || !self->plugin_) return std::string();
+                MemoryBlock mb;
+                self->plugin_->getStateInformation(mb);
+                return std::string(static_cast<const char*>(mb.getData()), mb.getSize());
+            },
+            std::string());
+    }
+
+    bool setState(const std::string& data) override {
+        if (data.empty() || data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
+        std::weak_ptr<Instance> weak = shared_from_this();
+        return onMessageThread<bool>(
+            [weak, data] {
+                auto self = weak.lock();
+                if (!self || !self->plugin_) return false;
+                self->plugin_->setStateInformation(data.data(), static_cast<int>(data.size()));
+                return true;
+            },
+            false);
     }
 
 private:

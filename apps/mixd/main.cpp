@@ -5,6 +5,7 @@
 //
 //   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
 //        [--media-port N] [--lan-store FILE] [--no-discovery] [--control-store FILE] [--no-hotkeys]
+//        [--profile-dir DIR] [--profile NAME] [--no-profiles]
 //        [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--plugin-cache FILE] [--no-plugins]
 //        [--stop-event NAME] [--quiet] [--list-devices] [--version]
 //   mixd --scan-plugin FILE --out JSON      (the VST3 scanner child process, started by mixd itself)
@@ -18,6 +19,7 @@
 #include "src/engine.hpp"
 #include "src/fake_backend.hpp"
 #include "src/lan_service.hpp"
+#include "src/profile_manager.hpp"
 #ifdef DC_HAVE_VST3
 #include "vst3_host.hpp"
 #endif
@@ -45,11 +47,18 @@ static std::uint32_t currentPid() { return static_cast<std::uint32_t>(getpid());
 
 namespace {
 
+#ifdef _WIN32
+constexpr bool kRealDevices = true;
+#else
+constexpr bool kRealDevices = false; // fake devices only
+#endif
+
 int usage() {
     std::cerr << "usage: mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices]\n"
                  "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
                  "            [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio]\n"
                  "            [--plugin-cache FILE] [--no-plugins] [--control-store FILE] [--no-hotkeys]\n"
+                 "            [--profile-dir DIR] [--profile NAME] [--no-profiles]\n"
                  "            [--stop-event NAME] [--quiet] [--list-devices] [--version]\n"
                  "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
                  "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
@@ -67,6 +76,10 @@ int usage() {
                  "  --control-store hotkey and MIDI bindings file (default %APPDATA%\\DesktopCapture\\mixd-control.txt)\n"
                  "  --no-hotkeys    no hotkeys and no MIDI input (tests running next to a real engine)\n"
                  "  --stop-event    stop cleanly when this named event is set (dc-tray, which has no console for Ctrl+C)\n"
+                 "  --profile-dir   profile folder (default %APPDATA%\\DesktopCapture\\profiles; the current profile is\n"
+                 "                  remembered in DIR\\mixd-profile.txt). With --fake-devices profiles are off unless given\n"
+                 "  --profile       start with this profile instead of the last one (a new name starts fresh)\n"
+                 "  --no-profiles   do not read or write profiles (snapshots stay in memory)\n"
                  "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
@@ -89,6 +102,9 @@ int main(int argc, char** argv) {
     mixd::ControlBindings::Options bindOpt;
     bindOpt.storePath = mixd::ControlBindings::defaultPath();
     bool hotkeys = true;
+    mixd::ProfileManager::Options profOpt;
+    std::string profileDir;
+    bool profiles = true;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -125,6 +141,9 @@ int main(int argc, char** argv) {
         else if (a == "--control-store") bindOpt.storePath = next();
         else if (a == "--no-hotkeys") hotkeys = false;
         else if (a == "--stop-event") stopEvent = next();
+        else if (a == "--profile-dir") profileDir = next();
+        else if (a == "--profile") profOpt.startProfile = next();
+        else if (a == "--no-profiles") profiles = false;
         else if (a == "--scan-plugin") scanFile = next();
         else if (a == "--out") scanOut = next();
         else if (a == "--list-devices") list = true;
@@ -143,6 +162,15 @@ int main(int argc, char** argv) {
     ctlOpt.verbose = !quiet;
     lanOpt.verbose = !quiet;
     bindOpt.verbose = !quiet;
+    profOpt.verbose = !quiet;
+    if (profiles && !profileDir.empty()) {
+        profOpt.directory = profileDir;
+        profOpt.statePath = profileDir + "/mixd-profile.txt";
+    } else if (profiles && !fake && kRealDevices) {
+        // test runs with fake devices never touch the real profiles
+        profOpt.directory = mixd::ProfileManager::defaultDirectory();
+        profOpt.statePath = mixd::ProfileManager::defaultStatePath();
+    }
 
     auto runEngine = [&](mixd::PluginHost* host) -> int {
         ctlOpt.plugins = host;
@@ -191,12 +219,15 @@ int main(int argc, char** argv) {
             }
             mixd::Controller* controller = nullptr;
             mixd::ControlBindings* bindings = nullptr;
-            opt.onDelta = [&controller, &bindings](const proto::Delta& d) {
+            mixd::ProfileManager* profileManager = nullptr;
+            opt.onDelta = [&controller, &bindings, &profileManager](const proto::Delta& d) {
                 if (controller) controller->onDelta(d);
                 if (bindings) bindings->onDelta(d);
+                if (profileManager) profileManager->onDelta(d);
             };
-            ctlOpt.onDevicesRefresh = [&bindings] {
+            ctlOpt.onDevicesRefresh = [&bindings, &profileManager] {
                 if (bindings) bindings->refreshMidi();
+                if (profileManager) profileManager->refreshList();
             };
             opt.onClient = [&controller](const control::ClientInfo& c, bool connected) {
                 if (controller) controller->onClient(c, connected);
@@ -220,6 +251,13 @@ int main(int argc, char** argv) {
                 midiInput = mixd::makeDisabledMidi();
             }
             mixd::ControlBindings bind(io, server, *keyInput, *midiInput, bindOpt);
+            mixd::ProfileManager::Hooks hooks;
+            hooks.restoreFx = [&ctl](const auto& slots, const auto& states) { return ctl.fx().restore(slots, states); };
+            hooks.restored = [&ctl] { ctl.fx().restored(); };
+            hooks.pluginStates = [&ctl] { return ctl.fx().pluginStates(); };
+            hooks.deviceNames = [&ctl](const std::vector<std::string>& ids) { return ctl.deviceNames(ids); };
+            hooks.rememberDevices = [&ctl](const std::vector<proto::SavedDevice>& d) { ctl.rememberDevices(d); };
+            mixd::ProfileManager prof(io, server, std::move(hooks), profOpt);
 
             server.start();
             ctl.start(devices.enumerateNow());
@@ -227,16 +265,22 @@ int main(int argc, char** argv) {
             controller = &ctl;
             bind.start();
             bindings = &bind;
+            prof.start(); // the last profile replaces the seeded tree before any device opens
+            profileManager = &prof;
             devices.start([&ctl](const mixd::DeviceManager::State& s) { ctl.onDeviceState(s); });
             std::cout << "mixd " << kVersionString << " listening on " << opt.bindAddress << ":" << server.port()
                       << (fake ? " (fake devices)" : "") << (writer ? ", shared memory on" : "")
-                      << (host ? ", VST3 on" : "") << ". Ctrl+C to stop."
+                      << (host ? ", VST3 on" : "")
+                      << (profOpt.directory.empty() ? ", profiles off" : ", profile " + server.store().tree().getAs<std::string>("/profile/current").value_or(""))
+                      << ". Ctrl+C to stop."
                       << std::endl;
 
             bool stopping = false;
             auto stopEngine = [&] {
                 if (stopping) return;
                 stopping = true;
+                prof.stop(); // the last changes, with the plugins' states
+                profileManager = nullptr;
                 if (lan) lan->stop();
                 ctl.stop();
                 bindings = nullptr;
@@ -255,6 +299,7 @@ int main(int argc, char** argv) {
             io.run();
             controller = nullptr;
             bindings = nullptr;
+            profileManager = nullptr;
             devices.stop(); // stops every stream before the engine goes away
             lan.reset();
             std::cout << "mixd stopped" << std::endl;
