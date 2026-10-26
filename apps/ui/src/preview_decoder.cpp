@@ -4,6 +4,7 @@
 
 #include <exception>
 #include <iostream>
+#include <limits>
 
 namespace dc::ui {
 
@@ -29,7 +30,7 @@ PreviewDecoder::~PreviewDecoder() {
     if (thread_.joinable()) thread_.join();
 }
 
-void PreviewDecoder::push(std::span<const std::uint8_t> accessUnit, bool keyframe, std::uint64_t number) {
+void PreviewDecoder::push(std::span<const std::uint8_t> accessUnit, bool keyframe, std::uint64_t number, double captureTime) {
     {
         std::lock_guard lock(mu_);
         if (stop_) return;
@@ -39,7 +40,7 @@ void PreviewDecoder::push(std::span<const std::uint8_t> accessUnit, bool keyfram
         }
         if (waitKey_ && !keyframe) return;
         waitKey_ = false;
-        queue_.push_back({std::vector<std::uint8_t>(accessUnit.begin(), accessUnit.end()), keyframe, number});
+        queue_.push_back({std::vector<std::uint8_t>(accessUnit.begin(), accessUnit.end()), keyframe, number, captureTime});
     }
     cv_.notify_one();
 }
@@ -47,6 +48,12 @@ void PreviewDecoder::push(std::span<const std::uint8_t> accessUnit, bool keyfram
 std::shared_ptr<v6::SharedFrameRing> PreviewDecoder::ring() const {
     std::lock_guard lock(mu_);
     return ring_;
+}
+
+double PreviewDecoder::captureTimeOf(std::uint64_t frameId) const {
+    std::lock_guard lock(mu_);
+    const Stamp& s = byFrame_[frameId % kTimes];
+    return s.id == frameId ? s.time : std::numeric_limits<double>::quiet_NaN();
 }
 
 std::string PreviewDecoder::decoderName() const {
@@ -94,13 +101,16 @@ void PreviewDecoder::run(LUID adapter) {
             if (stop_) break;
             unit = std::move(queue_.front());
             queue_.pop_front();
+            byNumber_[unit.number % kTimes] = {unit.number, unit.captureTime};
         }
         v6::EncodedUnit u;
         u.id = unit.number;
         u.keyframe = unit.keyframe;
         u.data = std::move(unit.data);
         try {
-            decoder_->decode(u, [&](IMFSample* sample, std::uint64_t, const v6::VideoInfo& info) { publish(sample, info); });
+            decoder_->decode(u, [&](IMFSample* sample, std::uint64_t number, const v6::VideoInfo& info) {
+                publish(sample, number, info);
+            });
             failures_ = 0;
         } catch (const std::exception& e) {
             std::cerr << "preview: decoding failed: " << e.what() << std::endl;
@@ -123,7 +133,7 @@ void PreviewDecoder::run(LUID adapter) {
     converter_.reset();
 }
 
-void PreviewDecoder::publish(IMFSample* sample, const v6::VideoInfo& info) {
+void PreviewDecoder::publish(IMFSample* sample, std::uint64_t number, const v6::VideoInfo& info) {
     LONG w = info.visible.right - info.visible.left, h = info.visible.bottom - info.visible.top;
     if (w <= 0 || h <= 0) {
         w = static_cast<LONG>(info.codedWidth);
@@ -139,7 +149,13 @@ void PreviewDecoder::publish(IMFSample* sample, const v6::VideoInfo& info) {
     }
     ID3D11Texture2D* target = ring->beginWrite();
     converter_->convert(sample, info, target);
-    ring->endWrite(decoded_.fetch_add(1, std::memory_order_relaxed) + 1);
+    const std::uint64_t frameId = decoded_.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard lock(mu_);
+        const Stamp& n = byNumber_[number % kTimes];
+        byFrame_[frameId % kTimes] = {frameId, n.id == number ? n.time : std::numeric_limits<double>::quiet_NaN()};
+    }
+    ring->endWrite(frameId);
     if (onFrame_) onFrame_();
 }
 

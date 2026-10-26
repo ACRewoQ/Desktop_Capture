@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 namespace dc::lan {
 class VideoInput;
@@ -34,6 +35,9 @@ class PreviewStream : public QObject {
     Q_PROPERTY(QString infoText READ infoText NOTIFY changed)
     Q_PROPERTY(bool receiving READ receiving NOTIFY changed)
     Q_PROPERTY(bool subscribed READ subscribed NOTIFY changed)
+    // Capture (mix) -> received here, median of the last frames, ms; < 0 while the clock offset to the
+    // engine PC is not known yet.
+    Q_PROPERTY(double networkMs READ networkMs NOTIFY changed)
 
 public:
     using Frame = lan::VideoReceiver::Frame;
@@ -57,6 +61,12 @@ public:
     std::uint64_t frames() const { return frames_.load(std::memory_order_relaxed); }
     std::uint16_t localPort() const;
     lan::VideoReceiver::Stats stats() const;
+    double networkMs() const { return networkMs_; }
+
+    // The engine PC's clock (frames' captureTime) on this device's clock (lan::nowSeconds), from
+    // /session/clock: NaN until the first answer. Any thread.
+    double toLocalTime(double engineTime) const;
+    bool clockKnown() const { return clockKnown_.load(std::memory_order_acquire); }
 
 signals:
     void changed();
@@ -66,6 +76,7 @@ private:
     void subscribe();
     void closeInput();
     void tick();
+    void syncClock();
 
     Connection& connection_;
     std::unique_ptr<lan::VideoInput> input_;
@@ -85,6 +96,22 @@ private:
     std::map<int, Sink> sinks_;
     int nextSink_ = 1;
     std::atomic<std::uint64_t> frames_{0};
+
+    // clock offset (engine - local, seconds) from the /session/clock answer with the shortest round trip
+    struct ClockSample {
+        double rtt;
+        double offset;
+    };
+    std::vector<ClockSample> clockSamples_;
+    qint64 lastClockCall_ = 0;
+    bool clockPending_ = false;
+    bool clockUnsupported_ = false;
+    std::atomic<double> clockOffset_{0};
+    std::atomic<bool> clockKnown_{false};
+    // capture -> arrival, filled on the receive thread
+    std::mutex networkMutex_;
+    std::vector<double> networkSamples_;
+    double networkMs_ = -1;
 };
 
 } // namespace dc::ui

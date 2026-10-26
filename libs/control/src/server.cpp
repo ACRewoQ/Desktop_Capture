@@ -1,5 +1,7 @@
 #include "dc/control/server.hpp"
 
+#include "dc/shmaudio/clock.hpp"
+
 #include "dc/protocol/constants.hpp"
 
 #include <array>
@@ -131,6 +133,13 @@ private:
 ControlServer::ControlServer(asio::io_context& io, ParamStore& store, Options options)
     : io_(io), store_(store), options_(std::move(options)), acceptor_(io), meterSocket_(io) {
     registerMethod("/session/resync", [](CallContext&) { return Result{}; }); // snapshot is sent in handleCall
+    // The engine PC's clock (QPC, microseconds), the clock of the media timestamps (lan-media.md 2.2):
+    // a remote estimates the offset to its own clock from it to measure the preview's delay.
+    registerMethod("/session/clock", [](CallContext&) {
+        Result r;
+        r.value = static_cast<std::int64_t>(static_cast<double>(shm::nowQpc()) * 1e6 / static_cast<double>(shm::qpcFrequency()));
+        return r;
+    });
 }
 
 ControlServer::~ControlServer() = default;

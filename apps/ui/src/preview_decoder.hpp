@@ -7,6 +7,7 @@
 
 #include "dc/mfvideo/d3d_video.hpp"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -29,8 +30,11 @@ public:
     PreviewDecoder(const PreviewDecoder&) = delete;
     PreviewDecoder& operator=(const PreviewDecoder&) = delete;
 
-    // Any thread. Units before the first keyframe are skipped.
-    void push(std::span<const std::uint8_t> accessUnit, bool keyframe, std::uint64_t number);
+    // Any thread. Units before the first keyframe are skipped. captureTime: when the engine composed
+    // the frame, on this device's clock (NaN = unknown), for the delay measurement.
+    void push(std::span<const std::uint8_t> accessUnit, bool keyframe, std::uint64_t number, double captureTime);
+    // The capture time of the frame the ring numbered `frameId` (SharedFrameReader::fetch), NaN if unknown.
+    double captureTimeOf(std::uint64_t frameId) const;
 
     // The ring of the current picture size, null until the first frame. A new ring replaces it when
     // the stream's size changes; holders of the old one keep it alive.
@@ -42,7 +46,7 @@ public:
 private:
     void run(LUID adapter);
     void openDecoder(bool hardware);
-    void publish(IMFSample* sample, const v6::VideoInfo& info);
+    void publish(IMFSample* sample, std::uint64_t number, const v6::VideoInfo& info);
 
     std::function<void()> onFrame_;
 
@@ -60,8 +64,17 @@ private:
         std::vector<std::uint8_t> data;
         bool keyframe = false;
         std::uint64_t number = 0;
+        double captureTime = 0;
     };
     std::deque<Unit> queue_;
+    // capture times: by unit number until decoded, then by ring frame id
+    static constexpr std::size_t kTimes = 64;
+    struct Stamp {
+        std::uint64_t id = ~std::uint64_t{0};
+        double time = 0;
+    };
+    std::array<Stamp, kTimes> byNumber_{};
+    std::array<Stamp, kTimes> byFrame_{};
     bool stop_ = false;
     bool waitKey_ = true;  // skip units until a keyframe (start, overflow, decoder error)
     std::shared_ptr<v6::SharedFrameRing> ring_;
