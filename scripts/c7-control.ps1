@@ -46,6 +46,10 @@ $bin = Join-Path $root 'build/windows'
 $mixd = Join-Path $bin 'apps/mixd/Release/mixd.exe'
 $cli = Join-Path $bin 'tools/dc_cli/Release/dc-cli.exe'
 $ui = Join-Path $bin 'apps/ui/Release/dc-ui.exe'
+# dc-ui needs the Qt DLLs: from DC_QT_DIR unless they were deployed next to it (as in test.ps1)
+if ($env:DC_QT_DIR -and -not (Test-Path (Join-Path (Split-Path $ui) 'Qt6Core.dll'))) {
+    $env:PATH = (Join-Path $env:DC_QT_DIR 'bin') + ';' + $env:PATH
+}
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $out = Join-Path $root "build/c7/$stamp"
 New-Item -ItemType Directory -Force $out | Out-Null
