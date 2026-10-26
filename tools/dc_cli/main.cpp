@@ -9,6 +9,7 @@
 #include "dc/control/client.hpp"
 #include "dc/protocol/fx.hpp"
 #include "dc/protocol/meter.hpp"
+#include "dc/protocol/profile.hpp"
 #include "dc/protocol/schema.hpp"
 #include "dc/version.hpp"
 
@@ -111,10 +112,11 @@ std::string rangeText(const ParamSpec& s) {
 int printSchema(bool markdown) {
     const auto& schema = schemaV1();
     if (markdown) {
-        std::cout << "| パス | 型 | 書込 | 範囲・選択肢 | 既定値 | 説明 |\n|---|---|---|---|---|---|\n";
+        std::cout << "| パス | 型 | 書込 | 保存 | 範囲・選択肢 | 既定値 | 説明 |\n|---|---|---|---|---|---|---|\n";
         for (const auto& s : schema.params()) {
             std::cout << "| `" << s.pattern << "` | " << typeName(s.type) << " | "
-                      << (s.access == Access::ReadOnly ? "ro" : "rw") << " | " << rangeText(s) << " | `"
+                      << (s.access == Access::ReadOnly ? "ro" : "rw") << " | "
+                      << (inSnapshot(s) ? "P S" : inProfile(s) ? "P" : "") << " | " << rangeText(s) << " | `"
                       << toDisplayString(s.defaultValue) << "` | " << s.description << " |\n";
         }
         std::cout << "\n| メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |\n|---|---|---|---|---|\n";

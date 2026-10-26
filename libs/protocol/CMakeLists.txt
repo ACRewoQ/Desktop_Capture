@@ -8,6 +8,7 @@ add_library(dc_protocol
     src/names.cpp
     src/param_store.cpp
     src/param_tree.cpp
+    src/profile.cpp
     src/routing.cpp
     src/schema.cpp
     src/schema_v1.cpp
