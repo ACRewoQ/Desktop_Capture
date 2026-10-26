@@ -47,7 +47,9 @@ int runRemoteCheck(Connection& connection, Recorder& recorder, const Connection:
     oo.meters = false;
     Connection other(oo);
     other.start();
-    if (!check(waitUntil([&] { return other.ready(); }, 10000), QStringLiteral("second connection (another screen) up")))
+    // It is a remote too: with 4 remotes on the engine already it gets limit_reached.
+    if (!check(waitUntil([&] { return other.ready(); }, 10000),
+               QStringLiteral("second connection (another screen) up (%1)").arg(other.statusText())))
         return failures;
     const ParamTree& theirs = other.tree();
 
