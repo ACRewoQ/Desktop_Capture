@@ -152,7 +152,7 @@ public static class P5Win {
 '@
 # The monitor must stay on and the PC unlocked for the whole run (the recording captures it): ES_CONTINUOUS |
 # ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED for as long as this script runs, without touching the power settings.
-$null = [P5Win]::SetThreadExecutionState(0x80000003)
+$null = [P5Win]::SetThreadExecutionState([uint32]2147483651)  # 0x80000003 (a hex literal is Int32 in PS 5.1)
 # Windows go to the right half of the primary monitor, away from the flash in the top-left quarter.
 Add-Type -AssemblyName System.Windows.Forms
 $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
