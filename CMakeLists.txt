@@ -49,6 +49,7 @@ add_subdirectory(apps/mixd)
 add_subdirectory(apps/vcam)
 add_subdirectory(apps/capd)
 add_subdirectory(apps/ui)
+add_subdirectory(apps/tray)
 
 if(DC_BUILD_TOOLS)
     add_subdirectory(tools/mock_server)

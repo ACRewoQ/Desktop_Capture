@@ -1,7 +1,7 @@
 // capd: capture process. Runs the video mixer (sources, scenes, layers, up to 4 mixes; lane B1) from the engine's
 // tree and records a mix together with the engine's audio from shared memory into MKV/MP4.
 //
-//   capd [serve] [--host H] [--port N]   normal mode: follow the engine's /capture settings and record start/stop
+//   capd [serve] [--host H] [--port N] [--stop-event NAME]   normal mode: follow the engine's /capture settings and record start/stop
 //   capd --version
 //   capd list                     monitors, windows, cameras and the hardware encoders that open on this PC (Windows)
 //   capd record [options]         record until Ctrl+C or --seconds
@@ -33,6 +33,7 @@
 #include <mfapi.h>
 #endif
 
+#include "dc/control/stop_event.hpp"
 #include "dc/protocol/defaults.hpp"
 
 #include "dc/protocol/constants.hpp"
@@ -74,7 +75,8 @@ void usage() {
     std::cout << R"(capd - capture process (P2 skeleton)
 
 usage:
-  capd [serve] [--host H] [--port N] [--no-video]   follow the engine (default)
+  capd [serve] [--host H] [--port N] [--no-video] [--stop-event NAME]   follow the engine (default)
+                          --stop-event: stop cleanly when this named event is set (dc-tray)
   capd --version
   capd list
   capd record [options]
@@ -401,6 +403,7 @@ int cmdProbe(const std::string& file) {
 
 int cmdServe(const std::vector<std::string>& args) {
     EngineFollower::Options o;
+    std::string stopEvent;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::string& a = args[i];
         auto next = [&]() -> std::string {
@@ -411,8 +414,13 @@ int cmdServe(const std::vector<std::string>& args) {
         else if (a == "--port") o.port = static_cast<std::uint16_t>(std::atoi(next().c_str()));
         else if (a == "--no-video") o.withVideo = false;
         else if (a == "--shm-suffix") o.shmSuffix = next();
+        else if (a == "--stop-event") stopEvent = next();
         else throw std::runtime_error("unknown option " + a);
     }
+    dc::control::StopEventWatcher stopWatch(stopEvent, [] {
+        std::cout << "stop requested\n" << std::flush;
+        g_stop = true;
+    });
     EngineFollower follower(o);
     return follower.run(g_stop);
 }
