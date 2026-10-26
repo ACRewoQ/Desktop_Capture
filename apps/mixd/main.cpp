@@ -4,7 +4,7 @@
 // receives audio streams (UDP 47810) and finds other engines by mDNS (docs/spec/protocol.md 8, 10).
 //
 //   mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices] [--shm-suffix S | --no-shm]
-//        [--media-port N] [--lan-store FILE] [--no-discovery]
+//        [--media-port N] [--lan-store FILE] [--no-discovery] [--control-store FILE] [--no-hotkeys]
 //        [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio] [--plugin-cache FILE] [--no-plugins]
 //        [--quiet] [--list-devices] [--version]
 //   mixd --scan-plugin FILE --out JSON      (the VST3 scanner child process, started by mixd itself)
@@ -12,6 +12,7 @@
 // With VST3 (DC_WITH_JUCE) the main thread runs JUCE's message loop (plugin creation and windows)
 // and the engine runs on a second thread.
 
+#include "src/control_bindings.hpp"
 #include "src/controller.hpp"
 #include "src/device_manager.hpp"
 #include "src/engine.hpp"
@@ -47,7 +48,8 @@ int usage() {
     std::cerr << "usage: mixd [--port N] [--bind ADDR] [--local-only] [--allow-remote] [--fake-devices]\n"
                  "            [--shm-suffix S | --no-shm] [--media-port N] [--lan-store FILE] [--no-discovery]\n"
                  "            [--bridge-ms MS] [--test-tone HZ] [--test-pulse SEC] [--no-asio]\n"
-                 "            [--plugin-cache FILE] [--no-plugins] [--quiet] [--list-devices] [--version]\n"
+                 "            [--plugin-cache FILE] [--no-plugins] [--control-store FILE] [--no-hotkeys]\n"
+                 "            [--quiet] [--list-devices] [--version]\n"
                  "  --bind          control address (default 0.0.0.0: LAN clients must pair first)\n"
                  "  --local-only    control on 127.0.0.1 only, no LAN streams or discovery\n"
                  "  --allow-remote  accept LAN clients without pairing (development only)\n"
@@ -61,6 +63,8 @@ int usage() {
                  "  --no-asio       do not list or open ASIO drivers\n"
                  "  --plugin-cache  VST3 scan results file (default %APPDATA%\\DesktopCapture\\vst3-cache.json)\n"
                  "  --no-plugins    no VST3 host (built-in effects only)\n"
+                 "  --control-store hotkey and MIDI bindings file (default %APPDATA%\\DesktopCapture\\mixd-control.txt)\n"
+                 "  --no-hotkeys    no hotkeys and no MIDI input (tests running next to a real engine)\n"
                  "  --list-devices  print the devices and the applications with audio, then exit\n";
     return 2;
 }
@@ -80,6 +84,9 @@ int main(int argc, char** argv) {
     lanOpt.storePath = mixd::LanStore::defaultPath();
     bool fake = false, useShm = true, quiet = false, list = false, localOnly = false, asioDrivers = true, plugins = true;
     std::string shmSuffix, pluginCache, scanFile, scanOut;
+    mixd::ControlBindings::Options bindOpt;
+    bindOpt.storePath = mixd::ControlBindings::defaultPath();
+    bool hotkeys = true;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -113,6 +120,8 @@ int main(int argc, char** argv) {
         } else if (a == "--quiet") quiet = true;
         else if (a == "--plugin-cache") pluginCache = next();
         else if (a == "--no-plugins") plugins = false;
+        else if (a == "--control-store") bindOpt.storePath = next();
+        else if (a == "--no-hotkeys") hotkeys = false;
         else if (a == "--scan-plugin") scanFile = next();
         else if (a == "--out") scanOut = next();
         else if (a == "--list-devices") list = true;
@@ -130,6 +139,7 @@ int main(int argc, char** argv) {
     if (localOnly) opt.bindAddress = "127.0.0.1";
     ctlOpt.verbose = !quiet;
     lanOpt.verbose = !quiet;
+    bindOpt.verbose = !quiet;
 
     auto runEngine = [&](mixd::PluginHost* host) -> int {
         ctlOpt.plugins = host;
@@ -177,8 +187,13 @@ int main(int argc, char** argv) {
                 opt.serverId = "mixd";
             }
             mixd::Controller* controller = nullptr;
-            opt.onDelta = [&controller](const proto::Delta& d) {
+            mixd::ControlBindings* bindings = nullptr;
+            opt.onDelta = [&controller, &bindings](const proto::Delta& d) {
                 if (controller) controller->onDelta(d);
+                if (bindings) bindings->onDelta(d);
+            };
+            ctlOpt.onDevicesRefresh = [&bindings] {
+                if (bindings) bindings->refreshMidi();
             };
             opt.onClient = [&controller](const control::ClientInfo& c, bool connected) {
                 if (controller) controller->onClient(c, connected);
@@ -192,11 +207,23 @@ int main(int argc, char** argv) {
             mixd::Engine engine(writer.get());
             mixd::DeviceManager devices(*backend, engine, devOpt);
             mixd::Controller ctl(io, server, devices, engine, writer.get(), ctlOpt);
+            std::unique_ptr<mixd::HotkeyBackend> keyInput;
+            std::unique_ptr<mixd::MidiBackend> midiInput;
+            if (hotkeys) {
+                keyInput = mixd::makeHotkeyBackend();
+                midiInput = mixd::makeMidiBackend();
+            } else {
+                keyInput = mixd::makeDisabledHotkeys();
+                midiInput = mixd::makeDisabledMidi();
+            }
+            mixd::ControlBindings bind(io, server, *keyInput, *midiInput, bindOpt);
 
             server.start();
             ctl.start(devices.enumerateNow());
             if (lan) lan->start(server, server.port(), [&ctl] { ctl.portsChanged(); });
             controller = &ctl;
+            bind.start();
+            bindings = &bind;
             devices.start([&ctl](const mixd::DeviceManager::State& s) { ctl.onDeviceState(s); });
             std::cout << "mixd " << kVersionString << " listening on " << opt.bindAddress << ":" << server.port()
                       << (fake ? " (fake devices)" : "") << (writer ? ", shared memory on" : "")
@@ -207,11 +234,14 @@ int main(int argc, char** argv) {
             signals.async_wait([&](const asio::error_code&, int) {
                 if (lan) lan->stop();
                 ctl.stop();
+                bindings = nullptr;
+                bind.stop();
                 server.stop();
                 asio::post(io, [&] { io.stop(); });
             });
             io.run();
             controller = nullptr;
+            bindings = nullptr;
             devices.stop(); // stops every stream before the engine goes away
             lan.reset();
             std::cout << "mixd stopped" << std::endl;

@@ -21,6 +21,7 @@ Window {
         { key: "sampler", label: "サンプラー", file: "SamplerPage.qml", keep: false },
         { key: "capture", label: "録画", file: "CapturePage.qml", keep: false },
         { key: "lan", label: "LAN", file: "LanPage.qml", keep: false },
+        { key: "control", label: "キー・MIDI", file: "ControlPage.qml", keep: false },
         { key: "settings", label: "設定", file: "SettingsPage.qml", keep: false },
     ]
     readonly property var pageKeys: pages.map(p => p.key)

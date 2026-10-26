@@ -62,6 +62,15 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 - リモコン（`--remote`）は、初めてのエンジンに断られると数字のキーパッドを出す。6 桁を入れるとつなぎ直し、もらったトークンを次から使う。インストールごとの ID とトークンは `QSettings`（Windows はレジストリ `HKCU\Software\DesktopCapture\dc-ui`）に保存する。エンジンで取り消されたトークンは消して、もう一度ペアリングを求める。
 - 同じ PC からのループバック接続はペアリング不要（protocol.md 8.2）。試験ではエンジンを LAN のアドレスで指定する。
 
+## キー・MIDI のページ
+
+ホットキーと MIDI の割り当て（protocol.md 5.9）。名前と選択肢は `Bindings` シングルトン（`qml/Bindings.qml`）。
+
+- 一覧：きっかけ（`Ctrl + Shift + R`、`MIDI CC 7（ch 1）`）、動作、状態（使えます・オフ・設定が正しくありません・ほかのアプリが使用中）。タップで `BindingSheet` を開く。
+- きっかけは「学習」（エンジンの PC でキーを押すか MIDI 機器を動かす）か「入力する」（`ctrl+shift+f9`、`midi:cc/1/7`）。シートを閉じると学習をやめる。
+- 動作はエンジンの `action` に「シーン切替」（`set` で `/video/mix/<n>/program_scene`）と「バンク切替」（`set` で `/sampler/active_bank`）を足した一覧から選ぶ。オン・オフ・上げ下げ・MIDI で動かす対象は、トラック（またはマスター）→ パラメーターの順に選ぶ。
+- MIDI 機器の一覧と、機器ごとのオン・オフ（DAW に譲る）、最後に受けた MIDI。
+
 ## タッチ操作の約束
 
 | 操作 | 動き |
@@ -83,7 +92,7 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
 | `--pair CODE` | `--remote` で、キーパッドの代わりにペアリングの数字を渡す |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`preview`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`） |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`preview`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`、キー・MIDI の `binding`（`binding3` で 3 番）・`learn`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)）。`--selftest` は最後に合成タッチ（ダブルタップ、2 本同時、微調整、ピンチ）も確かめる |
 | `--monitor N` | 起動時から LAN 送信 N をモニター音声で鳴らす |
 | `--measure SECONDS` | G4 の測定：プレビューのタブを開き、遅延（p50・p95）、受信 fps、メモリ（working set・private）、CPU を毎秒と最後に出して終わる |

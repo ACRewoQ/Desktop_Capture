@@ -179,6 +179,7 @@ void Controller::registerMethods() {
     });
     server_.registerMethod("/devices/refresh", [this](CallContext&) {
         devices_.refresh();
+        if (options_.onDevicesRefresh) options_.onDevicesRefresh();
         return Result{};
     });
     control::registerVideoMethods(server_); // the video mixer's tree; capd does the work
@@ -214,7 +215,8 @@ void Controller::onDelta(const Delta& delta) {
         static const char* const kPrefixes[] = {"/system/cpu_load", "/system/xruns", "/system/latency_ms",
                                                 "/system/clock_active", "/devices/", "/mixer/solo_active",
                                                 "/capture/state", "/capture/elapsed_ms", "/capture/file",
-                                                "/capture/error", "/video/", "/lan/", "/remote/", "/recorder/"};
+                                                "/capture/error", "/video/", "/lan/", "/remote/", "/recorder/",
+                                                "/control/"};
         for (const char* p : kPrefixes)
             if (path.rfind(p, 0) == 0) return true;
         // of the sampler only the pads' mode and volume reach the plan (loaded files arrive separately)
