@@ -256,6 +256,22 @@
 | `/remote/paired/#/name` | string | ro |  | `""` | ペアリング済みの相手の名前 |
 | `/remote/paired/#/role` | string | ro | remote / peer | `"remote"` | 相手の種類（リモコン / 別の PC のエンジン） |
 | `/remote/paired/#/online` | bool | ro |  | `false` | 今つながっている |
+| `/control/binding/#/trigger` | string | rw |  | `""` | きっかけ。key:<修飾+キー>（例 key:ctrl+shift+f9）、midi:note/<ch>/<n>・midi:cc/<ch>/<n>・midi:pc/<ch>/<n>・midi:pb/<ch>（ch 1〜16、n 0〜127）。"" = 未設定 |
+| `/control/binding/#/device` | string | rw |  | `""` | MIDI 機器名（/control/midi/device/#/name。"" = どの機器でも） |
+| `/control/binding/#/action` | string | rw | none / record_toggle / record_start / record_stop / recorder_toggle / pad / pad_stop / take / toggle / set / step / param | `"none"` | 動作（protocol.md 5.9） |
+| `/control/binding/#/target` | string | rw |  | `""` | 動作の対象。pad は <パッド> か <バンク>/<パッド>、pad_stop は ""（全バンク）か <バンク>、take は <ミックス>、toggle・set・step・param はパラメーターのパス |
+| `/control/binding/#/value` | string | rw |  | `""` | set の値、step の増減（例 -1.5） |
+| `/control/binding/#/enabled` | bool | rw |  | `true` | 有効 |
+| `/control/binding/#/state` | string | ro | ok / off / invalid / conflict / unsupported | `"off"` | ok = 使える、off = 無効か未設定、invalid = きっかけ・対象・値が正しくない、conflict = 他のアプリが同じホットキーを使用中、unsupported = この PC では使えない |
+| `/control/binding/#/error` | string | ro |  | `""` | invalid などの理由 |
+| `/control/midi/device/#/name` | string | ro |  | `""` | MIDI 入力機器名（同じ名前が複数あれば 2 台目から " #2" を付ける） |
+| `/control/midi/device/#/enabled` | bool | rw |  | `true` | この機器を開く（false = 他のアプリに譲る。名前で覚える） |
+| `/control/midi/device/#/state` | string | ro | ok / off / busy / error | `"off"` | ok = 受信中、off = 使わない、busy = 他のアプリが使用中、error = 開けない |
+| `/control/midi/last/trigger` | string | ro |  | `""` | 最後に受けた MIDI のきっかけ（trigger の形） |
+| `/control/midi/last/device` | string | ro |  | `""` | 最後に受けた MIDI の機器名 |
+| `/control/midi/last/value` | int | ro | 0 〜 16383 | `0` | 最後に受けた MIDI の値（ベロシティ・CC 値、pb は 0〜16383） |
+| `/control/learn/binding` | int | ro | 0 〜 128 | `0` | 学習中の割り当て（0 = 学習していない） |
+| `/control/learn/source` | string | ro | any / key / midi | `"any"` | 学習で待っているもの |
 
 | メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |
 |---|---|---|---|---|
@@ -304,6 +320,10 @@
 | `/lan/peers/pair` | id:string, code:string | nil | P3 | 相手の PC に表示された 6 桁コードでペアリングする |
 | `/lan/peers/forget` | id:string | nil | P3 | 相手のペアリング情報を消す（手動で追加した相手は一覧からも消す） |
 | `/lan/peers/add` | address:string | nil | P3 | 相手を IP アドレス（ip または ip:port）で手動追加 |
+| `/control/binding/add` | trigger:string?, device:string?, action:string?, target:string?, value:string? | int（新しい割り当て番号） | P4 | ホットキー・MIDI の割り当てを追加（最大 128） |
+| `/control/binding/remove` | binding:int | nil | P4 | 割り当てを削除。番号は詰めない |
+| `/control/learn` | binding:int, source:string? | nil | P4 | 次に押されたキーの組み合わせ（エンジンの PC）か MIDI を割り当てのきっかけにする（source = any / key / midi、30 秒で終わる） |
+| `/control/learn/cancel` | なし | nil | P4 | 学習をやめる |
 
 ## エフェクトのパラメーター（内蔵）
 

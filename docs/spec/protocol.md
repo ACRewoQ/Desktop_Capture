@@ -60,6 +60,7 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | `/video` | 映像ミックス、仮想カメラ、全画面表示、プレビュー | B |
 | `/remote` | リモコンの接続数・ペアリング | N / C |
 | `/lan` | LAN 送信ストリーム、購読、LAN 内の別の PC（相手） | N |
+| `/control` | ホットキーと MIDI の割り当て、MIDI 入力機器、学習 | C7 |
 
 ### 4.1 上限値
 
@@ -80,6 +81,8 @@ float のパラメーターへ int を送ってもよく、エンジンは float
 | 購読 | 32（`/lan/sub/#`） |
 | 相手の PC の一覧 | 16（`/lan/peers/#`） |
 | ペアリング済みの相手 | 16（`/remote/paired/#`） |
+| ホットキー・MIDI の割り当て | 128（`/control/binding/#`、固定 ID） |
+| MIDI 入力機器 | 16（`/control/midi/device/#`） |
 
 ### 4.2 トラック番号
 
@@ -231,6 +234,10 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/lan/subscribe` / `unsubscribe` | `stream`:str, `port`:int / `id`:int | int（購読番号）/ nil | P3 | ストリームの購読（10 章） |
 | `/lan/peers/pair` | `id`:str, `code`:str | nil | P3 | 相手の PC とペアリングする（8 章） |
 | `/lan/peers/forget` / `add` | `id`:str / `address`:str | nil | P3 | 相手の記録を消す / IP アドレスで手動追加 |
+| `/control/binding/add` | `trigger`, `device`, `action`, `target`, `value`（どれも str?） | int（割り当て番号） | P4 | ホットキー・MIDI の割り当てを追加（5.9）。128 個あれば `limit_reached` |
+| `/control/binding/remove` | `binding`:int | nil | P4 | 割り当てを削除。番号は詰めない |
+| `/control/learn` | `binding`:int, `source`:str?（`any` / `key` / `midi`、既定 `any`） | nil | P4 | 学習の開始（5.9.3） |
+| `/control/learn/cancel` | なし | nil | P4 | 学習をやめる |
 
 未実装・未知のメソッドは `unknown_method` を返します。
 
@@ -303,6 +310,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `device.rematched` | `old_id`, `id`, `name` | ID が変わったデバイスを名前で照合し、設定を書き換えた（4.4） |
 | `device.error` | `message` | デバイスを開けなかった（他のアプリが排他で使用中、2 つ目の ASIO ドライバーなど）。同じ理由は続けて送らない |
 | `video.devices.refresh` | なし | `/video/devices/refresh` が呼ばれた。capd が一覧を送り直す（P3） |
+| `control.learned` | `binding`, `trigger`, `device` | 学習でその割り当てのきっかけが決まった（5.9.3） |
 
 ### 5.6 生存確認
 
@@ -347,6 +355,89 @@ VST3 のパラメーターは数万個あるものがあるので（V7）、ツ�
 エンジンは起動時に前回のスキャン結果（キャッシュ）を読み、`/plugins/#` に一覧を載せます。`/plugins/scan` は標準の VST3 フォルダーと `/plugins/extra_dirs` を探し、新しいファイルと更新されたファイルだけを調べます（`rescan = true` で全部）。プラグインはスキャン用の子プロセスで 1 つずつ読み込むので、読み込みで落ちる・止まるプラグインがあってもエンジンは止まりません（`status` = `crashed` / `timeout`）。進み具合は `/plugins/scan/state`・`progress`・`current` で分かります。スキャン中にもう一度呼ぶと `conflict` です。
 
 `/plugins/#` の番号はスキャンのたびに名前順で振り直します。エフェクトの `type` には番号ではなく `id` を使います。
+
+### 5.9 ホットキーと MIDI（割り当て）
+
+キーボードのショートカットと MIDI 機器（パッド・フェーダー・つまみ）で、録画やサンプラー、シーン切替、ミュート、フェーダーなどを操作します。割り当てはエンジンが持ち、受け付けもエンジンの PC で行います（エンジンは常駐しているので、UI を閉じていても、ゲームなど他のアプリが前面にあっても効きます）。リモコンのキーボードや MIDI 機器は使いません。
+
+割り当て 1 つが `/control/binding/<n>` です。`/control/binding/add` で追加し（番号はトラックと同じく固定 ID）、中身は Set で変えます。
+
+| パス | 内容 |
+|---|---|
+| `trigger` | きっかけ（5.9.1）。`""` = 未設定 |
+| `device` | MIDI のとき、受け付ける機器の名前（`""` = どの機器でも） |
+| `action` / `target` / `value` | 動作（5.9.2） |
+| `enabled` | 有効 |
+| `state` / `error` | エンジンが書く。`ok`、`off`（無効・未設定・`action` = `none`）、`invalid`（きっかけ・対象・値が正しくない、対象のトラックがないなど。理由は `error`）、`conflict`（他のアプリが同じホットキーを登録済み）、`unsupported`（この PC ではホットキーか MIDI が使えない） |
+
+Set はフィールドごとに受け付け、組み合わせの誤りは拒否せずに `state` = `invalid` で知らせます（UI が `action` と `target` を別々に送れるように）。対象のトラックや映像ミックスが後から作られれば `ok` に戻ります。同じきっかけに複数の割り当てがあれば、番号順に全部実行します。
+
+割り当てと MIDI 機器の `enabled` は `%APPDATA%\DesktopCapture\mixd-control.txt` に保存し、エンジンの起動時に戻します（プロファイル（P5）とは別。どのプロファイルでも同じキー・同じ機器を使うため）。
+
+#### 5.9.1 きっかけ
+
+| 形 | 意味 |
+|---|---|
+| `key:<修飾>+…+<キー>` | ホットキー。修飾は `ctrl`・`alt`・`shift`・`win` をこの順で 0 個以上、最後にキーを 1 つ。例 `key:ctrl+shift+f9`、`key:f13`、`key:alt+num5` |
+| `midi:note/<ch>/<n>` | ノート。ノートオン（ベロシティ 1 以上）で押す、ノートオフ（ベロシティ 0 のノートオンも）で離す |
+| `midi:cc/<ch>/<n>` | コントロールチェンジ。ボタンとしては 64 以上になったときに押す、64 未満になったときに離す。`param` では値 0〜127 |
+| `midi:pc/<ch>/<n>` | プログラムチェンジ。押すだけ |
+| `midi:pb/<ch>` | ピッチベンド。`param` だけ（値 0〜16383） |
+
+`<ch>` は 1〜16、`<n>` は 0〜127。キーの名前は `a`〜`z`、`0`〜`9`、`f1`〜`f24`、`num0`〜`num9`、`num_add`・`num_sub`・`num_mul`・`num_div`・`num_dec`、`space`・`enter`・`tab`・`backspace`・`escape`・`insert`・`delete`・`home`・`end`・`pageup`・`pagedown`・`up`・`down`・`left`・`right`・`pause`・`printscreen`・`scrolllock`、`minus`・`equal`・`comma`・`period`・`semicolon`・`slash`・`backslash`・`quote`・`bracketleft`・`bracketright`・`backquote`、`media_play`・`media_stop`・`media_next`・`media_prev` です（日本語キーボードでも位置ではなく Windows の仮想キーコードで決まる）。
+
+- ホットキーは Windows の `RegisterHotKey` で登録します。他のアプリが登録済みの組み合わせは `conflict` です。ホットキーとして登録した組み合わせは他のアプリには届きません。
+- キーを押し続けたときの自動の繰り返しは、`step` だけ受け付けます（押しっぱなしで音量を下げ続けるなど）。
+- MIDI のシステムメッセージ（クロック、アクティブセンシング、SysEx）は無視します。
+
+#### 5.9.2 動作
+
+| `action` | `target` | `value` | 押したとき | 離したとき |
+|---|---|---|---|---|
+| `none` | | | 何もしない | |
+| `record_toggle` | | | 録画していなければ `/capture/record/start`、録画中なら `/capture/record/stop` | |
+| `record_start` / `record_stop` | | | `/capture/record/start` / `stop` | |
+| `recorder_toggle` | | | トラック別録音の開始・停止の切り替え | |
+| `pad` | `<パッド>`（今のバンク）か `<バンク>/<パッド>` | | `/sampler/trigger` | `/sampler/release`（押す間のパッドが止まる） |
+| `pad_stop` | `""`（全バンク）か `<バンク>` | | `/sampler/stop` | |
+| `take` | `<ミックス>` | | `/video/mix/<ミックス>/take` | |
+| `toggle` | bool のパラメーター（例 `/track/3/mute`） | | true と false を入れ替える | |
+| `set` | パラメーター | 値の文字列（パラメーターの型で読む） | その値にする | |
+| `step` | 数値のパラメーター | 増減（例 `-1`） | 値に足して範囲に収める | |
+| `param` | パラメーター（MIDI だけ） | | 5.9.4 | |
+
+- シーン切替は `set` で `/video/mix/<n>/program_scene` に、サンプラーのバンク切替は `set` で `/sampler/active_bank` に、ミュートは `toggle` で `/track/<n>/mute` にします。UI はこれを「シーン切替」「バンク切替」「ミュート」として見せます。
+- 動作はクライアントの Set・Call と同じ検査を通ります（`origin_client` = `"control"`）。失敗（録画中の `record_start` など）は無視し、ログに残すだけです。
+- `toggle`・`set`・`step`・`param` の対象は書き込みできるパラメーターだけです（読み取り専用や存在しないパスは `invalid`）。`/control/...` は対象にできません。
+
+#### 5.9.3 学習
+
+`/control/learn` を呼ぶと、エンジンは次の入力を待ちます（`/control/learn/binding` = その番号、`/control/learn/source`）。
+
+- `key`：エンジンの PC で押されたキーの組み合わせ（修飾キー以外のキーが押された時点の修飾の状態）。待っている間に押したキーは他のアプリに届きません。`escape` だけを押すと学習をやめます。
+- `midi`：ノートオン、コントロールチェンジ、プログラムチェンジ、ピッチベンドのどれか。
+- `any`：どちらか早い方。
+
+決まったら `trigger`（MIDI なら `device` も）に書き、`control.learned` を送って学習を終えます（`/control/learn/binding` = 0）。30 秒たつか、`/control/learn/cancel`、別の割り当ての学習で終わります。存在しない割り当ては `not_found` です。
+
+UI でパラメーターを選んで MIDI で動かすようにするときは、UI が `action` = `param`・`target` = そのパスの割り当てを `/control/binding/add` で作り、`/control/learn` を `source` = `midi` で呼びます。
+
+#### 5.9.4 MIDI の値をパラメーターへ（`param`）
+
+| 対象 | 値の対応 |
+|---|---|
+| `volume_db`・`level_db` で終わるパス | UI のフェーダーと同じ目盛り。0 = 無音（-144）、1 以上は -60 dB〜+12 dB に直線（CC の 106 ≒ 0 dB） |
+| そのほかの float・int | 最小〜最大に直線（int は四捨五入） |
+| bool | 半分以上で true |
+| 選択肢のある string・int | 選択肢の数で等分 |
+
+CC は 0〜127、ピッチベンドは 0〜16383 を 0〜1 として扱います。ノートは押したとき最大、離したとき最小です。つまみを速く回したときのために、1 つの割り当てにつき約 60Hz に間引いて最後の値を Set します。
+
+#### 5.9.5 MIDI 入力機器
+
+エンジンは MIDI 入力機器（Windows の MIDI 入力、`winmm`）を数秒ごとと `/devices/refresh` で探し、`/control/midi/device/#` に載せて、`enabled` のものを開きます。Windows の MIDI 入力は同時に 1 つのアプリしか開けないので、DAW などで使う機器は `enabled` = false にします（名前で覚える）。他のアプリが開いていれば `state` = `busy` で、数秒ごとに開き直します。
+
+最後に受けたメッセージは `/control/midi/last/*` に約 10Hz で載せます（UI の確認表示用）。
 
 ## 6. エラーコード
 

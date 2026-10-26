@@ -324,6 +324,32 @@ Schema buildV1() {
     sc.add(e("/remote/paired/#/role", {"remote", "peer"}, "remote", "相手の種類（リモコン / 別の PC のエンジン）", RO));
     sc.add(b("/remote/paired/#/online", false, "今つながっている", RO));
 
+    // --- control: hotkeys and MIDI learn (lane C7). Bindings are added by methods, fixed IDs like tracks ---
+    sc.add(s("/control/binding/#/trigger", "",
+             "きっかけ。key:<修飾+キー>（例 key:ctrl+shift+f9）、midi:note/<ch>/<n>・midi:cc/<ch>/<n>・midi:pc/<ch>/<n>・midi:pb/<ch>（ch 1〜16、n 0〜127）。\"\" = 未設定"));
+    sc.add(s("/control/binding/#/device", "", "MIDI 機器名（/control/midi/device/#/name。\"\" = どの機器でも）"));
+    sc.add(e("/control/binding/#/action",
+             {"none", "record_toggle", "record_start", "record_stop", "recorder_toggle", "pad", "pad_stop", "take", "toggle",
+              "set", "step", "param"},
+             "none", "動作（protocol.md 5.9）"));
+    sc.add(s("/control/binding/#/target", "",
+             "動作の対象。pad は <パッド> か <バンク>/<パッド>、pad_stop は \"\"（全バンク）か <バンク>、take は <ミックス>、toggle・set・step・param はパラメーターのパス"));
+    sc.add(s("/control/binding/#/value", "", "set の値、step の増減（例 -1.5）"));
+    sc.add(b("/control/binding/#/enabled", true, "有効"));
+    sc.add(e("/control/binding/#/state", {"ok", "off", "invalid", "conflict", "unsupported"}, "off",
+             "ok = 使える、off = 無効か未設定、invalid = きっかけ・対象・値が正しくない、conflict = 他のアプリが同じホットキーを使用中、unsupported = この PC では使えない",
+             RO));
+    sc.add(s("/control/binding/#/error", "", "invalid などの理由", RO));
+    sc.add(s("/control/midi/device/#/name", "", "MIDI 入力機器名（同じ名前が複数あれば 2 台目から \" #2\" を付ける）", RO));
+    sc.add(b("/control/midi/device/#/enabled", true, "この機器を開く（false = 他のアプリに譲る。名前で覚える）"));
+    sc.add(e("/control/midi/device/#/state", {"ok", "off", "busy", "error"}, "off",
+             "ok = 受信中、off = 使わない、busy = 他のアプリが使用中、error = 開けない", RO));
+    sc.add(s("/control/midi/last/trigger", "", "最後に受けた MIDI のきっかけ（trigger の形）", RO));
+    sc.add(s("/control/midi/last/device", "", "最後に受けた MIDI の機器名", RO));
+    sc.add(i("/control/midi/last/value", 0, 16383, 0, "最後に受けた MIDI の値（ベロシティ・CC 値、pb は 0〜16383）", RO));
+    sc.add(i("/control/learn/binding", 0, kMaxBindings, 0, "学習中の割り当て（0 = 学習していない）", RO));
+    sc.add(e("/control/learn/source", {"any", "key", "midi"}, "any", "学習で待っているもの", RO));
+
     // --- methods ---
     sc.addMethod({"/session/resync", "", "nil", "スナップショットを送り直す（rev の飛びを検出したとき）", "P0"});
     sc.addMethod({"/mixer/track/add", "channels:int?, name:string?, position:int?", "int（新しいトラック番号）",
@@ -383,6 +409,12 @@ Schema buildV1() {
     sc.addMethod({"/lan/peers/pair", "id:string, code:string", "nil", "相手の PC に表示された 6 桁コードでペアリングする", "P3"});
     sc.addMethod({"/lan/peers/forget", "id:string", "nil", "相手のペアリング情報を消す（手動で追加した相手は一覧からも消す）", "P3"});
     sc.addMethod({"/lan/peers/add", "address:string", "nil", "相手を IP アドレス（ip または ip:port）で手動追加", "P3"});
+    sc.addMethod({"/control/binding/add", "trigger:string?, device:string?, action:string?, target:string?, value:string?",
+                  "int（新しい割り当て番号）", "ホットキー・MIDI の割り当てを追加（最大 128）", "P4"});
+    sc.addMethod({"/control/binding/remove", "binding:int", "nil", "割り当てを削除。番号は詰めない", "P4"});
+    sc.addMethod({"/control/learn", "binding:int, source:string?", "nil",
+                  "次に押されたキーの組み合わせ（エンジンの PC）か MIDI を割り当てのきっかけにする（source = any / key / midi、30 秒で終わる）", "P4"});
+    sc.addMethod({"/control/learn/cancel", "", "nil", "学習をやめる", "P4"});
 
     return sc;
 }
