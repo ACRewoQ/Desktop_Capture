@@ -31,6 +31,8 @@ inline constexpr int kSamplerBanks = 8;
 inline constexpr int kSamplerPads = 16; // per bank
 inline constexpr int kMaxBindings = 128;   // /control/binding/# (hotkeys and MIDI)
 inline constexpr int kMaxMidiDevices = 16; // /control/midi/device/#
+inline constexpr int kMaxSnapshots = 64;   // /snapshot/# (mixer snapshots of the current profile)
+inline constexpr int kMaxProfiles = 64;    // /profile/list/#
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 

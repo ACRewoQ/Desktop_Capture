@@ -1,4 +1,5 @@
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/profile.hpp"
 #include "dc/protocol/schema.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -119,4 +120,66 @@ TEST_CASE("control bindings (hotkeys and MIDI) are in the schema", "[schema]") {
     CHECK(global.count("/control/midi/last/trigger"));
     CHECK_FALSE(global.count("/control/binding/1/trigger"));
     CHECK_FALSE(global.count("/control/midi/device/1/name"));
+}
+
+TEST_CASE("profiles and mixer snapshots are in the schema", "[schema]") {
+    const auto& s = schemaV1();
+    CHECK(s.find("/profile/current")->access == Access::ReadOnly);
+    CHECK(s.find("/profile/autosave")->access == Access::ReadWrite);
+    REQUIRE(s.find("/profile/list/64/name") != nullptr);
+    REQUIRE(s.find("/snapshot/64/name") != nullptr);
+    CHECK(s.find("/snapshot/last") != nullptr);
+    for (const char* m : {"/profile/save", "/profile/load", "/profile/new", "/profile/rename", "/profile/remove",
+                          "/snapshot/save", "/snapshot/recall", "/snapshot/remove"})
+        CHECK(s.findMethod(m) != nullptr);
+    CHECK_FALSE(s.validate(*s.find("/control/binding/1/action"), std::string("snapshot"), true));
+
+    std::set<std::string> global;
+    for (const auto& c : globalDefaults()) global.insert(c.path);
+    CHECK(global.count("/profile/autosave"));
+    CHECK(global.count("/snapshot/last"));
+    CHECK_FALSE(global.count("/profile/list/1/name"));
+    CHECK_FALSE(global.count("/snapshot/1/name"));
+}
+
+TEST_CASE("what a profile and a snapshot keep", "[schema]") {
+    const auto& s = schemaV1();
+    auto profile = [&](const char* path) { return inProfile(*s.find(path)); };
+    auto snapshot = [&](const char* path) { return inSnapshot(*s.find(path)); };
+
+    // settings and the structure they need
+    for (const char* p : {"/track/3/volume_db", "/track/3/input/source", "/track/3/out/2/target", "/track/3/position",
+                          "/track/3/fx/2/type", "/track/3/fx/2/param/p17", "/master/fx/1/type", "/system/block_size",
+                          "/cue/target", "/capture/video/bitrate_kbps", "/recorder/format", "/sampler/bank/2/pad/5/file",
+                          "/video/source/4/kind", "/video/scene/2/layer/3/position", "/video/mix/2/program_scene",
+                          "/video/vcam/mix", "/lan/stream/1/codec"})
+        CHECK(profile(p));
+    // states, lists, PC-wide and separately stored settings
+    for (const char* p : {"/track/3/meter_id", "/track/3/input/state", "/track/3/fx/2/status", "/track/3/fx/2/editor",
+                          "/system/xruns", "/devices/input/1/id", "/capture/state", "/sampler/bank/1/pad/1/state",
+                          "/video/source/1/state", "/video/devices/display/1/id", "/video/vcam/state", "/lan/name",
+                          "/lan/stream/1/stream_id", "/plugins/extra_dirs", "/remote/paired/1/id",
+                          "/control/binding/1/trigger", "/profile/autosave", "/profile/current", "/snapshot/1/name"})
+        CHECK_FALSE(profile(p));
+
+    for (const char* p : {"/track/3/volume_db", "/track/3/pan", "/track/3/mute", "/track/3/solo", "/track/3/lowcut/freq_hz",
+                          "/track/3/send/2/level_db", "/track/3/fx/1/bypass", "/track/3/fx/1/param/threshold_db",
+                          "/master/volume_db", "/master/highcut/enabled", "/cue/volume_db"})
+        CHECK(snapshot(p));
+    for (const char* p : {"/track/3/name", "/track/3/input/kind", "/track/3/out/1/target", "/track/3/send/1/target",
+                          "/track/3/channels", "/track/3/cue", "/track/3/record/enabled", "/track/3/fx/1/type",
+                          "/track/3/position", "/cue/target", "/video/mix/1/program_scene"})
+        CHECK_FALSE(snapshot(p));
+}
+
+TEST_CASE("profile names are file names", "[schema]") {
+    for (const char* n : {"標準", "Stream 2", "配信 (ゲーム)", "a.b", "con1", "comx"}) CHECK(isValidProfileName(n));
+    for (const char* n : {"", " a", "a ", ".a", "a.", "a/b", "a\\b", "a:b", "a*", "a?", "a\"", "a<", "a>", "a|", "a\tb",
+                          "con", "NUL", "nul.txt", "COM1", "lpt9"})
+        CHECK_FALSE(isValidProfileName(n));
+    CHECK(isValidProfileName(std::string(64, 'a')));
+    CHECK_FALSE(isValidProfileName(std::string(65, 'a')));
+    std::string jp;
+    for (int k = 0; k < 64; ++k) jp += "あ";
+    CHECK(isValidProfileName(jp)); // characters, not bytes
 }

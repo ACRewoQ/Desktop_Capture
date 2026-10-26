@@ -330,10 +330,10 @@ Schema buildV1() {
     sc.add(s("/control/binding/#/device", "", "MIDI 機器名（/control/midi/device/#/name。\"\" = どの機器でも）"));
     sc.add(e("/control/binding/#/action",
              {"none", "record_toggle", "record_start", "record_stop", "recorder_toggle", "pad", "pad_stop", "take", "toggle",
-              "set", "step", "param"},
+              "set", "step", "param", "snapshot"},
              "none", "動作（protocol.md 5.9）"));
     sc.add(s("/control/binding/#/target", "",
-             "動作の対象。pad は <パッド> か <バンク>/<パッド>、pad_stop は \"\"（全バンク）か <バンク>、take は <ミックス>、toggle・set・step・param はパラメーターのパス"));
+             "動作の対象。pad は <パッド> か <バンク>/<パッド>、pad_stop は \"\"（全バンク）か <バンク>、take は <ミックス>、snapshot は <スナップショット>、toggle・set・step・param はパラメーターのパス"));
     sc.add(s("/control/binding/#/value", "", "set の値、step の増減（例 -1.5）"));
     sc.add(b("/control/binding/#/enabled", true, "有効"));
     sc.add(e("/control/binding/#/state", {"ok", "off", "invalid", "conflict", "unsupported"}, "off",
@@ -349,6 +349,18 @@ Schema buildV1() {
     sc.add(i("/control/midi/last/value", 0, 16383, 0, "最後に受けた MIDI の値（ベロシティ・CC 値、pb は 0〜16383）", RO));
     sc.add(i("/control/learn/binding", 0, kMaxBindings, 0, "学習中の割り当て（0 = 学習していない）", RO));
     sc.add(e("/control/learn/source", {"any", "key", "midi"}, "any", "学習で待っているもの", RO));
+
+    // --- profiles and mixer snapshots (lane P5-A). The profile files are listed by the engine ---
+    sc.add(s("/profile/current", "", "使用中のプロファイル名（自動保存と /profile/save の書き先）", RO));
+    sc.add(b("/profile/autosave", true, "変更を自動で使用中のプロファイルに保存する（PC 共通の設定）"));
+    sc.add(b("/profile/modified", false, "使用中のプロファイルに保存していない変更がある", RO));
+    sc.add(s("/profile/directory", "", "プロファイルのフォルダー", RO));
+    sc.add(s("/profile/error", "", "直前の読み込み・保存の失敗の理由（\"\" = なし）", RO));
+    sc.add(s("/profile/list/#/name", "", "フォルダーにあるプロファイル（名前順）", RO));
+    sc.add(i("/profile/list/#/modified", 0, kI64Max, 0, "最後に保存した時刻（UNIX 秒）", RO));
+    sc.add(s("/snapshot/#/name", "", "ミキサースナップショットの名前（使用中のプロファイルに入る）"));
+    sc.add(i("/snapshot/#/modified", 0, kI64Max, 0, "スナップショットを撮った時刻（UNIX 秒）", RO));
+    sc.add(i("/snapshot/last", 0, kMaxSnapshots, 0, "最後に呼び出した・撮ったスナップショット（0 = なし）", RO));
 
     // --- methods ---
     sc.addMethod({"/session/resync", "", "nil", "スナップショットを送り直す（rev の飛びを検出したとき）", "P0"});
@@ -417,6 +429,18 @@ Schema buildV1() {
     sc.addMethod({"/control/learn", "binding:int, source:string?", "nil",
                   "次に押されたキーの組み合わせ（エンジンの PC）か MIDI を割り当てのきっかけにする（source = any / key / midi、30 秒で終わる）", "P4"});
     sc.addMethod({"/control/learn/cancel", "", "nil", "学習をやめる", "P4"});
+
+    sc.addMethod({"/profile/save", "name:string?", "string（保存したプロファイル名）",
+                  "今の状態を使用中のプロファイルに保存。name を付けるとその名前で保存して、以後はそれを使う（別名で保存）", "P5"});
+    sc.addMethod({"/profile/load", "name:string", "nil",
+                  "プロファイルに切り替える（自動保存が有効なら今のプロファイルを先に保存）。録画中・録音中は conflict", "P5"});
+    sc.addMethod({"/profile/new", "name:string", "nil", "初期状態の新しいプロファイルを作って切り替える。録画中・録音中は conflict", "P5"});
+    sc.addMethod({"/profile/rename", "name:string, new_name:string", "nil", "プロファイルの名前を変える", "P5"});
+    sc.addMethod({"/profile/remove", "name:string", "nil", "プロファイルを削除（使用中のものは conflict）", "P5"});
+    sc.addMethod({"/snapshot/save", "name:string?, snapshot:int?", "int（スナップショット番号）",
+                  "今のミキサーの値をスナップショットに撮る（snapshot を付けるとそれを上書き）。最大 64", "P5"});
+    sc.addMethod({"/snapshot/recall", "snapshot:int", "nil", "スナップショットのミキサーの値に戻す", "P5"});
+    sc.addMethod({"/snapshot/remove", "snapshot:int", "nil", "スナップショットを削除。番号は詰めない", "P5"});
 
     return sc;
 }
