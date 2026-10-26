@@ -108,6 +108,12 @@ void PreviewStream::follow() {
             emit changed();
             return;
         }
+        // capd sends from the engine's host, normally from UDP 47811: knock there so that a firewall
+        // that only lets replies in (a remote on a "public" network) lets the stream in.
+        try {
+            input_->setExpectedSource(lan::UdpTransport::resolve(connection_.host().toStdString(), lan::kDefaultVideoPort));
+        } catch (const std::exception&) {
+        }
         lastTick_ = QDateTime::currentMSecsSinceEpoch();
         lastFrameTick_ = lastTick_;
         lastFrames_ = frames_.load();

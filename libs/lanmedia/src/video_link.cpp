@@ -61,12 +61,24 @@ VideoInput::~VideoInput() {
     transport_.stop();
 }
 
+void VideoInput::setExpectedSource(const UdpTransport::Endpoint& sender) {
+    std::lock_guard lock(mutex_);
+    expected_ = sender;
+    haveExpected_ = true;
+    lastHello_ = -1e9;
+}
+
 void VideoInput::pollLoop() {
     while (running_) {
         {
             std::lock_guard lock(mutex_);
-            if (const auto r = receiver_.poll(nowSeconds(), onFrame_); r && haveSource_)
+            const double now = nowSeconds();
+            if (const auto r = receiver_.poll(now, onFrame_); r && haveSource_)
                 transport_.send(encodeReport(*r), source_);
+            if (!haveSource_ && haveExpected_ && now - lastHello_ >= 0.5) {
+                transport_.send(encodeReport(Report{}), expected_);
+                lastHello_ = now;
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
