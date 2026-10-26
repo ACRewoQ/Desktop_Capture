@@ -63,6 +63,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8  # dc-cli and capd print UTF-8 (device names in Japanese)
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $Cases = @($Cases | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
@@ -141,12 +142,15 @@ function Start-Hidden([string]$exe, [string[]]$arguments, [string]$name) {
 function Stop-Quiet($p) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -ErrorAction SilentlyContinue; $null = $p.WaitForExit(5000) } }
 
 $watchFile = Join-Path $out 'watch.txt'
-function Has-Event([string]$name, [string]$text = '', [double]$seconds = 15) {
+function Has-Event([string]$name, [string]$text = '', [double]$seconds = 15, [int]$after = 0) {
+    # true when more than $after matching events have arrived (pass Event-Count from before the action)
     return Wait-Until {
-        @(Select-String -Path $watchFile -SimpleMatch "event $name" -ErrorAction SilentlyContinue | Where-Object { $_.Line -like "*$text*" }).Count -gt 0
+        @(Select-String -Path $watchFile -SimpleMatch "event $name" -ErrorAction SilentlyContinue | Where-Object { $_.Line -like "*$text*" }).Count -gt $after
     } $seconds
 }
-function Event-Count([string]$name) { return @(Select-String -Path $watchFile -SimpleMatch "event $name" -ErrorAction SilentlyContinue).Count }
+function Event-Count([string]$name, [string]$text = '') {
+    return @(Select-String -Path $watchFile -SimpleMatch "event $name" -ErrorAction SilentlyContinue | Where-Object { $_.Line -like "*$text*" }).Count
+}
 # peak (dB) of a meter id over the newest meter lines (about 1 s each)
 function Meter-Db([int]$id, [int]$lines = 2) {
     $all = @(Get-Content $watchFile -ErrorAction SilentlyContinue | Where-Object { $_ -like 'meters seq*' } | Select-Object -Last $lines)
@@ -292,8 +296,14 @@ try {
     Set-Param "/video/scene/1/layer/$l/width" 0.4; Set-Param "/video/scene/1/layer/$l/height" 0.4
     $cam = 0
     if ($vcamCtl -and (Test-Path $vcamCtl)) {
+        # Windows lists it as "Desktop Capture Camera (Windows Virtual Camera)" in the user's language: take id and name from capd's list
+        $camLine = & $cli --port $port snapshot /video/devices/camera | Where-Object { $_ -match '/name = "Desktop Capture Camera' } | Select-Object -First 1
+        $camName = if ($camLine -match '= "(.*)"$') { $Matches[1] } else { 'Desktop Capture Camera' }
+        $camId = if ($camLine -match '/camera/(\d+)/name') { Get-Param "/video/devices/camera/$($Matches[1])/id" } else { '' }
+        $info.camera = "$camName [$camId]"
         $cam = Call '/video/source/add' @('kind=camera')
-        Set-Param "/video/source/$cam/camera/name" 'Desktop Capture Camera'
+        if ($camId) { Set-Param "/video/source/$cam/camera/id" $camId }
+        Set-Param "/video/source/$cam/camera/name" $camName
         $l = Call '/video/scene/1/layer/add' @("source=$cam")
         Set-Param "/video/scene/1/layer/$l/x" 0.55; Set-Param "/video/scene/1/layer/$l/y" 0.05
         Set-Param "/video/scene/1/layer/$l/width" 0.4; Set-Param "/video/scene/1/layer/$l/height" 0.4
@@ -396,11 +406,15 @@ using System; using System.Runtime.InteropServices;
 public static class Disp {
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   public struct DEVMODE { [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName; public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput; public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName; public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency, dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsEx(string dev, ref DEVMODE mode, IntPtr hwnd, int flags, IntPtr param);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsEx(string dev, IntPtr mode, IntPtr hwnd, int flags, IntPtr param);
 }
 "@
-$m = New-Object Disp+DEVMODE; $m.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($m); $m.dmPelsWidth = 1920; $m.dmPelsHeight = 1080; $m.dmFields = 0x80000 -bor 0x100000
+$m = New-Object Disp+DEVMODE; $m.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($m)
+$ok = [Disp]::EnumDisplaySettings($null, -1, [ref]$m)   # the current mode, then only the size changes
+"current $ok $($m.dmPelsWidth)x$($m.dmPelsHeight)@$($m.dmDisplayFrequency) size $($m.dmSize)"
+$m.dmPelsWidth = 1920; $m.dmPelsHeight = 1080; $m.dmFields = 0x80000 -bor 0x100000
 $r = [Disp]::ChangeDisplaySettingsEx($null, [ref]$m, [IntPtr]::Zero, 4, [IntPtr]::Zero)   # CDS_FULLSCREEN: temporary
 "change $r"
 Start-Sleep -Seconds 10
@@ -419,13 +433,14 @@ $r = [Disp]::ChangeDisplaySettingsEx($null, [IntPtr]::Zero, [IntPtr]::Zero, 0, [
     if (Has-Case 'remote') {
         Write-Host "`n=== remote: dc-ui with the preview, closed and opened again ===" -ForegroundColor Cyan
         $x0 = Xruns
-        $procs.ui = Start-Hidden $ui @('--connect', "127.0.0.1:$port", '--page', 'video', '--demo', 'preview') 'ui-1'
+        # with its window up: the preview subscribes only while it is on screen
+        $procs.ui = Start-Process -FilePath $ui -ArgumentList '--connect', "127.0.0.1:$port", '--page', 'video', '--demo', 'preview' -PassThru
         $sub1 = Wait-Until { (& $cli --port $port snapshot /lan/sub) -match 'video/preview' } 20
         Start-Sleep -Seconds 5
         Stop-Process -Id $procs.ui.Id -Force   # an unclean disconnect
         $gone = Wait-Until { -not ((& $cli --port $port snapshot /lan/sub) -match 'video/preview') } 15
         $rec = (Capture-State) -eq 'recording'
-        $procs.ui = Start-Hidden $ui @('--connect', "127.0.0.1:$port", '--page', 'video', '--demo', 'preview') 'ui-2'
+        $procs.ui = Start-Process -FilePath $ui -ArgumentList '--connect', "127.0.0.1:$port", '--page', 'video', '--demo', 'preview' -PassThru
         $sub2 = Wait-Until { (& $cli --port $port snapshot /lan/sub) -match 'video/preview' } 20
         Start-Sleep -Seconds 3
         Stop-Quiet $procs.ui
@@ -436,7 +451,7 @@ $r = [Disp]::ChangeDisplaySettingsEx($null, [IntPtr]::Zero, [IntPtr]::Zero, 0, [
         $segments0 = Event-Count 'capture.segment'
         $file0 = Get-Param '/capture/file'
         New-Item -ItemType File -Force (Join-Path $hooks 'gpu_reset') | Out-Null
-        $seg = Has-Event 'capture.segment' 'gpu_reset' 20
+        $seg = Has-Event 'capture.segment' 'gpu_reset' 20 $segments0
         Start-Sleep -Seconds 3
         Note-File
         $file1 = Get-Param '/capture/file'
@@ -449,7 +464,8 @@ $r = [Disp]::ChangeDisplaySettingsEx($null, [IntPtr]::Zero, [IntPtr]::Zero, 0, [
         Write-Host "`n=== unplug: the clock / input / output device goes away and comes back ===" -ForegroundColor Cyan
         Popup "G3 test: unplug the USB cable of the $DeviceName now (within 5 minutes)." 300
         Write-Host "Unplug the $DeviceName now (waiting up to 5 min)..." -ForegroundColor Yellow
-        $lost = Has-Event 'device.lost' '' 300
+        $lost0 = Event-Count 'device.lost'
+        $lost = Has-Event 'device.lost' '' 300 $lost0
         Start-Sleep -Seconds 5
         $clockOff = Get-Param '/system/clock_active'
         $t1 = Get-Param '/track/1/input/state'
@@ -457,7 +473,7 @@ $r = [Disp]::ChangeDisplaySettingsEx($null, [IntPtr]::Zero, [IntPtr]::Zero, 0, [
         $rec = (Capture-State) -eq 'recording'
         Popup "G3 test: plug the $DeviceName back in now (within 5 minutes)." 300
         Write-Host "Plug it back in now (waiting up to 5 min)..." -ForegroundColor Yellow
-        $back = Wait-Param '/track/1/input/state' 'ok' 300
+        $back = Wait-Until { (Get-Param '/track/1/input/state') -eq 'ok' -and (Get-Param '/system/clock_active') -like 'device/*' } 300
         Start-Sleep -Seconds 5
         $clockBack = Get-Param '/system/clock_active'
         Add-Check 'G3-4' 'clock device: moves to another device' ($lost -and $clockOff -ne "device/$Device" -and $clockOff) "unplugged -> clock $clockOff"
@@ -554,13 +570,20 @@ if ($files.Count -gt 0 -and (Test-Path $files[0])) {
     if ($line) { foreach ($m in [regex]::Matches($line, '(\w+)=(\S+)')) { $s[$m.Groups[1].Value] = [double]$m.Groups[2].Value } }
     if ($s.Count) {
         Add-Check 'G3-2' 'A/V: audio within 45 ms of the picture (first file)' ([math]::Abs($s.median_ms) -le 45 -and $s.pairs -ge 10) ("{0} pairs, median {1:+0.0;-0.0} ms, min {2:+0.0;-0.0}, max {3:+0.0;-0.0}" -f $s.pairs, $s.median_ms, $s.min_ms, $s.max_ms)
-        Add-Check 'G3-4' 'A/V: no drift through the disconnects (first file)' ([math]::Abs($s.drift_ms) -le 10) ("drift {0:+0.0;-0.0} ms over {1:0} s" -f $s.drift_ms, $s.duration_s)
+        # The offset flips between two values a frame apart (where the flash lands between two 60 fps ticks), so the
+        # median of a tenth can jump by a frame without any drift: compare the means of the first and last tenth.
+        $rows = @(Import-Csv (Join-Path $out 'avsync.csv') | ForEach-Object { [double]$_.offset_ms })
+        $tenth = [math]::Max(1, [int][math]::Floor($rows.Count / 10))
+        $firstMean = ($rows | Select-Object -First $tenth | Measure-Object -Average).Average
+        $lastMean = ($rows | Select-Object -Last $tenth | Measure-Object -Average).Average
+        $drift = $lastMean - $firstMean
+        Add-Check 'G3-4' 'A/V: no drift through the disconnects (first file)' ([math]::Abs($drift) -le 10) ("mean of the last tenth - first tenth {0:+0.0;-0.0} ms over {1:0} s (median-based {2:+0.0;-0.0} ms)" -f $drift, $s.duration_s, $s.drift_ms)
     } else { Add-Check 'G3-2' 'A/V analysis' $false 'capd avsync gave no result' }
 }
 
 # ---------------------------------------------------------------------------------------------------- report
 $md = @("# G3 integration check ($stamp)", '',
-        "Output/clock: $($info.device). Input: $($info.input). VB-CABLE: $($info.cable_in) / $($info.cable_out). Mode: $Mode. Minutes: $Minutes.",
+        "Output/clock: $($info.device). Input: $($info.input). VB-CABLE: $($info.cable_in) / $($info.cable_out). Mode: $Mode. Minutes: $Minutes. Camera: $($info.camera).",
         "Cases: $($Cases -join ', ')$(if ($SkipUnplug) { ' (unplug skipped)' })$(if (-not $ChangeResolution) { ' (display skipped: -ChangeResolution)' })",
         "Files: $($files -join ', ')", '',
         '| group | check | result | detail |', '|---|---|---|---|')
