@@ -112,10 +112,11 @@ function Start-Mixd([string]$name, [string]$profile = '') {
     if (-not (Wait-Until { (Get-Param '/system/clock_active') -like 'device/*' } 20)) { throw "mixd did not start (see $out\$name.log)" }
     return $p
 }
+# capd is connected once it has listed the monitors and reported source 1 ("none" while no output uses it)
+function Test-Capd { return (Get-Param '/video/devices/display/1/id') -and ((Get-Param '/video/source/1/state') -in @('ok', 'none')) }
 function Start-Capd([string]$name) {
-    $p = Start-Hidden $capd @('--port', $port) $name
-    if (-not (Wait-Until { (Get-Param '/video/source/1/state') -eq 'ok' } 20)) { throw "capd did not open the monitor (see $out\$name.log)" }
-    return $p
+    $procs.capd = Start-Hidden $capd @('--port', $port) $name
+    if (-not (Wait-Until { Test-Capd } 20)) { throw "capd did not connect (see $out\$name.log)" }
 }
 # the parameter key of a VST3 parameter by its name ("Gain" -> "p123")
 function Get-PluginKey([string]$slot, [string]$name) {
@@ -136,7 +137,7 @@ $procs = @{}
 try {
     Write-Host "`n=== set up profile p5a ===" -ForegroundColor Cyan
     $procs.mixd = Start-Mixd 'mixd-1' 'p5a'
-    $procs.capd = Start-Capd 'capd-1'
+    Start-Capd 'capd-1'
     Add-Row 'starts with --profile' ((Get-Param '/profile/current') -eq 'p5a') "current $(Get-Param '/profile/current'), folder $(Get-Param '/profile/directory')"
 
     Set-Param '/track/1/volume_db' -6.5
@@ -205,7 +206,7 @@ try {
         $g = [double](Get-Param "/master/fx/1/param/$gainKey")
         Add-Row 'VST3 back with its state' ($ok -and [math]::Abs($g - 0.3) -lt 0.001) "status $(Get-Param '/master/fx/1/status'), gain $g"
     }
-    $ok = Wait-Until { (Get-Param '/video/source/1/state') -eq 'ok' } 15
+    $ok = Wait-Until { Test-Capd } 15
     Add-Row 'capd follows the restored video' $ok "capd reconnected, source 1 $(Get-Param '/video/source/1/state')"
 
     Write-Host "`n=== second profile, switching ===" -ForegroundColor Cyan
@@ -221,7 +222,7 @@ try {
         $ok = Wait-Until { (Get-Param '/master/fx/1/status') -eq 'ok' } 20
         Add-Row 'VST3 after switching' ($ok -and [math]::Abs([double](Get-Param "/master/fx/1/param/$gainKey") - 0.3) -lt 0.001) "gain $(Get-Param "/master/fx/1/param/$gainKey")"
     }
-    $ok = Wait-Until { (Get-Param '/video/source/1/state') -eq 'ok' } 15
+    $ok = Wait-Until { Test-Capd } 15
     Add-Row 'capd keeps going through the switch' ($ok -and -not $procs.capd.HasExited) "source 1 $(Get-Param '/video/source/1/state')"
     $r = Invoke-Method '/profile/load' @('name=s:p5b')
     Add-Row 'p5b kept its change' ((Get-Param '/track/3/mute') -eq 'true') "track 3 mute $(Get-Param '/track/3/mute')"
