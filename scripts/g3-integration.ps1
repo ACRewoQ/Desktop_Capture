@@ -110,6 +110,8 @@ function Get-Param([string]$path, [int]$p = $port) {
     return $v
 }
 function Set-Param([string]$path, $value, [int]$p = $port) {
+    # Windows PowerShell 5.1 drops an empty argument to a native program: pass "" literally
+    if ("$value" -eq '') { $value = '""' }
     $r = & $cli --port $p set $path $value
     if ($r -ne 'ok') { throw "set $path $value -> $r" }
 }
