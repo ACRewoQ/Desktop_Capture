@@ -15,6 +15,7 @@
 #include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
+#include "touch_check.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/version.hpp"
@@ -212,6 +213,7 @@ int main(int argc, char** argv) {
             dc::ui::waitUntil([] { return false; }, 300);
         }
         window->setProperty("currentPage", QStringLiteral("mixer"));
+        failures += dc::ui::runTouchCheck(window, print);
         print(QStringLiteral("%1 pages shown (%2)").arg(pages.size() > 1 ? "  OK  " : "  FAIL", pages.join(QLatin1Char(' '))));
         if (pages.size() <= 1) ++failures;
         // The screen kept drawing while the models changed (catches the D3D11 first-frame freeze).

@@ -48,13 +48,18 @@ if(WIN32)
 endif()
 dc_apply_options(dc_ui_core)
 
-qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp)
+qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp src/touch_check.cpp src/touch_check.hpp)
 set_target_properties(dc-ui PROPERTIES AUTOMOC ON WIN32_EXECUTABLE TRUE)
-if(WIN32)
-    # The preview's decoder (Media Foundation, as in P1/V6); QRhi lives in the private Gui module.
+# QRhi (the preview) and QWindowSystemInterface (the self test's synthetic touch) live in the private
+# Gui module.
+if(NOT TARGET Qt6::GuiPrivate)  # Qt 6.9+ has it as a component of its own; older Qt with Gui
     find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+endif()
+target_link_libraries(dc-ui PRIVATE Qt6::GuiPrivate)
+if(WIN32)
+    # The preview's decoder (Media Foundation, as in P1/V6).
     target_sources(dc-ui PRIVATE src/preview_decoder.cpp src/preview_decoder.hpp)
-    target_link_libraries(dc-ui PRIVATE dc::mfvideo Qt6::GuiPrivate)
+    target_link_libraries(dc-ui PRIVATE dc::mfvideo)
 endif()
 
 set(DC_UI_QML
