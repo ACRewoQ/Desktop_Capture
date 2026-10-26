@@ -10,6 +10,8 @@
 | `src/strip_model` | ミキサーのストリップ（トラックとマスター）。60Hz に間引いた楽観的な編集 |
 | `src/param_hub` | ストリップ以外の画面用。どのパスでも読み書きでき、QML 型 `Param`・`ParamList`（`import DcUi.Params`）とコンテキストプロパティ `params` で使う |
 | `src/recorder` | 録画の開始・停止と状態 |
+| `src/preview_stream` | プレビュー映像（capd の `video/preview`）の購読と受信。見ている画面があるときだけ `/lan/subscribe` し、届いたフレームを渡す。コンテキストプロパティ `previewStream` |
+| `src/preview_video`・`src/preview_decoder` | プレビューの表示（QML 型 `PreviewVideo`、`import DcUi.Preview`）。Media Foundation で H.264 をデコードし（GPU、使えなければ CPU）、Qt の D3D11 デバイスのテクスチャーに写して描く。P1/V6 と同じ方式で、デコードの部品は `libs/mfvideo`。Windows の D3D11 描画のときだけ映り、それ以外は理由を表示する |
 | `qml/Main.qml` | 上のバー、左のページボタン、ページ、共通のシート |
 | `qml/*Page.qml` | ページ。`MixerPage` だけ常に読み込み、ほかは表示中だけ読み込む（隠れたページはメモリを使わない） |
 
@@ -36,11 +38,12 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 
 ## 映像ページ
 
-`VideoPage` は 3 つのタブ（シーン・ソース・出力先）。名前や選択肢の一覧は `Video` シングルトン（`qml/Video.qml`）にまとめている。
+`VideoPage` は 4 つのタブ（シーン・ソース・出力先・プレビュー）。名前や選択肢の一覧は `Video` シングルトン（`qml/Video.qml`）にまとめている。
 
 - シーン：シーンをタップすると「次」（`preview_scene`）になり、そのシーンを編集する。TAKE で本番と入れ替え。「…」または長押しで本番に出す・名前・並べ替え・削除。
 - キャンバス（`LayerCanvas`）：レイヤーの枠だけを描く（映像は capd が合成する）。タップで手前のレイヤーを選び、選んだレイヤーはドラッグで移動、右下のつまみで大きさを変える。端と中央に 10px で吸着。ダブルタップでレイヤーの設定。
 - 横幅 900px 未満では、キャンバス・シーン・レイヤーを縦に並べる。シーンのタブではキャンバスのドラッグと重ならないよう、横スワイプでのページ移動を止める。
+- プレビュー：`/video/preview/mix` のミックスを capd がエンコードした映像を映す（protocol.md 10 章）。タブを開いている間だけ購読するので、誰も見ていなければ capd はエンコードしない。下の「出すミックス」で切り替え、解像度・fps・ビットレートは出力先のタブで変える。映像が来ないときは理由（ミックスがない、エンジンにつながっていない、映像を待っている）を真ん中に出す。映像をタップすると解像度・受信 fps の表示を隠す。
 
 ## サンプラーと録画のページ
 
@@ -72,5 +75,5 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
 | `--pair CODE` | `--remote` で、キーパッドの代わりにペアリングの数字を渡す |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`） |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`preview`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)） |

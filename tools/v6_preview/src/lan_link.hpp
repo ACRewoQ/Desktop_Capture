@@ -6,7 +6,7 @@
 //   dc-v6-preview --engine HOST[:PORT] [--pair CODE]   on the remote device
 #pragma once
 
-#include "mf_codec.hpp"
+#include "dc/mfvideo/mf_codec.hpp"
 
 #include <atomic>
 #include <cstdint>

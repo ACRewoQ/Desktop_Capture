@@ -22,6 +22,8 @@ add_library(dc_ui_core STATIC
     src/exercise.hpp
     src/param_hub.cpp
     src/param_hub.hpp
+    src/preview_stream.cpp
+    src/preview_stream.hpp
     src/recorder.cpp
     src/recorder.hpp
     src/route_choices.cpp
@@ -34,11 +36,17 @@ add_library(dc_ui_core STATIC
 add_library(dc::ui_core ALIAS dc_ui_core)
 set_target_properties(dc_ui_core PROPERTIES AUTOMOC ON)
 target_include_directories(dc_ui_core PUBLIC src)
-target_link_libraries(dc_ui_core PUBLIC Qt6::Core Qt6::Network Qt6::Qml dc::protocol)
+target_link_libraries(dc_ui_core PUBLIC Qt6::Core Qt6::Network Qt6::Qml dc::protocol dc::lanmedia)
 dc_apply_options(dc_ui_core)
 
-qt_add_executable(dc-ui src/main.cpp)
+qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp)
 set_target_properties(dc-ui PROPERTIES AUTOMOC ON WIN32_EXECUTABLE TRUE)
+if(WIN32)
+    # The preview's decoder (Media Foundation, as in P1/V6); QRhi lives in the private Gui module.
+    find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+    target_sources(dc-ui PRIVATE src/preview_decoder.cpp src/preview_decoder.hpp)
+    target_link_libraries(dc-ui PRIVATE dc::mfvideo Qt6::GuiPrivate)
+endif()
 
 set(DC_UI_QML
     Main.qml
@@ -74,6 +82,7 @@ set(DC_UI_QML
     VideoScenes.qml
     VideoSources.qml
     VideoOutputs.qml
+    VideoPreview.qml
     LayerCanvas.qml
     LayerSheet.qml
     SourceSheet.qml

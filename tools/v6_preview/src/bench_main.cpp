@@ -8,7 +8,7 @@
 //                                            subscribed at the engine (mixd on this PC, e.g. 127.0.0.1);
 //                                            the viewer is dc-v6-preview --engine on another PC
 
-#include "common.hpp"
+#include "dc/mfvideo/common.hpp"
 #include "lan_link.hpp"
 #include "options.hpp"
 #include "pipeline.hpp"

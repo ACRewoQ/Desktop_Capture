@@ -2,8 +2,8 @@
 // pipeline, plus a minimal TCP link so the receiver can run on another PC (e.g. the 4 GB remote device).
 #pragma once
 
-#include "d3d_video.hpp"
-#include "mf_codec.hpp"
+#include "dc/mfvideo/d3d_video.hpp"
+#include "dc/mfvideo/mf_codec.hpp"
 #include "stats.hpp"
 
 #include <atomic>

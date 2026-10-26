@@ -6,7 +6,7 @@
 // (DXVA hardware decoding, output stays in a D3D11 texture) or without one (software decoding to memory).
 #pragma once
 
-#include "common.hpp"
+#include "dc/mfvideo/common.hpp"
 
 #include <mfapi.h>
 #include <mfidl.h>

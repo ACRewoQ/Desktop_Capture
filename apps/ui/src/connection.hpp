@@ -63,6 +63,7 @@ public:
     bool ready() const { return state_ == State::Ready; }
     QString statusText() const;
     QString address() const;
+    QString host() const { return options_.host; }
     QString serverName() const { return QString::fromStdString(welcome_.serverName); }
     const std::string& clientName() const { return clientName_; }
     quint16 meterPort() const;

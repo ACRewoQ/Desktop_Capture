@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -577,4 +578,36 @@ TEST_CASE("lanmedia: video output and input over real UDP sockets, with a keyfra
     CHECK(s.keyframeRequests >= 1);
     CHECK(s.haveReport); // reports reach the output's socket
     CHECK(in.stats().lostDatagrams == 0);
+}
+
+TEST_CASE("lanmedia: a video input knocks at the expected sender until the stream arrives", "[lanmedia][udp][video]") {
+    // Stands in for the sender's socket: counts the empty reports (stream id 0) that reach it.
+    UdpTransport::Options so;
+    so.bindAddress = "127.0.0.1";
+    UdpTransport sender(so);
+    std::atomic<int> hellos{0};
+    sender.start([&](std::span<const std::uint8_t> d, const UdpTransport::Endpoint&, double) {
+        if (const auto r = parseReport(d); r && r->streamId == 0) ++hellos;
+    });
+
+    VideoInput::Options io;
+    io.bindAddress = "127.0.0.1";
+    std::atomic<int> frames{0};
+    VideoInput in(io, [&](const VideoReceiver::Frame&) { ++frames; });
+    in.setExpectedSource(UdpTransport::Endpoint(asio::ip::make_address("127.0.0.1"), sender.localPort()));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (hellos < 2 && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(hellos >= 2); // repeated while nothing arrives
+
+    // The stream starts from that socket: the knocking stops.
+    VideoSender vs;
+    std::vector<std::uint8_t> au(3000, 7);
+    const UdpTransport::Endpoint to(asio::ip::make_address("127.0.0.1"), in.localPort());
+    vs.send(au, true, nowSeconds(), nowSeconds(), [&](std::span<const std::uint8_t> d) { sender.send(d, to); });
+    while (frames == 0 && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(frames == 1);
+    const int before = hellos;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    CHECK(hellos == before);
+    sender.stop();
 }

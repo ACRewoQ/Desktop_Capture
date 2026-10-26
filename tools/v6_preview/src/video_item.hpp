@@ -8,7 +8,7 @@
 // on the item still existing while the window tears down on two threads.
 #pragma once
 
-#include "d3d_video.hpp"
+#include "dc/mfvideo/d3d_video.hpp"
 #include "pipeline.hpp"
 #include "stats.hpp"
 

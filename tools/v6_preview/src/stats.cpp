@@ -1,6 +1,6 @@
 #include "stats.hpp"
 
-#include "common.hpp"
+#include "dc/mfvideo/common.hpp"
 
 #include <algorithm>
 #include <cstdio>

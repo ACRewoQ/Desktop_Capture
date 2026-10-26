@@ -71,6 +71,12 @@ public:
     std::uint16_t localPort() const { return transport_.localPort(); }
     VideoReceiver::Stats stats() const { return receiver_.stats(); }
 
+    // Where the stream is expected to come from (the sender's UDP port on the engine's host). Until
+    // the first packet arrives, an empty report goes there twice a second: a firewall that lets in only
+    // replies (Windows on a "public" network, no rule for the viewer) then lets the stream through.
+    // The sender ignores it (stream id 0). After that the regular reports keep the way open.
+    void setExpectedSource(const UdpTransport::Endpoint& sender);
+
 private:
     void pollLoop();
 
@@ -80,6 +86,9 @@ private:
     std::mutex mutex_; // the receiver is single-threaded: socket thread and poll thread take turns
     bool haveSource_ = false;
     UdpTransport::Endpoint source_;
+    bool haveExpected_ = false;
+    UdpTransport::Endpoint expected_;
+    double lastHello_ = -1e9;
     std::atomic<bool> running_{true};
     std::thread poll_;
 };

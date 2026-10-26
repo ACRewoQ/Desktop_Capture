@@ -2,18 +2,15 @@
 # Media Foundation H.264 decoding (DXVA or software) -> D3D11 -> Qt Quick, measured per stage.
 # See docs/verification/v6-preview-playback.md.
 
+# The codec and D3D11 parts live in libs/mfvideo (shared with dc-ui's preview).
 add_library(dc_v6core STATIC
-    src/common.cpp
-    src/d3d_video.cpp
-    src/guids.cpp
     src/lan_link.cpp
-    src/mf_codec.cpp
     src/pipeline.cpp
     src/stats.cpp
     src/test_pattern.cpp
 )
 target_include_directories(dc_v6core PUBLIC src)
-target_link_libraries(dc_v6core PUBLIC dc_asio dc::control dc::lanmedia mfplat mfuuid strmiids d3d11 dxgi winmm ole32 oleaut32 dbghelp)
+target_link_libraries(dc_v6core PUBLIC dc_asio dc::control dc::lanmedia dc::mfvideo winmm)
 dc_apply_options(dc_v6core)
 
 # PDBs in Release too, so the crash reporter can print function names and lines.

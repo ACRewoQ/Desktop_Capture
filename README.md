@@ -18,6 +18,7 @@
 | `libs/protocol` | 制御プロトコル：メッセージ、MessagePack コーデック、パラメーターツリー、スキーマ、ルーティング検証、メーターパケット |
 | `libs/control` | 制御プロトコルの TCP サーバー／クライアント（asio） |
 | `libs/shmaudio` | エンジン→キャプチャーの共有メモリ音声リング |
+| `libs/mfvideo` | Media Foundation の H.264 エンコード・デコードと、D3D11 でデコード結果を Qt の画面へ渡す部品（Windows のみ）。P1-V6 で測り、リモコンのプレビュー表示（dc-ui）で使う |
 | `libs/clocksync` | 別クロックのデバイス間で音声を渡すブリッジ（DLL によるドリフト推定、PI 制御、可変レート sinc リサンプラー）と、その検証用のトーン解析・シミュレーター（P1-V2） |
 | `tools/mock_server` | モックサーバー（プロトコルを話す偽エンジン） |
 | `tools/dc_cli` | テスト用クライアント（コマンドライン） |
