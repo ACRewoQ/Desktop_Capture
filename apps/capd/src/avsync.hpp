@@ -61,4 +61,22 @@ AvSyncStats computeStats(const std::vector<AvSyncPair>& pairs);
 
 AvSyncReport analyzeAvSync(const std::string& file, const AvSyncOptions& options = {});
 
+// Audio streams of a recording, one entry per stream (G3: separate tracks really hold different audio).
+// The file is cut into 1 s blocks of channel 0; a block counts as "tone" when the given frequency is at
+// most 20 dB below the block's level and the block is not silent, and as "silent" below -80 dBFS.
+struct AudioStreamLevels {
+    int index = 0;        // n-th audio stream (0 = first)
+    std::string title;    // stream title (the engine's track name)
+    double seconds = 0;   // decoded audio
+    double rmsDb = -200;  // whole stream
+    double toneDb = -200; // level of the tone frequency over the whole stream (sine amplitude, dBFS)
+    int blocks = 0, toneBlocks = 0, silentBlocks = 0;
+};
+
+// Level of a sine at hz in samples (Goertzel over the whole range), as dBFS of its amplitude.
+double toneLevelDb(const float* samples, std::size_t count, int sampleRate, double hz);
+double rmsDb(const float* samples, std::size_t count);
+
+std::vector<AudioStreamLevels> analyzeAudioStreams(const std::string& file, double toneHz, std::string* error);
+
 } // namespace dc::capd

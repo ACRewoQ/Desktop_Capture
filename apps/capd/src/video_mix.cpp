@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <set>
@@ -29,6 +30,18 @@ std::vector<MonitorInfo> listMonitors() { return enumerateMonitors(); }
 namespace {
 
 std::int64_t qpcToMs(std::int64_t qpc) { return qpc * 1000 / shm::qpcFrequency(); }
+
+// Test switch for the G3 disconnect checks (scripts/g3-integration.ps1): with DC_CAPD_TEST_DIR set, a file
+// named `name` in that folder is consumed and returns true once. A real GPU reset needs elevation (dxcap
+// -forcetdr), so the check goes through the same recovery path from here.
+bool takeTestTrigger(const char* name) {
+    static const char* dir = std::getenv("DC_CAPD_TEST_DIR");
+    if (!dir || !*dir) return false;
+    std::error_code ec;
+    const std::string d(dir);
+    const auto path = std::filesystem::path(std::u8string(d.begin(), d.end())) / name;
+    return std::filesystem::remove(path, ec);
+}
 
 bool isDeviceLoss(HRESULT hr) {
     return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_HUNG ||
@@ -496,6 +509,7 @@ void VideoMix::Shared::run() {
         if (now >= nextReport) {
             nextReport = now + freq / 4;
             reportSources();
+            if (devOk && takeTestTrigger("gpu_reset")) deviceLost("simulated by the test switch");
         }
 
         // sleep until the next tick of any running mix (at most 10 ms, so new settings apply quickly)
