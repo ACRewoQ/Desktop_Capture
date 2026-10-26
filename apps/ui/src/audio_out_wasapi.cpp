@@ -6,9 +6,11 @@
 
 #include <windows.h>
 #include <audioclient.h>
-#include <functiondiscoverykeys_devpkey.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
+// defines the PKEY_* constants in this translation unit
+#include <initguid.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <wrl/client.h>
 
 #include <algorithm>
