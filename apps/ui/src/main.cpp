@@ -4,14 +4,17 @@
 //
 //   dc-ui [--connect HOST[:PORT]] [--remote] [--fullscreen] [--backend default|d3d11|software]
 //         [--page KEY] [--screenshot FILE [--size WxH]] [--selftest] [--exercise MINUTES [--input ID|first] [--input-channel N] [--record]]
+//         [--monitor N] [--measure SECONDS]
 
 #include "connection.hpp"
 #include "exercise.hpp"
+#include "measure.hpp"
 #include "monitor_audio.hpp"
 #include "param_hub.hpp"
 #include "preview_stream.hpp"
 #include "preview_video.hpp"
 #include "recorder.hpp"
+#include "remote_check.hpp"
 #include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
@@ -89,6 +92,9 @@ int main(int argc, char** argv) {
         {"input", "With --exercise: input device of the first track (an id from /devices/input, or \"first\").", "id"},
         {"input-channel", "With --exercise: first channel of that device to use.", "n", "1"},
         {"record", "With --exercise: record from start to end through the record button's logic."},
+        {"g4", "G4 on the remote: --measure SECONDS plus mixer / scene / recording from here, seen by a second connection, "
+               "and a recording that survives this remote reconnecting. Changes the engine's state (and puts it back).", "seconds"},
+        {"measure", "G4 on the remote: preview delay, frame rate, memory and CPU for SECONDS, then exit.", "seconds"},
         {"page", "Page to show first (mixer, settings, ...).", "key"},
         {"screenshot", "Save the window as PNG FILE once connected and drawn, then exit.", "file"},
         {"size", "With --screenshot: window size.", "WxH", "1280x800"},
@@ -192,6 +198,28 @@ int main(int argc, char** argv) {
                       .arg(g_qmlWarnings));
             if (frames == 0 || g_qmlWarnings) ++failures;
             print(failures ? QStringLiteral("EXERCISE FAILED (%1)").arg(failures) : QStringLiteral("EXERCISE PASSED"));
+            connection.stop();
+            QGuiApplication::exit(failures ? 1 : 0);
+        });
+        return QGuiApplication::exec();
+    }
+    if (cli.isSet("g4")) {
+        QTimer::singleShot(0, [&] {
+            print(QStringLiteral("dc-ui G4 check against %1").arg(connection.address()));
+            int failures = dc::ui::runRemoteCheck(connection, recorder, opt, print);
+            failures += dc::ui::runMeasure(window, preview, &monitor, cli.value("g4").toDouble(), print);
+            print(failures ? QStringLiteral("G4 FAILED (%1)").arg(failures) : QStringLiteral("G4 PASSED"));
+            connection.stop();
+            QGuiApplication::exit(failures ? 1 : 0);
+        });
+        return QGuiApplication::exec();
+    }
+    if (cli.isSet("measure")) {
+        QTimer::singleShot(0, [&] {
+            const bool up = dc::ui::waitUntil([&] { return connection.ready(); }, 15000);
+            print(QStringLiteral("dc-ui measure against %1: %2").arg(connection.address(), up ? "connected" : connection.statusText()));
+            const int failures = up ? dc::ui::runMeasure(window, preview, &monitor, cli.value("measure").toDouble(), print) : 1;
+            print(failures ? QStringLiteral("MEASURE FAILED (%1)").arg(failures) : QStringLiteral("MEASURE PASSED"));
             connection.stop();
             QGuiApplication::exit(failures ? 1 : 0);
         });

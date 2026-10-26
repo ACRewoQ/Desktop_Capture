@@ -5,6 +5,7 @@
 #include "param_hub.hpp"
 #include "preview_stream.hpp"
 #include "recorder.hpp"
+#include "remote_check.hpp"
 #include "route_choices.hpp"
 #include "selftest.hpp"
 #include "strip_model.hpp"
@@ -98,6 +99,20 @@ private slots:
         QVERIFY2(failures == 0, qPrintable(log.join('\n')));
     }
 
+    void remoteCheckPasses() {
+        // G4 from a remote: edits, scene switch and a recording across a reconnect, seen by a second
+        // connection; everything put back.
+        Harness h;
+        const auto o = options(h.port());
+        ui::Connection c(o);
+        ui::Recorder recorder(c);
+        c.start();
+        QStringList log;
+        const int failures = ui::runRemoteCheck(c, recorder, o, [&](const QString& l) { log << l; });
+        QVERIFY2(failures == 0, qPrintable(log.join('\n')));
+        QVERIFY(log.size() >= 14);
+    }
+
     void previewSubscribesOnlyWhileWatched() {
         // mixd's side of protocol.md 10: records the subscription, number 7.
         std::mutex m;
@@ -160,6 +175,16 @@ private slots:
         QVERIFY(ui::waitUntil([&] { return preview.receiving(); }, 2000));
         QVERIFY2(preview.statusText().isEmpty(), qPrintable(preview.statusText()));
         QVERIFY(preview.infoText().contains(QStringLiteral("受信")));
+        // The engine's clock (same machine: offset about 0) gives the delay from capture to arrival.
+        QVERIFY(ui::waitUntil([&] { return preview.clockKnown(); }, 2000));
+        QVERIFY(std::abs(preview.toLocalTime(100.0) - 100.0) < 0.005);
+        for (int f = 0; f < 20; ++f) {
+            out.send(au, false, lan::nowSeconds());
+            ui::waitUntil([] { return false; }, 5);
+        }
+        QVERIFY(ui::waitUntil([&] { return preview.networkMs() >= 0; }, 2000));
+        QVERIFY2(preview.networkMs() < 50, qPrintable(QString::number(preview.networkMs())));
+        QVERIFY(preview.infoText().contains(QStringLiteral("届くまで")));
 
         // The viewer leaves: unsubscribed, and its sink is not called any more.
         preview.detach(sink);

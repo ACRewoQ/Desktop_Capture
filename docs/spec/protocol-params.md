@@ -260,6 +260,7 @@
 | メソッド | 引数 | 戻り値 | 実装フェーズ | 説明 |
 |---|---|---|---|---|
 | `/session/resync` | なし | nil | P0 | スナップショットを送り直す（rev の飛びを検出したとき） |
+| `/session/clock` | なし | int（マイクロ秒） | P4 | エンジンの PC の時計（QPC、LAN メディアの時刻と同じ）。リモコンがプレビューの遅延を測るのに使う |
 | `/mixer/track/add` | channels:int?, name:string?, position:int? | int（新しいトラック番号） | P0 | トラックを追加。番号は空いている最小の番号 |
 | `/mixer/track/remove` | track:int | nil | P0 | トラックを削除。番号は詰めない |
 | `/mixer/track/move` | track:int, position:int | nil | P0 | 並び順を変える |

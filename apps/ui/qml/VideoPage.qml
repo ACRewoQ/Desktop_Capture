@@ -6,6 +6,7 @@ import DcUi.Params
 // shows capd's preview stream.
 Item {
     id: page
+    objectName: "videoPage"
     // The canvas takes sideways drags, and so do sliders in the sheets.
     readonly property bool swipeable: view !== "scenes" && !layerSheet.shown && !sourceSheet.shown
     property string view: "scenes"

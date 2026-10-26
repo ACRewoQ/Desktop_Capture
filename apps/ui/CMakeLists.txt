@@ -30,6 +30,8 @@ add_library(dc_ui_core STATIC
     src/preview_stream.hpp
     src/recorder.cpp
     src/recorder.hpp
+    src/remote_check.cpp
+    src/remote_check.hpp
     src/route_choices.cpp
     src/route_choices.hpp
     src/selftest.cpp
@@ -48,7 +50,8 @@ if(WIN32)
 endif()
 dc_apply_options(dc_ui_core)
 
-qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp src/touch_check.cpp src/touch_check.hpp)
+qt_add_executable(dc-ui src/main.cpp src/preview_video.cpp src/preview_video.hpp src/touch_check.cpp src/touch_check.hpp
+                  src/measure.cpp src/measure.hpp)
 set_target_properties(dc-ui PROPERTIES AUTOMOC ON WIN32_EXECUTABLE TRUE)
 # QRhi (the preview) and QWindowSystemInterface (the self test's synthetic touch) live in the private
 # Gui module.
@@ -59,7 +62,7 @@ target_link_libraries(dc-ui PRIVATE Qt6::GuiPrivate)
 if(WIN32)
     # The preview's decoder (Media Foundation, as in P1/V6).
     target_sources(dc-ui PRIVATE src/preview_decoder.cpp src/preview_decoder.hpp)
-    target_link_libraries(dc-ui PRIVATE dc::mfvideo)
+    target_link_libraries(dc-ui PRIVATE dc::mfvideo psapi)
 endif()
 
 set(DC_UI_QML

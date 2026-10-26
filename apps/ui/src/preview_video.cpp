@@ -2,8 +2,13 @@
 
 #include "preview_stream.hpp"
 
+#include "dc/lanmedia/udp_transport.hpp"
+
 #include <QQuickWindow>
 #include <QTimer>
+
+#include <algorithm>
+#include <cmath>
 
 #ifdef _WIN32
 #include "preview_decoder.hpp"
@@ -42,9 +47,12 @@ public:
     ~PreviewNode() override { delete texture(); }
 
     const v6::SharedFrameRing* ring() const { return ring_.get(); }
-    void fetch(ID3D11DeviceContext* ctx) {
+    // The id of the frame copied now, 0 if there was no new one.
+    std::uint64_t fetch(ID3D11DeviceContext* ctx) {
         std::uint64_t id = 0;
-        if (reader_.fetch(ctx, local_, &id)) haveFrame_ = true;
+        if (!reader_.fetch(ctx, local_, &id)) return 0;
+        haveFrame_ = true;
+        return id;
     }
     bool haveFrame() const { return haveFrame_; }
 
@@ -133,9 +141,11 @@ void PreviewVideo::start() {
         decoder_ = std::make_shared<PreviewDecoder>(
             adapter, [this] { QMetaObject::invokeMethod(this, &QQuickItem::update, Qt::QueuedConnection); });
     }
-    sink_ = stream_->attach([this](const PreviewStream::Frame& f) {
+    PreviewStream* stream = stream_;
+    sink_ = stream_->attach([this, stream](const PreviewStream::Frame& f) {
+        const double captured = stream->toLocalTime(f.captureTime);
         std::lock_guard lock(decoderMutex_);
-        if (decoder_) decoder_->push(f.data, f.keyframe, f.number);
+        if (decoder_) decoder_->push(f.data, f.keyframe, f.number, captured);
     });
     setError({});
     poll_->start();
@@ -155,6 +165,14 @@ void PreviewVideo::stop() {
     old.reset();  // joins the decode thread
     update();     // drops the node
 #endif
+    {
+        std::lock_guard lock(latencyMutex_);
+        latencyWindow_.clear();
+    }
+    if (latencyMs_ >= 0) {
+        latencyMs_ = latencyP95Ms_ = -1;
+        emit latencyChanged();
+    }
     const bool changed = showing_ || !frameSize_.isEmpty() || !decoderName_.isEmpty();
     showing_ = false;
     frameSize_ = {};
@@ -182,7 +200,30 @@ void PreviewVideo::poll() {
         decoderName_ = name;
         emit stateChanged();
     }
+    std::vector<double> w;
+    {
+        std::lock_guard lock(latencyMutex_);
+        w = latencyWindow_;
+    }
+    double med = -1, p95 = -1;
+    if (!w.empty()) {
+        std::sort(w.begin(), w.end());
+        med = w[w.size() / 2];
+        p95 = w[std::min(w.size() - 1, w.size() * 95 / 100)];
+    }
+    if (med != latencyMs_ || p95 != latencyP95Ms_) {
+        latencyMs_ = med;
+        latencyP95Ms_ = p95;
+        emit latencyChanged();
+    }
 #endif
+}
+
+std::vector<double> PreviewVideo::takeLatencySamples() {
+    std::lock_guard lock(latencyMutex_);
+    std::vector<double> all;
+    all.swap(latencyAll_);
+    return all;
 }
 
 QSGNode* PreviewVideo::updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) {
@@ -235,7 +276,20 @@ QSGNode* PreviewVideo::updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) 
             return nullptr;
         }
     }
-    node->fetch(ctx);
+    if (const std::uint64_t id = node->fetch(ctx)) {
+        double captured = std::nan("");
+        {
+            std::lock_guard lock(decoderMutex_);
+            if (decoder_) captured = decoder_->captureTimeOf(id);
+        }
+        if (std::isfinite(captured)) {
+            const double ms = (lan::nowSeconds() - captured) * 1000.0;
+            std::lock_guard lock(latencyMutex_);
+            if (latencyWindow_.size() >= 90) latencyWindow_.erase(latencyWindow_.begin());
+            latencyWindow_.push_back(ms);
+            if (latencyAll_.size() < 100000) latencyAll_.push_back(ms);
+        }
+    }
 
     // Letterbox into the item.
     const qreal sw = ring->width(), sh = ring->height();

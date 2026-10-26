@@ -50,6 +50,7 @@ Item {
                 color: Theme.text
                 font.pixelSize: 13
                 text: previewStream.infoText + (video.decoderName.indexOf("[D3D11") >= 0 ? "・GPU デコード" : video.decoderName ? "・CPU デコード" : "")
+                      + (video.latencyMs >= 0 ? "・表示まで " + Math.round(video.latencyMs) + " ms" : "")
             }
         }
 
