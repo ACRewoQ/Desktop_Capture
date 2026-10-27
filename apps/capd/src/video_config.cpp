@@ -119,6 +119,23 @@ VideoConfig videoConfigFromTree(const proto::ParamTree& tree) {
     return cfg;
 }
 
+MixConfig nextSceneView(const MixConfig& mix) {
+    MixConfig v = mix;
+    v.id = kNextViewKey + mix.id;
+    v.programScene = mix.previewScene;
+    v.transition = "cut";
+    v.transitionMs = 0;
+    return v;
+}
+
+bool mixForKey(const VideoConfig& cfg, int key, MixConfig& out) {
+    const bool next = key > kNextViewKey;
+    auto it = cfg.mixes.find(next ? key - kNextViewKey : key);
+    if (it == cfg.mixes.end()) return false;
+    out = next ? nextSceneView(it->second) : it->second;
+    return true;
+}
+
 LayerGeometry layoutLayer(const LayerConfig& l, int srcW, int srcH, int canvasW, int canvasH) {
     LayerGeometry g;
     const double bx = l.x * canvasW, by = l.y * canvasH, bw = l.width * canvasW, bh = l.height * canvasH;

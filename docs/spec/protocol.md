@@ -579,6 +579,7 @@ LAN の音声・映像は、受け取る側が送る側のエンジンに制御�
 |---|---|---|
 | `audio/<n>` | 出力先 `lan/<n>` に出された音声（`/lan/stream/<n>` の設定） | mixd（UDP 47810） |
 | `video/preview` | リモコンのプレビュー（`/video/preview/*`） | capd（UDP 47811） |
+| `video/next` | `/video/preview/mix` の「次」のシーン（`preview_scene`）だけを本番に出したときの映像。設定は `/video/preview/*` と同じ。UI のシーン画面が編集中のシーンを映すのに使う | capd（UDP 47813） |
 | `video/lan` | 映像ミックスの出力先「LAN 送信」（`/video/lan/*`） | capd（UDP 47812） |
 
 - `/lan/subscribe` `stream`, `port` で申し込みます。送り先は「制御の接続元の IP アドレス」の `port`（受け取る側の UDP ポート）です。戻り値の購読番号は `/lan/sub/<番号>` に対応し、`/lan/unsubscribe` `id` でやめます。購読は**その制御接続が切れると自動で消えます**。同じ接続から同じストリーム・同じポートへの申し込みは、前の番号を返します。32 件を超えると `limit_reached` です。

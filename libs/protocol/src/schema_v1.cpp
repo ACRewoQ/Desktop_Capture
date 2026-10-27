@@ -289,7 +289,7 @@ Schema buildV1() {
              "今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない）", RO));
     sc.add(i("/lan/stream/#/subscribers", 0, kMaxLanSubscriptions, 0, "受信している相手の数", RO));
     sc.add(b("/lan/stream/#/active", false, "何かが出力していて、受信者がいて送信中", RO));
-    sc.add(s("/lan/sub/#/stream", "", "購読しているストリーム（audio/<n> / video/preview / video/lan）", RO));
+    sc.add(s("/lan/sub/#/stream", "", "購読しているストリーム（audio/<n> / video/preview / video/next / video/lan）", RO));
     sc.add(s("/lan/sub/#/address", "", "送り先の UDP アドレス（ip:port）", RO));
     sc.add(s("/lan/sub/#/client", "", "購読した接続の名前", RO));
     sc.add(s("/lan/peers/#/id", "", "LAN 内の別の PC のエンジンの id", RO));

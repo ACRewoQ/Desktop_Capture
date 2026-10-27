@@ -139,7 +139,7 @@ Windows ファイアウォールが受信側の UDP 47810 を止める場合は�
 
 ## 6. エンジンへの組み込み（P3）
 
-- **購読**：制御プロトコルの 10 章（`/lan/subscribe`、`/lan/sub/#`）。送信ストリームの設定は `/lan/stream/#`、受信バッファ目標は `/track/#/input/lan_buffer_ms`。映像は capd が `/lan/sub/#` に並ぶ購読者へ送る（`video/preview` は UDP 47811 から、`video/lan` は UDP 47812 から。`proto::lanSubscriptions`、`docs/capd.md`「プレビューと LAN 映像の送出」）。
+- **購読**：制御プロトコルの 10 章（`/lan/subscribe`、`/lan/sub/#`）。送信ストリームの設定は `/lan/stream/#`、受信バッファ目標は `/track/#/input/lan_buffer_ms`。映像は capd が `/lan/sub/#` に並ぶ購読者へ送る（`video/preview` は UDP 47811 から、`video/next` は UDP 47813 から、`video/lan` は UDP 47812 から。`proto::lanSubscriptions`、`docs/capd.md`「プレビューと LAN 映像の送出」）。
 - **mDNS での検出とペアリング**：制御プロトコルの 8 章。mixd の `discovery`（Windows の DnsServiceRegister / Browse / Resolve）、`lan_store`（`%APPDATA%\DesktopCapture\mixd-lan.txt`）。
 - **リモコンのモニター音声**（P4）：リモコンの dc-ui は `lan::AudioInput`（自分のソケット・`AudioReceiver`・受信レポート・映像と同じノック先 UDP 47810）で `audio/<n>` を購読し、端末の既定の出力で鳴らす。
 - **DSCP（QoS）マーキング**：Windows では qWAVE API が要るので、必要になったら追加する。
@@ -194,4 +194,4 @@ dc-v6-preview --engine 192.168.1.10 --pair 123456
 dc-v6-preview --engine 192.168.1.10
 ```
 
-見る側は空いている UDP ポートで受け、`/lan/subscribe` でエンジンに知らせます。映像の最初のパケットが届くまでは、見る側はエンジンのホストの UDP 47811（capd の送り元）へ中身のない受信レポート（stream_id 0、送る側は無視）を 0.5 秒ごとに送ります。返信だけを通すファイアウォール（「パブリック」ネットワークで見る側のアプリに許可がない Windows）でも映像が届くようにするためで、届いたあとは通常の受信レポートが同じ役目をします。Windows ファイアウォールの確認が出たら「プライベート ネットワーク」を許可してください（mixd の TCP 47800・UDP 47810、送る側の UDP 47811・47812、見る側）。
+見る側は空いている UDP ポートで受け、`/lan/subscribe` でエンジンに知らせます。映像の最初のパケットが届くまでは、見る側はエンジンのホストの UDP 47811（capd の送り元。`video/next` は 47813）へ中身のない受信レポート（stream_id 0、送る側は無視）を 0.5 秒ごとに送ります。返信だけを通すファイアウォール（「パブリック」ネットワークで見る側のアプリに許可がない Windows）でも映像が届くようにするためで、届いたあとは通常の受信レポートが同じ役目をします。Windows ファイアウォールの確認が出たら「プライベート ネットワーク」を許可してください（mixd の TCP 47800・UDP 47810、送る側の UDP 47811・47812・47813、見る側）。

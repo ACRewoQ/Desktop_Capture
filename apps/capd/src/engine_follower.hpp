@@ -92,7 +92,7 @@ private:
     OutputHost<FullscreenOutput> monitor_;
     // a LAN video stream: its socket (kept while capd runs), and while somebody watches, a lease and the output
     struct LanHost {
-        const char* output = "";  // "preview" | "lan"
+        const char* output = "";  // "preview" | "next" | "lan"
         std::uint16_t port = 0;   // UDP port of its socket
         std::unique_ptr<lan::VideoOutput> socket;
         LanStreamConfig config;
@@ -103,7 +103,7 @@ private:
         std::int64_t retryMs = 0;  // after a failure, the next attempt
         std::int64_t nextLogMs = 0;
     };
-    LanHost preview_, lanOut_;
+    LanHost preview_, next_, lanOut_;
     void followLan(LanHost& h, const proto::ParamTree& tree);
     void dropLan(LanHost& h);
     const void* recordDevice_ = nullptr;  // the device the running recording encodes on

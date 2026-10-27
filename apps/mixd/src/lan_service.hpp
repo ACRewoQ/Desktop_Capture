@@ -72,7 +72,7 @@ public:
 private:
     struct Subscription {
         int id = 0;
-        std::string stream; // audio/<n> | video/preview | video/lan
+        std::string stream; // audio/<n> | video/preview | video/next | video/lan
         lan::UdpTransport::Endpoint endpoint;
         std::uint64_t connection = 0;
         std::string client;

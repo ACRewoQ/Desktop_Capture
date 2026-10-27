@@ -1,5 +1,5 @@
 // The video streams capd sends over the LAN (docs/spec/protocol.md 10, lan-media.md 7): the remote preview
-// (/video/preview/*, stream "video/preview") and the "LAN送信" output of a video mix (/video/lan/*, stream
+// (/video/preview/*, stream "video/preview"; the scene page's "video/next" with the same settings) and the "LAN送信" output of a video mix (/video/lan/*, stream
 // "video/lan"). The parts that need no GPU: the stream settings from the engine's tree, where the frames go (the
 // subscribers the engine lists under /lan/sub/#) and making every keyframe decodable on its own.
 // Portable: no Windows types, tested on Linux.
@@ -18,15 +18,16 @@
 namespace dc::capd {
 
 struct LanStreamConfig {
-    std::string stream;  // "video/preview" | "video/lan"
+    std::string stream;  // "video/preview" | "video/next" | "video/lan"
     int mix = 0;         // 0 = none
+    bool next = false;   // video/next: the mix's preview scene alone (VideoEngine::acquire(mix, true))
     int width = 960, height = 540, fps = 30;
     int bitrateKbps = 3000;
     bool operator==(const LanStreamConfig&) const = default;
 };
 
-// output: "preview" or "lan" (/video/<output>/*). Missing values keep the schema's defaults; the size is rounded
-// down to even numbers (NV12).
+// output: "preview", "next" or "lan" (/video/<output>/*; "next" uses the preview's settings). Missing values keep
+// the schema's defaults; the size is rounded down to even numbers (NV12).
 LanStreamConfig lanStreamConfig(const proto::ParamTree& tree, const std::string& output);
 
 // What the stream's encoder is opened with: H.264 (the only codec of the LAN video packets), CBR, the encoders'

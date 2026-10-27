@@ -189,6 +189,39 @@ TEST_CASE("a mix keeps the sources of its program, preview and outgoing scenes o
     CHECK(need == std::set<int>{1, 2, 3, 4});
 }
 
+TEST_CASE("the next view of a mix shows its preview scene at once", "[capd][video]") {
+    VideoConfig cfg;
+    MixConfig m;
+    m.id = 2;
+    m.width = 1280;
+    m.height = 720;
+    m.programScene = 1;
+    m.previewScene = 3;
+    m.transition = "fade";
+    m.transitionMs = 500;
+    cfg.mixes[2] = m;
+
+    MixConfig out;
+    REQUIRE(mixForKey(cfg, 2, out));
+    CHECK(out == m);
+    REQUIRE(mixForKey(cfg, kNextViewKey + 2, out));
+    CHECK(out.id == kNextViewKey + 2);
+    CHECK(out.programScene == 3);
+    CHECK(out.width == 1280);
+    CHECK(out.height == 720);
+    CHECK_FALSE(mixForKey(cfg, 1, out));
+    CHECK_FALSE(mixForKey(cfg, kNextViewKey + 1, out));
+
+    // a new next scene replaces the picture without a transition
+    TransitionTracker t;
+    auto s = t.update(nextSceneView(m), 0);
+    CHECK(s.to == 3);
+    m.previewScene = 1;
+    s = t.update(nextSceneView(m), 100);
+    CHECK_FALSE(s.active());
+    CHECK(s.to == 1);
+}
+
 TEST_CASE("colours are split into components", "[capd][video]") {
     const auto c = argbToRgba(0x80FF0000);
     CHECK(c.a == Approx(128.0 / 255));

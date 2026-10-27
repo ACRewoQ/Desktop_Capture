@@ -65,6 +65,16 @@ TEST_CASE("the LAN video streams' settings are read from the tree", "[capd][lan]
     CHECK(p.height == 360);
     CHECK(p.fps == 60);
     CHECK(lanStreamConfig(s.tree(), "lan").mix == 2);
+    // the scene page's stream: the preview's settings, the mix's next scene
+    const auto n = lanStreamConfig(s.tree(), "next");
+    CHECK(n.stream == "video/next");
+    CHECK(n.next);
+    CHECK_FALSE(p.next);
+    CHECK(n.mix == p.mix);
+    CHECK(n.width == 640);
+    CHECK(n.height == 360);
+    CHECK(n.fps == 60);
+    CHECK(n.bitrateKbps == p.bitrateKbps);
 
     const auto v = lanVideoSettings(p);
     CHECK(v.codec == "h264");

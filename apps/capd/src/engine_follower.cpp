@@ -65,6 +65,8 @@ EngineFollower::EngineFollower(Options options) : options_(std::move(options)) {
 #ifdef _WIN32
     preview_.output = "preview";
     preview_.port = lan::kDefaultVideoPort;
+    next_.output = "next";
+    next_.port = lan::kDefaultNextVideoPort;
     lanOut_.output = "lan";
     lanOut_.port = static_cast<std::uint16_t>(lan::kDefaultVideoPort + 1);
 #endif
@@ -203,6 +205,7 @@ void EngineFollower::followLanStreams() {
 #ifdef _WIN32
     const auto tree = client_->tree();
     followLan(preview_, tree);
+    followLan(next_, tree);
     followLan(lanOut_, tree);
 #endif
 }
@@ -210,6 +213,7 @@ void EngineFollower::followLanStreams() {
 void EngineFollower::dropLanStreams() {
 #ifdef _WIN32
     dropLan(preview_);
+    dropLan(next_);
     dropLan(lanOut_);
 #endif
 }
@@ -275,7 +279,7 @@ void EngineFollower::followLan(LanHost& h, const proto::ParamTree& tree) {
         }
         return;
     }
-    h.lease = video_->acquire(config.mix);  // null while the mix does not exist: tried again on the next pass
+    h.lease = video_->acquire(config.mix, config.next);  // null while the mix does not exist: tried again next pass
     if (!h.lease) return;
     try {
         h.out = std::make_unique<LanVideoOutput>(*h.socket, config, h.lease->device());
@@ -286,7 +290,7 @@ void EngineFollower::followLan(LanHost& h, const proto::ParamTree& tree) {
         return;
     }
     for (const auto& line : h.out->log()) std::cout << "  " << line << "\n";
-    std::cout << h.output << ": mix " << config.mix << " as " << h.out->description() << " from UDP "
+    std::cout << h.output << ": mix " << config.mix << (config.next ? " (next scene)" : "") << " as " << h.out->description() << " from UDP "
               << h.socket->localPort() << "\n"
               << std::flush;
     h.nextLogMs = nowMs() + 30000;

@@ -228,7 +228,7 @@
 | `/lan/stream/#/stream_id` | int | ro |  | 0 〜 4294967295 | `0` | 今のストリーム ID（パケットの stream_id。送信を開き直すと変わる。0 = 送っていない） |
 | `/lan/stream/#/subscribers` | int | ro |  | 0 〜 32 | `0` | 受信している相手の数 |
 | `/lan/stream/#/active` | bool | ro |  |  | `false` | 何かが出力していて、受信者がいて送信中 |
-| `/lan/sub/#/stream` | string | ro |  |  | `""` | 購読しているストリーム（audio/<n> / video/preview / video/lan） |
+| `/lan/sub/#/stream` | string | ro |  |  | `""` | 購読しているストリーム（audio/<n> / video/preview / video/next / video/lan） |
 | `/lan/sub/#/address` | string | ro |  |  | `""` | 送り先の UDP アドレス（ip:port） |
 | `/lan/sub/#/client` | string | ro |  |  | `""` | 購読した接続の名前 |
 | `/lan/peers/#/id` | string | ro |  |  | `""` | LAN 内の別の PC のエンジンの id |

@@ -282,8 +282,8 @@ Result LanService::subscribe(CallContext& ctx) {
     const auto stream = strArg(ctx.call.args, "stream");
     const auto port = intArg(ctx.call.args, "port");
     if (!stream || !port) return error(ErrorCode::BadRequest, "stream and port are required");
-    if (audioStreamOf(*stream) == 0 && *stream != "video/preview" && *stream != "video/lan")
-        return error(ErrorCode::OutOfRange, "stream must be audio/1..8, video/preview or video/lan");
+    if (audioStreamOf(*stream) == 0 && *stream != "video/preview" && *stream != "video/next" && *stream != "video/lan")
+        return error(ErrorCode::OutOfRange, "stream must be audio/1..8, video/preview, video/next or video/lan");
     if (*port < 1 || *port > 65535) return error(ErrorCode::OutOfRange, "port out of range");
     asio::error_code ec;
     auto addr = asio::ip::make_address(ctx.client.address, ec);

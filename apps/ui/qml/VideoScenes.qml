@@ -4,6 +4,9 @@ import DcUi.Params
 // Scenes of one mix: the scene list (tap = next scene, i.e. preview), TAKE with the transition,
 // the canvas of the scene being edited and its layers. Wide screens show the three side by side;
 // narrow ones (remote held upright) stack them in one scrolling column.
+// The canvas shows the edited scene's live picture under the layer boxes when the mix is the one capd
+// sends to the remote preview (/video/preview/mix): the on-air scene from video/preview, the next one
+// from video/next (that scene alone). "映像" turns it off (nothing is received then).
 Item {
     id: root
     property int mix: 0
@@ -11,6 +14,16 @@ Item {
     property int selectedLayer: 0
     readonly property string mixBase: mix > 0 ? "/video/mix/" + mix : ""
     readonly property bool wide: width >= 900
+    property bool videoOn: true
+    // previewStream / nextStream for the edited scene, or null.
+    readonly property var sceneStream: {
+        if (!videoOn || mix <= 0 || editScene <= 0 || previewMix.value !== mix) return null
+        if (program.value === editScene) return previewStream
+        if (preview.value === editScene) return nextStream
+        return null
+    }
+    readonly property string videoNote: videoOn && mix > 0 && editScene > 0 && previewMix.exists && previewMix.value !== mix
+                                        ? "映像なし：このミックスはプレビューに出していません（出力先のタブで選べます）" : ""
     readonly property int editScene: {
         if (preview.value > 0 && scenes.rowOf(preview.value) >= 0) return preview.value
         if (selected > 0 && scenes.rowOf(selected) >= 0) return selected
@@ -26,6 +39,7 @@ Item {
     Param { id: preview; path: root.mixBase ? root.mixBase + "/preview_scene" : "" }
     Param { id: transition; path: root.mixBase ? root.mixBase + "/transition/type" : "" }
     Param { id: duration; path: root.mixBase ? root.mixBase + "/transition/duration_ms" : "" }
+    Param { id: previewMix; path: "/video/preview/mix" }
     ParamList { id: scenes; prefix: "/video/scene"; orderBy: "position" }
     ParamList { id: layers; prefix: root.editScene > 0 ? "/video/scene/" + root.editScene + "/layer" : ""; orderBy: "position" }
 
@@ -190,24 +204,43 @@ Item {
             x: root.wide ? scenePane.x + scenePane.width + 12 : 12
             y: 0
             width: root.wide ? flick.width - x - layerPane.width - 24 : flick.width - 24
-            height: root.wide ? flick.height : Math.min(width * 9 / 16, 420) + 30
-            Text {
-                id: canvasTitle
+            height: root.wide ? flick.height : Math.min(width * 9 / 16, 420) + Theme.touch + 6
+            Item {
+                id: canvasHead
                 width: parent.width
-                elide: Text.ElideRight
-                color: Theme.subText
-                font.pixelSize: 13
-                text: root.editScene > 0 ? (scenes.count, "編集中: " + Video.sceneName(root.editScene)
-                                            + (program.value === root.editScene ? "（本番に出ています）" : ""))
-                                         : "シーンがありません"
+                height: Theme.touch
+                Text {
+                    id: canvasTitle
+                    anchors { left: parent.left; right: videoToggle.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    elide: Text.ElideRight
+                    color: Theme.subText
+                    font.pixelSize: 13
+                    text: root.editScene > 0 ? (scenes.count, "編集中: " + Video.sceneName(root.editScene)
+                                                + (program.value === root.editScene ? "（本番に出ています）"
+                                                   : preview.value === root.editScene ? "（次）" : ""))
+                                             : "シーンがありません"
+                }
+                ToggleButton {
+                    id: videoToggle
+                    objectName: "sceneVideoToggle"
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    width: 88
+                    fontSize: 14
+                    label: root.videoOn ? "映像 ON" : "映像 OFF"
+                    on: root.videoOn
+                    onColor: Theme.accentDim
+                    onTapped: root.videoOn = !root.videoOn
+                }
             }
             LayerCanvas {
                 id: canvas
                 objectName: "layerCanvas"
-                anchors { top: canvasTitle.bottom; topMargin: 6; left: parent.left; right: parent.right; bottom: parent.bottom }
+                anchors { top: canvasHead.bottom; topMargin: 6; left: parent.left; right: parent.right; bottom: parent.bottom }
                 scene: root.editScene
                 mix: root.mix
                 model: layers
+                stream: root.sceneStream
+                note: root.videoNote
                 selected: root.selectedLayer
                 onSelect: (layer) => root.selectedLayer = layer
                 onOpen: (layer) => root.layerRequested(root.editScene, layer)

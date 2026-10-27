@@ -39,7 +39,8 @@ std::vector<Nal> nalUnits(std::span<const std::uint8_t> au) {
 
 LanStreamConfig lanStreamConfig(const proto::ParamTree& tree, const std::string& output) {
     LanStreamConfig c;
-    const bool preview = output == "preview";
+    c.next = output == "next";
+    const bool preview = output == "preview" || c.next;
     c.stream = "video/" + output;
     if (!preview) {  // the schema's defaults for /video/lan
         c.width = 1920;
@@ -48,7 +49,7 @@ LanStreamConfig lanStreamConfig(const proto::ParamTree& tree, const std::string&
     } else {
         c.mix = 1;
     }
-    const std::string base = "/video/" + output + "/";
+    const std::string base = preview ? "/video/preview/" : "/video/" + output + "/";
     auto get = [&](const char* key, int fallback) {
         return static_cast<int>(tree.getAs<std::int64_t>(base + key).value_or(fallback));
     };
