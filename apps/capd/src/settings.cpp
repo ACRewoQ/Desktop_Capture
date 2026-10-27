@@ -132,7 +132,11 @@ std::string recordingPath(const RecordSettings& s, std::time_t when) {
             c = '_';
     }
     std::string dir = s.directory.empty() ? defaultVideoDirectory() : s.directory;
-    if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
+#ifdef _WIN32
+    if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '\\';  // D:\Videos\name.mkv, one separator
+#else
+    if (!dir.empty() && dir.back() != '/') dir += '/';
+#endif
     return dir + file + "." + (s.container == "mp4" ? "mp4" : "mkv");
 }
 
