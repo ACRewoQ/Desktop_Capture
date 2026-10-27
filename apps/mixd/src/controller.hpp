@@ -98,6 +98,7 @@ private:
     void publishPlaying();
     proto::Result samplerCommand(control::CallContext& ctx, Sampler::Command::Type type);
     proto::Result libraryList(control::CallContext& ctx) const;
+    proto::Result folderCheck(control::CallContext& ctx) const;
 
     asio::io_context& io_;
     control::ControlServer& server_;

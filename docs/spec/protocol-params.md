@@ -97,7 +97,7 @@
 | `/capture/error` | string | ro |  |  | `""` | 直前のエラー内容 |
 | `/capture/mix` | int | rw | P | 0 〜 4 | `1` | 録画する映像ミックス（0 = なし） |
 | `/capture/container` | string | rw | P | mkv / mp4 | `"mkv"` | コンテナ |
-| `/capture/directory` | string | rw | P |  | `""` | 保存先フォルダー（"" = ビデオフォルダー） |
+| `/capture/directory` | string | local | P |  | `""` | 保存先フォルダー（エンジンの PC の絶対パス。別ドライブも可。"" = ビデオフォルダー）。リモコンからは変えられない |
 | `/capture/filename` | string | rw | P |  | `"%Y-%m-%d_%H-%M-%S"` | ファイル名パターン（strftime 形式） |
 | `/capture/video/encoder` | string | rw | P | auto / nvenc / amf / qsv / x264 | `"auto"` | エンコーダー |
 | `/capture/video/codec` | string | rw | P | h264 / hevc / av1 | `"h264"` | コーデック |
@@ -116,7 +116,7 @@
 | `/recorder/error` | string | ro |  |  | `""` | 直前のエラー内容 |
 | `/recorder/dropped_frames` | int | ro |  | 0 〜 9.22337e+18 | `0` | 書き込みが間に合わず無音で埋めたフレーム数（テイクごと） |
 | `/recorder/format` | string | rw | P | wav / flac | `"wav"` | 形式（48kHz / 24bit。WAV は 4GB を超えると RF64） |
-| `/recorder/directory` | string | rw | P |  | `""` | 保存先フォルダー（"" = ミュージック\Desktop Capture） |
+| `/recorder/directory` | string | local | P |  | `""` | 保存先フォルダー（エンジンの PC の絶対パス。別ドライブも可。"" = ミュージック\Desktop Capture）。リモコンからは変えられない |
 | `/recorder/folder_name` | string | rw | P |  | `"%Y-%m-%d_%H-%M-%S"` | テイクのフォルダー名パターン（strftime 形式） |
 | `/recorder/with_capture` | bool | rw | P |  | `true` | 録画（/capture）の開始・停止に合わせて録音も開始・停止する |
 | `/sampler/active_bank` | int | rw | P | 1 〜 8 | `1` | 表示・ホットキー・MIDI の対象バンク |
@@ -296,6 +296,7 @@
 | `/capture/report` | state:string, file:string?, error:string?, duration_ms:int?, reason:string? | nil | P2 | capd が録画の状態をエンジンに知らせる（role = サービスの接続だけ。reason は録画中のファイル切り替え） |
 | `/recorder/start` | なし | string（テイクのフォルダー） | P3 | トラック別録音を開始。録音対象がなければ conflict |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音を停止 |
+| `/system/folder/check` | for:string, path:string? | string（JSON） | P5 | 録画（for = capture）・録音（for = recorder）の保存先を調べる（path なし = 今の設定）。実際のパス・あるか・書けるか・空き容量 |
 | `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
 | `/sampler/release` | pad:int, bank:int? | nil | P3 | パッドを離す（hold のパッドが止まる） |
 | `/sampler/library/list` | dir:string?, offset:int?, count:int? | string（JSON） | P5 | ライブラリのフォルダー 1 段分（dir はライブラリからの相対パス、/ 区切り）。サブフォルダーと読める音声ファイル |

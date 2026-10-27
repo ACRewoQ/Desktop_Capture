@@ -1,6 +1,7 @@
 #include "controller.hpp"
 #include "lan_service.hpp"
 #include "sample_library.hpp"
+#include "save_folder.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/control/video_methods.hpp"
@@ -179,6 +180,7 @@ void Controller::registerMethods() {
         return Result{};
     });
     server_.registerMethod("/sampler/library/list", [this](CallContext& ctx) { return libraryList(ctx); });
+    server_.registerMethod("/system/folder/check", [this](CallContext& ctx) { return folderCheck(ctx); });
     server_.registerMethod("/devices/refresh", [this](CallContext&) {
         devices_.refresh();
         if (options_.onDevicesRefresh) options_.onDevicesRefresh();
@@ -651,8 +653,19 @@ Result Controller::startTake(bool fromCapture, std::string* folderOut) {
     if (specs.empty()) return error(ErrorCode::Conflict, "no track armed for recording");
 
     // <directory>/<folder_name>, made unique with _2, _3, ...
-    std::string dir = str("/recorder/directory");
-    if (dir.empty()) dir = defaultRecorderDirectory();
+    const auto where = checkSaveFolder(str("/recorder/directory"), defaultRecorderDirectory());
+    std::string err;
+    if (where.problem == "not_absolute") err = "the recording folder must be an absolute path: " + where.path;
+    else if (where.problem == "no_drive") err = "the drive of the recording folder is not there: " + where.path;
+    else if (where.freeBytes && *where.freeBytes < kRecorderMinFreeBytes)
+        err = "not enough free disk space for recording (" + std::to_string(*where.freeBytes >> 20) + " MB free, " +
+              std::to_string(kRecorderMinFreeBytes >> 20) + " MB needed)";
+    if (!err.empty()) {
+        server_.publishNow({{"/recorder/state", std::string("error")}, {"/recorder/error", err}});
+        if (options_.verbose) std::cout << clockStamp() << "recorder: " << err << std::endl;
+        return error(where.problem == "not_absolute" ? ErrorCode::BadRequest : ErrorCode::Internal, err);
+    }
+    const std::string& dir = where.path;
     char name[256] = {};
     const std::time_t now = std::time(nullptr);
     std::tm tm{};
@@ -671,7 +684,6 @@ Result Controller::startTake(bool fromCapture, std::string* folderOut) {
         folder += "_" + std::to_string(i);
     }
     std::filesystem::create_directories(folder, ec);
-    std::string err;
     if (ec) err = "cannot create folder " + pathToUtf8(folder) + ": " + ec.message();
     std::shared_ptr<RecorderTake> take;
     if (err.empty()) {
@@ -850,6 +862,19 @@ Result Controller::libraryList(CallContext& ctx) const {
     if (l.code != ErrorCode::Ok) return error(l.code, l.message);
     Result r;
     r.value = libraryListingJson(l);
+    return r;
+}
+
+// What a save folder (/capture/directory, /recorder/directory) would do, without changing anything.
+Result Controller::folderCheck(CallContext& ctx) const {
+    const auto& args = ctx.call.args;
+    const auto which = strArg(args, "for").value_or("");
+    if (which != "capture" && which != "recorder") return error(ErrorCode::BadRequest, "for must be capture or recorder");
+    const auto setting = strArg(args, "path").value_or(
+        server_.store().tree().getAs<std::string>("/" + which + "/directory").value_or(""));
+    Result r;
+    r.value = folderCheckJson(
+        checkSaveFolder(setting, which == "capture" ? defaultVideoDirectory() : defaultRecorderDirectory()));
     return r;
 }
 

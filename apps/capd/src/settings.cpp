@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -47,6 +48,11 @@ std::optional<RecordSettings> settingsFromTree(const proto::ParamTree& tree, std
     read(tree, "/capture/container", s.container);
     read(tree, "/capture/directory", s.directory);
     read(tree, "/capture/filename", s.filenamePattern);
+    if (!s.directory.empty() &&
+        !std::filesystem::path(std::u8string(s.directory.begin(), s.directory.end())).is_absolute()) {
+        if (error) *error = "the recording folder must be an absolute path: " + s.directory;
+        return std::nullopt;
+    }
 
     VideoSettings& v = s.video;
     read(tree, "/capture/video/encoder", v.encoder);

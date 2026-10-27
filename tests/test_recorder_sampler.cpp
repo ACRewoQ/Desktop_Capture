@@ -1,5 +1,6 @@
 // Lane A3: per-track recording (WAV / FLAC files, the take in the mixer) and the sampler (pad
-// playback modes, file loading, the library folder), plus both behind the control server with fake devices.
+// playback modes, file loading, the library folder), the save folders of recordings, plus both behind the
+// control server with fake devices.
 
 #include "audio_file.hpp"
 #include "controller.hpp"
@@ -11,9 +12,11 @@
 #include "recorder.hpp"
 #include "sample_library.hpp"
 #include "sampler.hpp"
+#include "save_folder.hpp"
 
 #include "dc/control/client.hpp"
 #include "dc/protocol/defaults.hpp"
+#include "dc/protocol/profile.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -709,4 +712,162 @@ TEST_CASE("mixd behind the control server: the sampler library is set only on th
     server.stop();
     work.reset();
     net.join();
+}
+
+TEST_CASE("save folder check: absolute paths on any drive, missing folders are made later, problems are named",
+          "[mixd][recorder]") {
+    const auto root = tempFolder("save_folder");
+    const auto rootText = pathToUtf8(root);
+
+    auto there = checkSaveFolder(rootText, "unused");
+    CHECK(there.problem == "");
+    CHECK(there.absolute);
+    CHECK(there.exists);
+    CHECK(there.writable);
+    CHECK_FALSE(there.isDefault);
+    REQUIRE(there.freeBytes);
+    CHECK(*there.freeBytes > 0);
+    // the write check leaves nothing behind
+    CHECK(std::filesystem::is_empty(root));
+
+    // not there yet: fine when the folder above can be written (the recording makes it)
+    auto later = checkSaveFolder(pathToUtf8(root / "new" / "deeper"), "unused");
+    CHECK(later.problem == "");
+    CHECK_FALSE(later.exists);
+    CHECK(later.writable);
+    CHECK(later.freeBytes);
+    CHECK_FALSE(std::filesystem::exists(root / "new"));
+
+    // "" is the default folder
+    auto byDefault = checkSaveFolder("", rootText);
+    CHECK(byDefault.isDefault);
+    CHECK(byDefault.path == rootText);
+    CHECK(byDefault.exists);
+
+    CHECK(checkSaveFolder("Videos", rootText).problem == "not_absolute");
+    CHECK(checkSaveFolder("Videos/rec", rootText).problem == "not_absolute");
+#ifdef _WIN32
+    CHECK(checkSaveFolder("D:Videos", rootText).problem == "not_absolute"); // drive-relative
+    CHECK(checkSaveFolder("\\Videos", rootText).problem == "not_absolute"); // no drive
+    CHECK(checkSaveFolder("D:/Videos", rootText).absolute);                 // either separator
+#endif
+    {
+        std::ofstream f(root / "taken");
+        f << "x";
+    }
+    CHECK(checkSaveFolder(pathToUtf8(root / "taken"), "").problem == "not_folder");
+    CHECK(checkSaveFolder(pathToUtf8(root / "taken" / "below"), "").problem == "not_folder");
+
+    const std::string json = folderCheckJson(later);
+    CHECK(json.find("\"exists\":false") != std::string::npos);
+    CHECK(json.find("\"writable\":true") != std::string::npos);
+    CHECK(json.find("\"default\":false") != std::string::npos);
+    CHECK(json.find("\"free_bytes\":") != std::string::npos);
+    CHECK(json.find("\"problem\":\"\"") != std::string::npos);
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("mixd behind the control server: save folders are set on the engine PC and checked", "[mixd][integration]") {
+    for (const char* path : {"/capture/directory", "/recorder/directory"}) {
+        const auto* spec = proto::schemaV1().find(path);
+        REQUIRE(spec);
+        CHECK(spec->access == proto::Access::LocalOnly);
+        CHECK(proto::inProfile(*spec)); // kept in profiles like before
+    }
+
+    asio::io_context io;
+    proto::ParamStore store;
+    Controller* ctlPtr = nullptr;
+    control::ControlServer::Options opt;
+    opt.port = 0;
+    opt.onDelta = [&](const proto::Delta& d) {
+        if (ctlPtr) ctlPtr->onDelta(d);
+    };
+    control::ControlServer server(io, store, opt);
+    FakeBackend backend;
+    Engine engine(nullptr);
+    DeviceManager devices(backend, engine, {});
+    Controller::Options co;
+    co.verbose = false;
+    Controller ctl(io, server, devices, engine, nullptr, co);
+    server.start();
+    ctl.start(devices.enumerateNow());
+    ctlPtr = &ctl;
+    auto work = asio::make_work_guard(io);
+    std::thread net([&] { io.run(); });
+
+    control::ControlClient::Options o;
+    o.port = server.port();
+    o.clientName = "pc";
+    control::ControlClient local(o);
+    REQUIRE(local.connect(3s));
+    o.clientName = "tablet";
+    o.role = proto::ClientRole::Remote;
+    control::ControlClient remote(o);
+    REQUIRE(remote.connect(3s));
+    auto waitFor = [&](control::ControlClient& c, auto pred) {
+        for (int i = 0; i < 100; ++i) {
+            if (pred(c.tree())) return true;
+            std::this_thread::sleep_for(50ms);
+        }
+        return false;
+    };
+    auto ok = [](const proto::Result& r) { return r.code == proto::ErrorCode::Ok; };
+
+    const auto root = tempFolder("save_folder_server");
+    const auto videos = pathToUtf8(root / "Videos");
+    const auto takes = pathToUtf8(root / "Takes");
+
+    // a remote controller cannot move the files on the engine's PC
+    for (const char* path : {"/capture/directory", "/recorder/directory"}) {
+        auto refused = remote.set({{path, videos}}).get();
+        CHECK(refused.code == proto::ErrorCode::Unauthorized);
+        CHECK(refused.path == path);
+    }
+    REQUIRE(ok(local.set({{"/capture/directory", videos}, {"/recorder/directory", takes}}).get()));
+    CHECK(waitFor(remote, [&](const proto::ParamTree& t) { return t.getAs<std::string>("/recorder/directory") == takes; }));
+
+    // ...but it can see what the folder would do
+    auto check = remote.call("/system/folder/check", {{"for", std::string("capture")}}).get();
+    REQUIRE(ok(check));
+    const auto json = std::get<std::string>(check.value);
+    std::string videosJson; // as the JSON writes it (Windows backslashes are escaped)
+    for (char ch : videos) videosJson += ch == '\\' ? std::string("\\\\") : std::string(1, ch);
+    CHECK(json.find("\"path\":\"" + videosJson + "\"") != std::string::npos);
+    CHECK(json.find("\"exists\":false") != std::string::npos); // made when the recording starts
+    CHECK(json.find("\"problem\":\"\"") != std::string::npos);
+    auto other = local.call("/system/folder/check", {{"for", std::string("recorder")}, {"path", std::string("rel")}}).get();
+    REQUIRE(ok(other));
+    CHECK(std::get<std::string>(other.value).find("\"problem\":\"not_absolute\"") != std::string::npos);
+    auto byDefault = local.call("/system/folder/check", {{"for", std::string("recorder")}, {"path", std::string()}}).get();
+    REQUIRE(ok(byDefault));
+    CHECK(std::get<std::string>(byDefault.value).find("\"default\":true") != std::string::npos);
+    CHECK(local.call("/system/folder/check", {{"for", std::string("video")}}).get().code == proto::ErrorCode::BadRequest);
+    CHECK(local.call("/system/folder/check").get().code == proto::ErrorCode::BadRequest);
+
+    // a take goes into the folder (made on the way), a relative folder is refused before anything is written
+    REQUIRE(ok(local.set({{"/master/record/enabled", true}, {"/recorder/folder_name", std::string("take")}}).get()));
+    auto started = local.call("/recorder/start").get();
+    REQUIRE(ok(started));
+    CHECK(std::get<std::string>(started.value) == pathToUtf8(root / "Takes" / "take"));
+    REQUIRE(ok(local.call("/recorder/stop").get()));
+    CHECK(waitFor(local, [](const proto::ParamTree& t) { return t.getAs<std::string>("/recorder/state") == "idle"; }));
+    CHECK(std::filesystem::exists(root / "Takes" / "take" / "00_Master.wav"));
+
+    REQUIRE(ok(local.set({{"/recorder/directory", std::string("Takes")}}).get()));
+    auto refused = local.call("/recorder/start").get();
+    CHECK(refused.code == proto::ErrorCode::BadRequest);
+    CHECK(refused.message.find("absolute") != std::string::npos);
+    CHECK(waitFor(local, [](const proto::ParamTree& t) {
+        return t.getAs<std::string>("/recorder/state") == "error" &&
+               t.getAs<std::string>("/recorder/error").value_or("").find("absolute") != std::string::npos;
+    }));
+
+    local.disconnect();
+    remote.disconnect();
+    ctl.stop();
+    server.stop();
+    work.reset();
+    net.join();
+    std::filesystem::remove_all(root);
 }

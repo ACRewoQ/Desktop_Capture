@@ -130,6 +130,8 @@ set(DC_UI_QML
     ParamPick.qml
     ParamSlider.qml
     ParamText.qml
+    SaveFolderRow.qml
+    FolderPicker.qml
     ParamColor.qml
     SizePick.qml
     SegmentTabs.qml

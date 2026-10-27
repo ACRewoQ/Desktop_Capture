@@ -129,7 +129,9 @@ Schema buildV1() {
     sc.add(s("/capture/error", "", "直前のエラー内容", RO));
     sc.add(i("/capture/mix", 0, kMaxVideoMixes, 1, "録画する映像ミックス（0 = なし）"));
     sc.add(e("/capture/container", {"mkv", "mp4"}, "mkv", "コンテナ"));
-    sc.add(s("/capture/directory", "", "保存先フォルダー（\"\" = ビデオフォルダー）"));
+    sc.add(s("/capture/directory", "",
+             "保存先フォルダー（エンジンの PC の絶対パス。別ドライブも可。\"\" = ビデオフォルダー）。リモコンからは変えられない",
+             LOCAL));
     sc.add(s("/capture/filename", "%Y-%m-%d_%H-%M-%S", "ファイル名パターン（strftime 形式）"));
     sc.add(e("/capture/video/encoder", {"auto", "nvenc", "amf", "qsv", "x264"}, "auto", "エンコーダー"));
     sc.add(e("/capture/video/codec", {"h264", "hevc", "av1"}, "h264", "コーデック"));
@@ -150,7 +152,9 @@ Schema buildV1() {
     sc.add(s("/recorder/error", "", "直前のエラー内容", RO));
     sc.add(i("/recorder/dropped_frames", 0, kI64Max, 0, "書き込みが間に合わず無音で埋めたフレーム数（テイクごと）", RO));
     sc.add(e("/recorder/format", {"wav", "flac"}, "wav", "形式（48kHz / 24bit。WAV は 4GB を超えると RF64）"));
-    sc.add(s("/recorder/directory", "", "保存先フォルダー（\"\" = ミュージック\\Desktop Capture）"));
+    sc.add(s("/recorder/directory", "",
+             "保存先フォルダー（エンジンの PC の絶対パス。別ドライブも可。\"\" = ミュージック\\Desktop Capture）。リモコンからは変えられない",
+             LOCAL));
     sc.add(s("/recorder/folder_name", "%Y-%m-%d_%H-%M-%S", "テイクのフォルダー名パターン（strftime 形式）"));
     sc.add(b("/recorder/with_capture", true, "録画（/capture）の開始・停止に合わせて録音も開始・停止する"));
 
@@ -380,6 +384,10 @@ Schema buildV1() {
     sc.addMethod({"/recorder/start", "", "string（テイクのフォルダー）",
                   "トラック別録音を開始。録音対象がなければ conflict", "P3"});
     sc.addMethod({"/recorder/stop", "", "nil", "トラック別録音を停止", "P3"});
+    sc.addMethod({"/system/folder/check", "for:string, path:string?", "string（JSON）",
+                  "録画（for = capture）・録音（for = recorder）の保存先を調べる（path なし = 今の設定）。実際のパス・"
+                  "あるか・書けるか・空き容量",
+                  "P5"});
     sc.addMethod({"/sampler/trigger", "pad:int, bank:int?", "nil",
                   "パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による", "P3"});
     sc.addMethod({"/sampler/release", "pad:int, bank:int?", "nil", "パッドを離す（hold のパッドが止まる）", "P3"});
