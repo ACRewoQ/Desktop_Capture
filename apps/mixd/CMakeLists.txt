@@ -29,6 +29,7 @@ add_library(dc_mixd_core STATIC
     src/profile_manager.cpp
     src/recorder.cpp
     src/sample_library.cpp
+    src/save_folder.cpp
     src/sampler.cpp
     src/timer_clock.cpp
 )

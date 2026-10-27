@@ -46,6 +46,9 @@ bool naturalLess(const std::string& a, const std::string& b);
 LibraryListing listSampleLibrary(const std::string& root, const std::string& dir, std::size_t offset,
                                  std::size_t count);
 
+// s as a JSON string literal (quotes and escapes).
+std::string jsonString(const std::string& s);
+
 // The JSON returned by /sampler/library/list.
 std::string libraryListingJson(const LibraryListing& listing);
 

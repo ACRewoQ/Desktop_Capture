@@ -7,6 +7,7 @@
 #include "dc/version.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <optional>
@@ -271,6 +272,37 @@ void MockEngine::registerMethods() {
         const auto path = padPath(ctx);
         if (path.empty()) return error(ErrorCode::OutOfRange, "pad or bank out of range");
         return Result{};
+    });
+    // pretend save folders (no disk access): drives C: and D: are there with 500 GB free, others are not
+    server_.registerMethod("/system/folder/check", [this](CallContext& ctx) {
+        auto arg = [&](const char* key) -> std::optional<std::string> {
+            if (auto it = ctx.call.args.find(key); it != ctx.call.args.end())
+                if (auto* v = std::get_if<std::string>(&it->second)) return *v;
+            return std::nullopt;
+        };
+        const auto which = arg("for").value_or("");
+        if (which != "capture" && which != "recorder") return error(ErrorCode::BadRequest, "for must be capture or recorder");
+        const auto setting =
+            arg("path").value_or(server_.store().tree().getAs<std::string>("/" + which + "/directory").value_or(""));
+        const bool isDefault = setting.empty();
+        std::string path = !isDefault           ? setting
+                           : which == "capture" ? "C:\\Users\\mock\\Videos"
+                                                : "C:\\Users\\mock\\Music\\Desktop Capture";
+        std::replace(path.begin(), path.end(), '/', '\\');
+        const bool absolute = path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':' &&
+                              path[2] == '\\';
+        const char drive = absolute ? static_cast<char>(std::toupper(static_cast<unsigned char>(path[0]))) : 0;
+        const bool there = drive == 'C' || drive == 'D';
+        const std::string problem = !absolute ? "not_absolute" : !there ? "no_drive" : "";
+        std::string json = "{\"path\":\"";
+        for (char c : path) json += c == '\\' ? std::string("\\\\") : c == '"' ? std::string("\\\"") : std::string(1, c);
+        json += std::string("\",\"default\":") + (isDefault ? "true" : "false") + ",\"absolute\":" +
+                (absolute ? "true" : "false") + ",\"exists\":" + (there ? "true" : "false") + ",\"writable\":" +
+                (there ? "true" : "false") + (there ? ",\"free_bytes\":536870912000" : "") + ",\"problem\":\"" +
+                problem + "\"}";
+        Result r;
+        r.value = json;
+        return r;
     });
     // a fixed pretend library (no disk access): C:/Sounds with one subfolder
     server_.registerMethod("/sampler/library/list", [this](CallContext& ctx) {

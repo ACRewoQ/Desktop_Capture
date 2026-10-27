@@ -18,28 +18,6 @@ namespace {
 char lower(char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
 bool isDigit(char c) { return c >= '0' && c <= '9'; }
 
-std::string jsonString(const std::string& s) {
-    std::string out = "\"";
-    for (unsigned char c : s) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    return out + "\"";
-}
-
 // Splits a relative dir into segments; false if a segment is empty or could leave the library.
 bool splitDir(const std::string& dir, std::vector<std::string>& out) {
     if (dir.empty()) return true;
@@ -153,6 +131,28 @@ LibraryListing listSampleLibrary(const std::string& root, const std::string& dir
     out.entries.assign(std::make_move_iterator(all.begin() + static_cast<std::ptrdiff_t>(out.offset)),
                        std::make_move_iterator(all.begin() + static_cast<std::ptrdiff_t>(out.offset + n)));
     return out;
+}
+
+std::string jsonString(const std::string& s) {
+    std::string out = "\"";
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out + "\"";
 }
 
 std::string libraryListingJson(const LibraryListing& l) {

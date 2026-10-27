@@ -191,7 +191,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - `session` はエンジンの起動ごとに変わります。クライアントは再接続時に値が変わっていたら、手元の状態をすべて捨ててスナップショットから作り直します。
 - ループバック（127.0.0.1 / ::1）以外からの接続は、role がリモコン（1）か相手のエンジン（3）で、`token` が有効か、受付中のペアリングコードが合っているときだけ受け付けます（8 章）。それ以外は `unauthorized` です。開発用の `mixd --allow-remote` はこの検査を省きます。リモコンの 5 台目は `limit_reached` で拒否します（相手のエンジンは数えません）。
 - `client_id` はクライアントのインストールごとに固定の id です（相手のエンジンは自分の `server_id`）。ペアリングの記録に使います。空でも接続できますが、ペアリングはできません。
-- role = 1（リモコン）は、書込が `local` のパラメーター（protocol-params.md、今は `/sampler/library/folder` だけ）を Set できません（`unauthorized`、`path` 付き。同じ Set のほかの変更も適用しません）。
+- role = 1（リモコン）は、書込が `local` のパラメーター（protocol-params.md、今は `/sampler/library/folder`・`/capture/directory`・`/recorder/directory`）を Set できません（`unauthorized`、`path` 付き。同じ Set のほかの変更も適用しません）。
 - role = 3（相手のエンジン）の接続は、ツリーを読むことと `/lan/subscribe`・`/lan/unsubscribe`・`/session/resync` だけができます。Set と他の Call は `unauthorized` です。
 
 ### 5.2 リビジョン（rev）とデルタ
@@ -225,6 +225,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/capture/report` | `state`:str, `file`:str?, `error`:str?, `duration_ms`:int?, `reason`:str? | nil | P2 | capd から録画の状態を知らせる（5.4.1）。role = サービス以外は `unauthorized` |
 | `/recorder/start` | なし | str（テイクのフォルダー） | P3 | トラック別録音の開始（5.4.2） |
 | `/recorder/stop` | なし | nil | P3 | トラック別録音の停止。録音中でなければ `conflict` |
+| `/system/folder/check` | `for`:str（`capture` / `recorder`）, `path`:str?（なし = 今の設定） | str（JSON） | P5 | 録画・録音の保存先を調べる（5.4.2） |
 | `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
 | `/sampler/release` | `pad`:int, `bank`:int? | nil | P3 | パッドを離す |
 | `/sampler/stop` | `bank`:int?（なし = 全バンク） | nil | P3 | 再生中のパッドを止める |
@@ -278,6 +279,8 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 開始：`/recorder/start`、または `/recorder/with_capture` が true のとき `/capture/state` が `recording` になった時点。録音対象がなければ `conflict`（"no track armed for recording"）、録音中なら `conflict`。録画に連動して始めたときに録音対象がなければ、何もしません。
 - 停止：`/recorder/stop`、または録画に連動して始めた録音は `/capture/state` が `recording` でなくなった時点（`stopping`・`idle`・`error`）。
 - フォルダー：`/recorder/directory`（`""` = ミュージック\Desktop Capture）の下に `/recorder/folder_name` の名前で作ります。同じ名前があれば `_2`、`_3` を付けます。ファイル名は `<番号2桁>_<表示名>.wav`（マスターは `00_Master`、トラックは `/track/#/` の番号。ファイル名に使えない文字は `_`）。
+- 保存先：`/capture/directory`（録画、capd が書く）と `/recorder/directory`（録音）は、エンジンの PC の絶対パス（`D:\Videos`、`\\nas\share\rec` など。別のドライブでもよい）です。リモコン（role 1）からは変えられません（書込 `local`。ファイルを置く場所はエンジンの PC の人が決める）。プロファイルには入ります。ないフォルダーは録画・録音を始めるときに作ります。相対パス（`Videos`、`D:Videos`）は始める時点で断ります（録音は `bad_request`、録画は `/capture/state` = `error`）。ドライブがない・書けないときも始める時点で `error` になり、ほかの場所には書きません。録音は空きが 256 MB 未満なら始めません（録画は capd が 5.4.1 の安全停止と同じ基準で断ります）。
+- `/system/folder/check`：保存先を何も変えずに調べ、JSON で返します。`{"path":…,"default":bool,"absolute":bool,"exists":bool,"writable":bool,"free_bytes":int?,"problem":…}`。`path` は実際に使うフォルダー（設定が `""` なら既定のフォルダー）、`writable` はまだないフォルダーなら作る先（いちばん近いある親）に書けるか。`problem` は `""`（使える）、`not_absolute`、`no_drive`（ドライブや共有がない）、`not_folder`（同じ名前のファイルがある）、`not_writable`。リモコンも呼べます。
 - 形式：48kHz / 24bit の WAV か FLAC。WAV が 4GB を超えると RF64 に切り替えます。
 - 全ファイルは同じ音声ブロックから始まり、同じ長さで終わります（サンプル単位でそろう）。録音中に対象・タップ・チャンネル数を変えても次のテイクまで反映しません。録音中に削除したトラックや切断した入力は無音で続きます。
 - ディスク書き込みは別スレッドです。書き込みが間に合わずバッファがあふれた分は無音で埋めて長さを保ち、`/recorder/dropped_frames` に数えます。書き込みに失敗したら（ディスク満杯など）そこまでのファイルを正しく閉じて `/recorder/state` = `error`、`/recorder/error` に理由を入れます。

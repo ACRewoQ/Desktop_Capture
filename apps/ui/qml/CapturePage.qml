@@ -61,11 +61,7 @@ Item {
                 note: container.value === "mkv" ? "MKV は PC が落ちても、そこまでの分を再生できます" : "MP4 は録画が異常終了すると、ファイル全体が再生できなくなります"
                 ParamSegments { path: "/capture/container"; labels: ({ mkv: "MKV", mp4: "MP4" }) }
             }
-            SettingRow {
-                label: "保存先フォルダー"
-                note: "エンジンの PC のパス。空ならビデオフォルダー"
-                ParamText { path: "/capture/directory"; title: "保存先フォルダー"; emptyText: "ビデオフォルダー" }
-            }
+            SaveFolderRow { target: "capture"; label: "保存先フォルダー"; defaultName: "ビデオフォルダー" }
             SettingRow {
                 label: "ファイル名"
                 note: "%Y 年 %m 月 %d 日 %H 時 %M 分 %S 秒"
@@ -259,11 +255,7 @@ Item {
                 note: "48kHz / 24bit。WAV は 4GB を超えると RF64 になります"
                 ParamSegments { path: "/recorder/format"; labels: ({ wav: "WAV", flac: "FLAC" }) }
             }
-            SettingRow {
-                label: "保存先フォルダー"
-                note: "空ならミュージック\\Desktop Capture"
-                ParamText { path: "/recorder/directory"; title: "録音の保存先"; emptyText: "ミュージック\\Desktop Capture" }
-            }
+            SaveFolderRow { target: "recorder"; label: "録音の保存先"; defaultName: "ミュージック\\Desktop Capture" }
             SettingRow {
                 label: "フォルダー名"
                 note: "録音ごとに作るフォルダーの名前（%Y %m %d %H %M %S）"

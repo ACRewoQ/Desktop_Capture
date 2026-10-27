@@ -626,6 +626,44 @@ private slots:
         }
     }
 
+    void saveFolders() {
+        // The recording and take folders: set on the engine's PC (any drive), read-only for a remote
+        // controller, which still sees what /system/folder/check says (the mock has drives C: and D:).
+        Harness h;
+        for (const bool remote : {false, true}) {
+            auto o = options(h.port());
+            if (remote) o.role = proto::ClientRole::Remote;
+            ui::Connection c(o);
+            ui::ParamHub hub(c);
+            c.start();
+            QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+            ui::ParamValue video, takes;
+            video.setPath(QStringLiteral("/capture/directory"));
+            takes.setPath(QStringLiteral("/recorder/directory"));
+            QCOMPARE(video.readOnly(), remote);
+            QCOMPARE(takes.readOnly(), remote);
+            if (!remote) {
+                hub.set(QStringLiteral("/capture/directory"), QStringLiteral("D:\\Videos"));
+                QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/capture/directory").value_or("") == "D:\\Videos"; }, 2000));
+            }
+
+            std::optional<proto::Result> cap, rec, gone;
+            c.call("/system/folder/check", {{"for", std::string("capture")}}, [&](const proto::Result& r) { cap = r; });
+            c.call("/system/folder/check", {{"for", std::string("recorder")}}, [&](const proto::Result& r) { rec = r; });
+            c.call("/system/folder/check", {{"for", std::string("capture")}, {"path", std::string("E:\\Rec")}},
+                   [&](const proto::Result& r) { gone = r; });
+            QVERIFY(ui::waitUntil([&] { return cap && rec && gone; }, 2000));
+            const auto json = [](const proto::Result& r) {
+                return QJsonDocument::fromJson(QByteArray::fromStdString(std::get<std::string>(r.value))).object();
+            };
+            QCOMPARE(json(*cap).value("path").toString(), QStringLiteral("D:\\Videos"));
+            QCOMPARE(json(*cap).value("problem").toString(), QString());
+            QVERIFY(json(*cap).value("free_bytes").toDouble() > 0);
+            QCOMPARE(json(*rec).value("default").toBool(), true);
+            QCOMPARE(json(*gone).value("problem").toString(), QStringLiteral("no_drive"));
+        }
+    }
+
     void reconnectsAfterEngineRestart() {
         std::uint16_t port = 0;
         auto h = std::make_unique<Harness>();
