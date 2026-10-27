@@ -115,7 +115,7 @@ int printSchema(bool markdown) {
         std::cout << "| パス | 型 | 書込 | 保存 | 範囲・選択肢 | 既定値 | 説明 |\n|---|---|---|---|---|---|---|\n";
         for (const auto& s : schema.params()) {
             std::cout << "| `" << s.pattern << "` | " << typeName(s.type) << " | "
-                      << (s.access == Access::ReadOnly ? "ro" : "rw") << " | "
+                      << (s.access == Access::ReadOnly ? "ro" : s.access == Access::LocalOnly ? "local" : "rw") << " | "
                       << (inSnapshot(s) ? "P S" : inProfile(s) ? "P" : "") << " | " << rangeText(s) << " | `"
                       << toDisplayString(s.defaultValue) << "` | " << s.description << " |\n";
         }
@@ -146,7 +146,7 @@ int printSchema(bool markdown) {
         }
     } else {
         for (const auto& s : schema.params())
-            std::cout << s.pattern << "  " << typeName(s.type) << (s.access == Access::ReadOnly ? " ro" : " rw")
+            std::cout << s.pattern << "  " << typeName(s.type) << (s.access == Access::ReadOnly ? " ro" : s.access == Access::LocalOnly ? " local" : " rw")
                       << "  [" << rangeText(s) << "]  default " << toDisplayString(s.defaultValue) << "\n";
         for (const auto& m : schema.methods()) std::cout << "call " << m.pattern << " (" << m.args << ")\n";
     }

@@ -36,7 +36,9 @@ inline constexpr int kMaxProfiles = 64;    // /profile/list/#
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 
-enum class Access : std::uint8_t { ReadWrite, ReadOnly };
+// LocalOnly: written by the engine PC's own clients only. A remote controller (role 1) reads it but its
+// Set is refused with unauthorized (the sampler library folder, protocol.md 5.4.3).
+enum class Access : std::uint8_t { ReadWrite, ReadOnly, LocalOnly };
 
 // Describes one parameter pattern. In a pattern, "#" matches an index segment (1, 2, ...)
 // and "*" matches any single name segment (used for plugin parameter names).

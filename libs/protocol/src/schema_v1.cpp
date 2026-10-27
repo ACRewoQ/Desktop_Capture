@@ -9,6 +9,7 @@ namespace {
 using V = Value;
 constexpr auto RO = Access::ReadOnly;
 constexpr auto RW = Access::ReadWrite;
+constexpr auto LOCAL = Access::LocalOnly;
 constexpr std::int64_t kI64Max = std::numeric_limits<std::int64_t>::max();
 constexpr std::int64_t kArgbMax = 0xFFFFFFFFLL;
 
@@ -155,6 +156,8 @@ Schema buildV1() {
 
     // --- sampler: sound effect pads, played into the tracks whose input kind is sampler ---
     sc.add(i("/sampler/active_bank", 1, kSamplerBanks, 1, "表示・ホットキー・MIDI の対象バンク"));
+    sc.add(s("/sampler/library/folder", "",
+             "ライブラリのフォルダー（エンジンの PC の絶対パス。\"\" = なし）。リモコンからは変えられない", LOCAL));
     sc.add(s("/sampler/bank/#/name", "", "バンク名"));
     sc.add(s("/sampler/bank/#/pad/#/file", "", "音声ファイルのパス（WAV / FLAC / MP3 / Ogg Vorbis。\"\" = 空）"));
     sc.add(s("/sampler/bank/#/pad/#/name", "", "パッドの表示名（\"\" = ファイル名）"));
@@ -380,6 +383,8 @@ Schema buildV1() {
     sc.addMethod({"/sampler/trigger", "pad:int, bank:int?", "nil",
                   "パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による", "P3"});
     sc.addMethod({"/sampler/release", "pad:int, bank:int?", "nil", "パッドを離す（hold のパッドが止まる）", "P3"});
+    sc.addMethod({"/sampler/library/list", "dir:string?, offset:int?, count:int?", "string（JSON）",
+                  "ライブラリのフォルダー 1 段分（dir はライブラリからの相対パス、/ 区切り）。サブフォルダーと読める音声ファイル", "P5"});
     sc.addMethod({"/sampler/stop", "bank:int?", "nil", "再生中のパッドを止める（bank なし = 全バンク）", "P3"});
     sc.addMethod({"/video/source/add", "kind:string, name:string?", "int（新しいソース番号）",
                   "ソースを追加。番号は空いている最小の番号", "P3"});

@@ -1,5 +1,5 @@
 // Lane A3: per-track recording (WAV / FLAC files, the take in the mixer) and the sampler (pad
-// playback modes, file loading), plus both behind the control server with fake devices.
+// playback modes, file loading, the library folder), plus both behind the control server with fake devices.
 
 #include "audio_file.hpp"
 #include "controller.hpp"
@@ -9,6 +9,7 @@
 #include "mixer.hpp"
 #include "plan_builder.hpp"
 #include "recorder.hpp"
+#include "sample_library.hpp"
 #include "sampler.hpp"
 
 #include "dc/control/client.hpp"
@@ -531,4 +532,175 @@ TEST_CASE("mixd behind the control server: recorder and sampler", "[mixd][integr
     work.reset();
     net.join();
     devices.stop();
+}
+
+namespace {
+void touch(const std::filesystem::path& p, std::size_t bytes = 10) {
+    std::ofstream f(p, std::ios::binary);
+    f << std::string(bytes, 'x');
+}
+} // namespace
+
+TEST_CASE("sampler library: one folder level with folders first in natural order and audio files only", "[mixd][sampler]") {
+    CHECK(isSampleFileName("a.wav"));
+    CHECK(isSampleFileName("B.FLAC"));
+    CHECK(isSampleFileName("c.Mp3"));
+    CHECK(isSampleFileName("d.ogg"));
+    CHECK_FALSE(isSampleFileName("e.txt"));
+    CHECK_FALSE(isSampleFileName("wav"));
+    CHECK_FALSE(isSampleFileName(".wav"));
+    CHECK(naturalLess("Kick 9.wav", "kick 10.wav"));
+    CHECK(naturalLess("a", "B"));
+    CHECK_FALSE(naturalLess("kick 10.wav", "Kick 9.wav"));
+    CHECK(naturalLess("x2", "x010"));
+
+    const auto root = tempFolder("library");
+    std::filesystem::create_directories(root / "Jingles" / "Old");
+    std::filesystem::create_directories(root / "drums");
+    std::filesystem::create_directories(root / ".hidden");
+    touch(root / "Kick 10.wav", 1234);
+    touch(root / "kick 9.flac");
+    touch(root / "Applause.MP3");
+    touch(root / "notes.txt");
+    touch(root / "._Kick 10.wav");
+    touch(root / "Jingles" / "Intro.ogg");
+    touch(root / std::filesystem::path(u8"効果音.wav"));
+    const auto rootText = pathToUtf8(root);
+
+    auto l = listSampleLibrary(rootText, "", 0, 100);
+    REQUIRE(l.code == proto::ErrorCode::Ok);
+    REQUIRE(l.total == 6);
+    std::vector<std::string> names;
+    for (const auto& e : l.entries) names.push_back(e.name);
+    CHECK(names == std::vector<std::string>{"drums", "Jingles", "Applause.MP3", "kick 9.flac", "Kick 10.wav", "効果音.wav"});
+    CHECK(l.entries[0].folder);
+    CHECK(l.entries[0].path.empty());
+    CHECK_FALSE(l.entries[4].folder);
+    CHECK(l.entries[4].size == 1234);
+    CHECK(l.entries[4].path == pathToUtf8(root / "Kick 10.wav"));
+
+    // paging
+    auto page = listSampleLibrary(rootText, "", 4, 10);
+    REQUIRE(page.entries.size() == 2);
+    CHECK(page.offset == 4);
+    CHECK(page.total == 6);
+    CHECK(page.entries[0].name == "Kick 10.wav");
+    CHECK(listSampleLibrary(rootText, "", 50, 10).entries.empty());
+
+    // into a subfolder
+    auto sub = listSampleLibrary(rootText, "Jingles", 0, 100);
+    REQUIRE(sub.code == proto::ErrorCode::Ok);
+    CHECK(sub.dir == "Jingles");
+    REQUIRE(sub.entries.size() == 2);
+    CHECK(sub.entries[0].name == "Old");
+    CHECK(sub.entries[1].path == pathToUtf8(root / "Jingles" / "Intro.ogg"));
+    CHECK(listSampleLibrary(rootText, "Jingles/Old", 0, 100).total == 0);
+
+    const std::string json = libraryListingJson(sub);
+    CHECK(json.rfind("{\"dir\":\"Jingles\",\"total\":2,\"offset\":0,\"truncated\":false,\"entries\":[{\"name\":\"Old\",\"folder\":true},", 0) == 0);
+
+    // never outside the library, and clear errors
+    CHECK(listSampleLibrary(rootText, "..", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(rootText, "Jingles/../..", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(rootText, "/etc", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(rootText, "Jingles/", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(rootText, "C:\\x", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(rootText, "nothing", 0, 10).code == proto::ErrorCode::NotFound);
+    CHECK(listSampleLibrary(rootText, "notes.txt", 0, 10).code == proto::ErrorCode::NotFound);
+    CHECK(listSampleLibrary("", "", 0, 10).code == proto::ErrorCode::Conflict);
+    CHECK(listSampleLibrary("relative/dir", "", 0, 10).code == proto::ErrorCode::BadRequest);
+    CHECK(listSampleLibrary(pathToUtf8(root / "missing"), "", 0, 10).code == proto::ErrorCode::NotFound);
+}
+
+TEST_CASE("mixd behind the control server: the sampler library is set only on the engine PC", "[mixd][integration]") {
+    asio::io_context io;
+    proto::ParamStore store;
+    Controller* ctlPtr = nullptr;
+    control::ControlServer::Options opt;
+    opt.port = 0;
+    opt.onDelta = [&](const proto::Delta& d) {
+        if (ctlPtr) ctlPtr->onDelta(d);
+    };
+    control::ControlServer server(io, store, opt);
+    FakeBackend backend;
+    Engine engine(nullptr);
+    DeviceManager devices(backend, engine, {});
+    Controller::Options co;
+    co.verbose = false;
+    Controller ctl(io, server, devices, engine, nullptr, co);
+    server.start();
+    ctl.start(devices.enumerateNow());
+    ctlPtr = &ctl;
+    auto work = asio::make_work_guard(io);
+    std::thread net([&] { io.run(); });
+
+    control::ControlClient::Options o;
+    o.port = server.port();
+    o.clientName = "pc";
+    control::ControlClient local(o);
+    REQUIRE(local.connect(3s));
+    o.clientName = "tablet";
+    o.role = proto::ClientRole::Remote;
+    control::ControlClient remote(o);
+    REQUIRE(remote.connect(3s));
+    auto waitFor = [&](control::ControlClient& c, auto pred) {
+        for (int i = 0; i < 100; ++i) {
+            if (pred(c.tree())) return true;
+            std::this_thread::sleep_for(50ms);
+        }
+        return false;
+    };
+    auto ok = [](const proto::Result& r) { return r.code == proto::ErrorCode::Ok; };
+
+    const auto root = tempFolder("library_server");
+    std::filesystem::create_directories(root / "Jingles");
+    std::string err;
+    {
+        auto w = createAudioFile(root / "Jingles" / "hit.wav", AudioFileFormat::Wav, 2, &err);
+        const auto tone = sine(500, 48000, 4800, 2, 0.5f);
+        REQUIRE(w->write(tone.data(), 4800));
+        REQUIRE(w->close());
+    }
+    const auto rootText = pathToUtf8(root);
+
+    CHECK(local.call("/sampler/library/list").get().code == proto::ErrorCode::Conflict); // not set yet
+
+    // the remote controller cannot change the folder (also not hidden among other changes)
+    auto refused = remote.set({{"/sampler/library/folder", rootText}}).get();
+    CHECK(refused.code == proto::ErrorCode::Unauthorized);
+    CHECK(refused.path == "/sampler/library/folder");
+    CHECK(remote.set({{"/sampler/bank/1/name", std::string("x")}, {"/sampler/library/folder", rootText}}).get().code ==
+          proto::ErrorCode::Unauthorized);
+    std::this_thread::sleep_for(100ms);
+    CHECK(local.tree().getAs<std::string>("/sampler/bank/1/name") == "Bank 1");
+    CHECK(local.tree().getAs<std::string>("/sampler/library/folder") == "");
+
+    // the PC can; the remote sees it and lists the library
+    REQUIRE(ok(local.set({{"/sampler/library/folder", rootText}}).get()));
+    CHECK(waitFor(remote, [&](const proto::ParamTree& t) { return t.getAs<std::string>("/sampler/library/folder") == rootText; }));
+    auto top = remote.call("/sampler/library/list").get();
+    REQUIRE(ok(top));
+    CHECK(std::get<std::string>(top.value) ==
+          "{\"dir\":\"\",\"total\":1,\"offset\":0,\"truncated\":false,\"entries\":[{\"name\":\"Jingles\",\"folder\":true}]}");
+    auto sub = remote.call("/sampler/library/list", {{"dir", std::string("Jingles")}}).get();
+    REQUIRE(ok(sub));
+    const auto hitPath = pathToUtf8(root / "Jingles" / "hit.wav");
+    CHECK(std::get<std::string>(sub.value).find(hitPath) != std::string::npos);
+    CHECK(remote.call("/sampler/library/list", {{"dir", std::string("..")}}).get().code == proto::ErrorCode::BadRequest);
+    CHECK(remote.call("/sampler/library/list", {{"count", std::int64_t{0}}}).get().code == proto::ErrorCode::OutOfRange);
+    CHECK(remote.call("/sampler/library/list", {{"offset", std::int64_t{-1}}}).get().code == proto::ErrorCode::OutOfRange);
+
+    // ...and assigns a file from it to a pad
+    REQUIRE(ok(remote.set({{"/sampler/bank/1/pad/3/file", hitPath}}).get()));
+    CHECK(waitFor(local, [](const proto::ParamTree& t) {
+        return t.getAs<std::string>("/sampler/bank/1/pad/3/state") == "ready" &&
+               t.getAs<std::int64_t>("/sampler/bank/1/pad/3/duration_ms") == 100;
+    }));
+
+    local.disconnect();
+    remote.disconnect();
+    ctl.stop();
+    server.stop();
+    work.reset();
+    net.join();
 }

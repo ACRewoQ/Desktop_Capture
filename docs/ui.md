@@ -53,7 +53,7 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 
 ## サンプラーと録画のページ
 
-- サンプラー：8 バンク × 16 パッド。パッドは押した瞬間に鳴らし（`/sampler/trigger`）、「押す間」のパッドは離したときに止める（`/sampler/release`）。指ごとに別のパッドを押せる。「編集」を押している間は、タップでパッドの設定（ファイル・名前・色・押したときの動き・音量）を開く。
+- サンプラー：8 バンク × 16 パッド。パッドは押した瞬間に鳴らし（`/sampler/trigger`）、「押す間」のパッドは離したときに止める（`/sampler/release`）。指ごとに別のパッドを押せる。「編集」を押している間は、タップでパッドの設定（ファイル・名前・色・押したときの動き・音量）を開く。パッドの設定の「ライブラリから選ぶ…」で、ライブラリのフォルダー（`/sampler/library/folder`）の中をフォルダーごとにたどってファイルを選べる（選ぶとパッドの名前は空 = ファイル名に戻る）。ライブラリのフォルダーはこのシートの一番上で決める。リモコンでは表示だけで変えられない（エンジンが `local` のパラメーターの Set を断るので、`Param.readOnly` がリモコン接続のとき true になる）。
 - 録画：録画ファイルの形式・保存先・映像（エンコーダー、解像度、ビットレートなど）・音声ストリーム 1〜8 と、トラック別録音（開始・停止、録音するトラック、形式、保存先）。録画の設定は録画を始めた時点で capd が読むので、録画中に変えると次の録画から効く。
 
 ## LAN ページとリモコンのペアリング
@@ -102,7 +102,7 @@ params.setMany({ "/a": 1, "/b": "x" })                // 1 回の Set でまと�
 | `--page KEY` | 最初に開くページ（`mixer`、`settings`、…） |
 | `--screenshot FILE [--size WxH]` | つないで描画したあと PNG に保存して終わる（`QT_QPA_PLATFORM=offscreen` でも可） |
 | `--pair CODE` | `--remote` で、キーパッドの代わりにペアリングの数字を渡す |
-| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`preview`・`textsource`、サンプラーの `pad`・`edit`、LAN の `pairing`、キー・MIDI の `binding`（`binding3` で 3 番）・`learn`） |
+| `--demo NAME` | シートを見本の内容で開く（`number`、`text`、`color`、ミキサーの `menu`・`master`・`input`・`output`・`fx`・`fxedit`、映像の `layer`・`source`・`sources`・`outputs`・`preview`・`textsource`、サンプラーの `pad`・`edit`・`library`、LAN の `pairing`、キー・MIDI の `binding`（`binding3` で 3 番）・`learn`） |
 | `--selftest` / `--exercise` | 自動の確認（[build-and-test.md](build-and-test.md)）。`--selftest` は最後に合成タッチ（ダブルタップ、2 本同時、微調整、ピンチ）も確かめる |
 | `--monitor N` | 起動時から LAN 送信 N をモニター音声で鳴らす |
 | `--measure SECONDS` | G4 の測定：プレビューのタブを開き、遅延（p50・p95）、受信 fps、メモリ（working set・private）、CPU を毎秒と最後に出して終わる |

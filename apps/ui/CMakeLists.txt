@@ -108,6 +108,7 @@ set(DC_UI_QML
     SourceSheet.qml
     # sampler
     PadSheet.qml
+    LibrarySheet.qml
     # hotkeys and MIDI
     Bindings.qml
     BindingSheet.qml

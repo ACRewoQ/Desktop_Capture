@@ -15,6 +15,7 @@ Item {
     function openDemo(name) {
         if (name === "pad") padSheet.open(page.bank, 1)
         else if (name === "edit") editing = true
+        else if (name === "library") { padSheet.open(page.bank, 1); librarySheet.open(page.bank, 1) }
     }
 
     // Narrow screens put the stop / edit buttons on a second row.
@@ -161,5 +162,6 @@ Item {
         }
     }
 
-    PadSheet { id: padSheet; objectName: "padSheet" }
+    PadSheet { id: padSheet; objectName: "padSheet"; onLibraryWanted: (b, p) => librarySheet.open(b, p) }
+    LibrarySheet { id: librarySheet; objectName: "librarySheet" }
 }
