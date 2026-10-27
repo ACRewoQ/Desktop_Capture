@@ -31,7 +31,6 @@ Window {
         const l = pageRepeater.count > 0 ? pageRepeater.itemAt(pageKeys.indexOf(currentPage)) : null
         return l ? l.item : null
     }
-    readonly property bool sheetShown: numberSheet.shown || choiceSheet.shown || textSheet.shown || colorSheet.shown
 
     function showPage(key) { if (pageKeys.indexOf(key) >= 0) currentPage = key }
     function stepPage(d) {
@@ -80,7 +79,7 @@ Window {
                 yAxis.enabled: false
                 dragThreshold: 40
                 grabPermissions: PointerHandler.CanTakeOverFromItems
-                enabled: !window.sheetShown && window.currentItem !== null && window.currentItem.swipeable === true
+                enabled: Sheets.openCount === 0 && window.currentItem !== null && window.currentItem.swipeable === true
                 onActiveChanged: {
                     if (active) return
                     if (translation.x < -100) window.stepPage(1)

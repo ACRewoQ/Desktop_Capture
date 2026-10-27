@@ -159,6 +159,43 @@ int runTouchCheck(QQuickWindow* window, const std::function<void(const QString&)
     check(wide > width0 * 1.3 && narrow < width0 && narrow >= 72,
           QStringLiteral("pinch changes the strip width (%1 -> %2 -> %3 px)").arg(width0).arg(wide).arg(narrow));
     page->setProperty("stripWidth", 108.0);
+    settle();
+
+    // A sheet blocks what is under it: a finger or the mouse dragged over a fader through the sheet
+    // leaves the fader where it was (the fader's DragHandler used to take the drag from the sheet,
+    // and a click on a sheet button also tapped the button under it).
+    QQuickItem* panel = find("trackPanel");
+    QMetaObject::invokeMethod(panel, "open", Q_ARG(QVariant, 0), Q_ARG(QVariant, QStringLiteral("Track")));
+    settle();
+    const double d0 = pos(f0);
+    const QPointF pd = centreOf(f0);
+    const bool disabled = panel->property("shown").toBool() && !f0->isEnabled();
+    fingers.press({pd});
+    fingers.glide({pd}, {pd + QPointF(0, 80)});
+    fingers.release({pd + QPointF(0, 80)});
+    settle();
+    const double afterTouch = pos(f0);
+    QMetaObject::invokeMethod(panel, "open", Q_ARG(QVariant, 0), Q_ARG(QVariant, QStringLiteral("Track")));
+    settle();
+    auto mouse = [&](QPointF at, Qt::MouseButtons buttons, QEvent::Type type) {
+        const QPointF n = QHighDpi::toNativeLocalPosition(at, window);
+        QWindowSystemInterface::handleMouseEvent<QWindowSystemInterface::SynchronousDelivery>(
+            window, n, QHighDpi::toNativeGlobalPosition(window->mapToGlobal(at), window), buttons, Qt::LeftButton, type);
+        QCoreApplication::processEvents();
+    };
+    mouse(pd, Qt::LeftButton, QEvent::MouseButtonPress);
+    for (int s = 1; s <= 20; ++s) {
+        mouse(pd + QPointF(0, 4.0 * s), Qt::LeftButton, QEvent::MouseMove);
+        waitUntil([] { return false; }, 16);
+    }
+    mouse(pd + QPointF(0, 80), Qt::NoButton, QEvent::MouseButtonRelease);
+    settle();
+    const double afterMouse = pos(f0);
+    QMetaObject::invokeMethod(panel, "close");
+    settle();
+    check(disabled && afterTouch == d0 && afterMouse == d0 && f0->isEnabled(),
+          QStringLiteral("a sheet blocks the fader under it (%1 -> %2 touch, %3 mouse)")
+              .arg(d0, 0, 'f', 2).arg(afterTouch, 0, 'f', 2).arg(afterMouse, 0, 'f', 2));
     return failures;
 }
 
