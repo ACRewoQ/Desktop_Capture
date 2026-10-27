@@ -1,44 +1,152 @@
 # Desktop Capture
 
-デスクトップキャプチャー付きソフトウェアミキサー（個人用）。Windows 10 / 11 向けの C++20 ネイティブアプリです。
+デスクトップキャプチャー付きのソフトウェアミキサーです（個人用）。Windows 10 / 11 向けの C++20 ネイティブアプリで、音声エンジン・キャプチャー・UI の 3 つのプロセスと、それらをまとめて起動する常駐アプリでできています。別の PC（タッチパネルの Windows タブレットなど）から同じ画面でリモコン操作できます。
 
-- 最大 64 トラックのミキサー（音量・パン・Lo-Hi フィルター、内蔵エフェクト、VST3、LAN 入出力、録音、サンプラー）
-- デスクトップキャプチャー（ビデオミキサー、GPU エンコード、トラック別音声の録画、仮想カメラ）
-- 別 PC からのリモートコントローラー（プレビュー、タッチ操作）
+開発計画のフェーズ 1〜5 をすべて終え、最後のゲート G5（3 時間の連続動作を含む総合確認）に合格しています（2026-10-27）。
 
-設計と計画は Claude Docs の「全体アーキテクチャ設計書」と「開発計画」にあります。現在は **フェーズ 0（開発基盤と共通仕様）** です。
+## できること
 
-## 構成
+### ミキサー（mixd）
 
-| ディレクトリ | 内容 |
+- 最大 64 トラック＋マスター。トラックごとにモノ／ステレオ、音量・パン・Lo-Hi（ローカット・ハイカットのフィルター、周波数可変）、ミュート・ソロ・キュー（PFL）
+- 入力は 1 トラックに 1 つ：オーディオデバイス（WASAPI 共有／排他、ASIO）、アプリの音（プロセス単位の取り込み）、LAN 内の別 PC の音、サンプラー、ほかのトラックの出力
+- 出力先はトラックごとに複数（マスター・ほかのトラック・出力デバイス・LAN 送信）、センドもあり。仮想マイクには VB-CABLE を使います
+- エンジンは 48kHz 固定。44.1kHz・96kHz などのデバイスは自動で変換し、デバイス間のクロックのずれも補正します
+- デバイスを抜いても止まらず、その部分だけ無音になり、戻ると自動でつなぎ直します
+- 内蔵エフェクト 6 種（EQ・コンプレッサー・ゲート・リバーブ・ディレイ・リミッター）と VST3 プラグイン（スキャン、プラグインの画面、状態の保存）。トラックとマスターに挿せます
+- トラック別録音：選んだトラックを 48kHz / 24bit の WAV または FLAC に、全ファイルを同じ長さでそろえて書きます。録画と一緒に始める・止めることもできます
+- サンプラー：8 バンク × 16 パッド（WAV / FLAC / MP3 / Ogg）。押す間だけ鳴らすなどの動きを選べ、サンプラーもトラックとしてミキサーに入ります
+
+### LAN
+
+- LAN 内の別 PC（このアプリ同士）へ音声を送る（LAN 送信 1〜8、PCM または Opus）、別 PC の音声をトラックの入力にする
+- 相手の検出は mDNS、初回は 6 桁の数字でペアリングします
+
+### デスクトップキャプチャー（capd）
+
+- ビデオミキサー：最大 4 つのミックス、シーンとレイヤー（位置・大きさ・重なり順・クロップ・クロマキー）、カット／フェードの切り替え。ソースはモニター・ウィンドウ・カメラ・動画ファイル・画像・文字・単色
+- 録画：GPU で合成してハードウェアエンコード（NVENC → AMF → QSV → Media Foundation → x264 の順に自動選択）。H.264 / HEVC / AV1（AV1 は対応する GPU のみ）、解像度・ビットレート・レート制御（VBR / CBR / CQP）を設定でき、MKV または MP4 に保存します
+- 音声はミキサーと連動し、マスターやトラックを別々の音声ストリーム（最大 8、AAC / Opus / PCM）として録画できます
+- 映像ミックスの出力先：録画、仮想カメラ（「Desktop Capture Camera」、Win11 は Media Foundation、Win10 は DirectShow）、全画面表示、リモコンのプレビュー、LAN 送信
+- GPU がリセットされたら新しいファイルで録画を続け、ディスクの空きがなくなりそうなら安全に止めます
+
+### UI とリモコン（dc-ui）
+
+- Qt 6 Quick のネイティブ画面（WebView なし）。ローカルとリモコンで同じアプリを使い、RAM 4GB のタブレットでも軽く動きます
+- ページ：ミキサー、映像（シーン・ソース・出力先・プレビュー）、サンプラー、録画、LAN、キー・MIDI、保存・切替、設定
+- リモコンからミキサー・映像・録画の設定と録画の開始・停止ができ、映像のプレビューとモニター音声（LAN 送信を 1 つ選んで聞く）もあります
+- タッチ操作に対応：複数の指で別々のフェーダー、ダブルタップで 0dB、長押しで数値入力、ピンチでストリップ幅の変更、横スワイプでページ移動
+
+### ホットキーと MIDI
+
+- キーボードのホットキーと MIDI 機器（ノート・CC）に動作を割り当てられます。「学習」で実際に押したキーや動かしたつまみを覚えます
+- 動作の例：ミュート・ソロ、フェーダーなどのパラメーター、録画・録音の開始停止、サンプラーのパッド、シーンやバンクの切り替え、スナップショットの呼び出し
+
+### プロファイルとスナップショット
+
+- 設定一式（トラック、エフェクト・VST3 の状態、映像のシーン、録画の設定など）をプロファイルとして保存・切り替えます。自動保存あり
+- ミキサースナップショットを 64 個まで保存し、ボタン・ホットキー・MIDI から呼び出せます
+
+### 常駐アプリ（dc-tray）
+
+- 通知領域に常駐し、mixd・capd をウィンドウなしで起動して見張ります。落ちたら通知して自動で立ち上げ直します
+- アイコンのクリックでミキサーの画面を開きます。ログオン時の起動もメニューから切り替えられます
+
+## 必要なもの
+
+### 使う PC
+
+- Windows 10 / 11（x64）
+- ハードウェアエンコードには NVIDIA / AMD / Intel の GPU（なければ x264 のソフトウェアエンコード）
+- 仮想マイクを使うなら VB-CABLE
+
+リモコンにする PC は Windows（タッチパネル推奨、RAM 4GB で確認済み）です。
+
+### ビルド
+
+| 道具 | 内容 |
 |---|---|
-| `apps/mixd` | 音声エンジン（設定の正本を持つ）。P0 は空の骨格 |
-| `apps/capd` | キャプチャー（画面取得・合成・エンコード・録画）。P2 で録画の骨格（[docs/capd.md](docs/capd.md)） |
-| `apps/ui` | UI（ローカル／リモート共通、Qt 6 Quick 予定）。P0 は仮の実行ファイル |
-| `apps/tray` | 通知領域の常駐アプリ dc-tray（mixd・capd の起動と見張り、UI の呼び出し、ログオン時の起動）。[docs/tray.md](docs/tray.md) |
-| `libs/protocol` | 制御プロトコル：メッセージ、MessagePack コーデック、パラメーターツリー、スキーマ、ルーティング検証、メーターパケット |
-| `libs/control` | 制御プロトコルの TCP サーバー／クライアント（asio） |
-| `libs/shmaudio` | エンジン→キャプチャーの共有メモリ音声リング |
-| `libs/mfvideo` | Media Foundation の H.264 エンコード・デコードと、D3D11 でデコード結果を Qt の画面へ渡す部品（Windows のみ）。P1-V6 で測り、リモコンのプレビュー表示（dc-ui）で使う |
-| `libs/clocksync` | 別クロックのデバイス間で音声を渡すブリッジ（DLL によるドリフト推定、PI 制御、可変レート sinc リサンプラー）と、その検証用のトーン解析・シミュレーター（P1-V2） |
-| `tools/mock_server` | モックサーバー（プロトコルを話す偽エンジン） |
-| `tools/dc_cli` | テスト用クライアント（コマンドライン） |
-| `tools/shm_tone` | 共有メモリ音声の試験用の書き手・読み手 |
-| `tools/capbench` | P1-V3 検証ツール：画面キャプチャー（WGC / Desktop Duplication）→ GPU 上で NV12 変換 → FFmpeg ハードウェアエンコードの負荷計測（Windows のみ）。結果は [docs/verification/v3-capture-encode.md](docs/verification/v3-capture-encode.md) |
-| `tools/loopback_probe` | P1-V1 検証ツール：アプリ単位の音声キャプチャー（WASAPI Process Loopback）の自己テストと手動キャプチャー（Windows のみ）。結果は [docs/verification/v1-process-loopback.md](docs/verification/v1-process-loopback.md) |
-| `tools/drift_sim` | P1-V2 検証ツール：2 台のデバイスのクロックずれを模擬し、`ClockBridge` を 1 時間単位で試すシミュレーター |
-| `tools/drift_test` | P1-V2 検証ツール：実機 2 台（WASAPI）の間でクロックずれ補正を試し、プチノイズと遅延の変化を測る（Windows のみ）。結果は [docs/verification/v2-clock-drift.md](docs/verification/v2-clock-drift.md) |
-| `tests` | 単体テスト・結合テスト（Catch2） |
-| `docs/spec` | [制御プロトコル仕様](docs/spec/protocol.md)、[パラメーター一覧](docs/spec/protocol-params.md)、[共有メモリ音声フォーマット](docs/spec/shm-audio.md) |
+| Visual Studio 2026（または 2022） | ワークロード「C++ によるデスクトップ開発」。プリセットは見つかった中で最も新しいものを使います |
+| CMake 4.2 以上 | VS 2026 を使うのに必要 |
+| vcpkg | 環境変数 `VCPKG_ROOT` を設定。asio・msgpack・Catch2・Opus・FLAC・FFmpeg（NVENC・AMF・QSV・x264）を取得します |
+| Qt 6.10 | `scripts\install-qt.ps1` で `C:\dev\Qt` に入れ、環境変数 `DC_QT_DIR` で見つけます（dc-ui に必要） |
+| JUCE 9 | VST3 ホスト用。CMake が自動で取得します（初回のビルドは 10〜15 分ほど長くなります） |
+
+準備の詳しい手順は [docs/build-and-test.md](docs/build-and-test.md) にあります。
 
 ## ビルドとテスト
 
-CI は使いません。テストはすべてローカルで行います。手順は [docs/build-and-test.md](docs/build-and-test.md) を参照してください。
+CI（GitHub Actions など）は使いません。ビルドとテストは手元の Windows PC で行います。
 
 ```powershell
 .\scripts\test.ps1
 ```
 
+configure → ビルド → 単体・結合テスト（ctest）→ プロセス間の確認を順に行い、`ALL CHECKS PASSED` と出れば合格です。実行ポリシーで止められたら `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1` で実行します。
+
+## 普段使うには
+
+```powershell
+.\scripts\package.ps1             # Release でビルドして build\package\DesktopCapture にまとめる
+.\scripts\package.ps1 -Zip        # zip も作る
+.\scripts\package.ps1 -Install    # %LOCALAPPDATA%\Programs\DesktopCapture に入れる（動いていれば止めて入れ替える）
+```
+
+まとめたフォルダーには Qt の DLL や MSVC のランタイムも入っているので、PC に別途インストールするものはありません。
+
+1. フォルダーの `dc-tray.exe` を起動します。エンジンとキャプチャが裏で立ち上がり、ミキサーの画面が開きます。
+2. 通知領域のアイコンを左クリックで画面を開き、右クリックで状態・再起動・ログオン時に起動・ログ・終了のメニューを出します。
+3. 仮想カメラを使うときは、一度だけ `vcam-install.cmd` を実行します（管理者の確認が 1 回出ます。外すときは `vcam-uninstall.cmd`）。
+
+ログは `%LOCALAPPDATA%\DesktopCapture\logs`、設定は `%APPDATA%\DesktopCapture` にあります。
+
+### リモコンとして使う
+
+まとめたフォルダーをリモコンの PC にコピーし、`dc-ui.exe` をエンジンの PC のアドレスを付けて起動します。
+
+```powershell
+.\dc-ui.exe --connect 192.168.1.10 --remote --fullscreen
+```
+
+初めてつなぐと数字のキーパッドが出ます。エンジンの PC の「LAN」ページでペアリングの受付を始め、表示された 6 桁を入れてください。次からは自動でつながります。
+
+## 構成
+
+| ディレクトリ | 内容 |
+|---|---|
+| `apps/mixd` | 音声エンジン。設定の正本（パラメーターツリー）を持ち、制御プロトコルのサーバーになる |
+| `apps/capd` | キャプチャー（ビデオミキサー、エンコード、録画、仮想カメラ・プレビュー・LAN への映像出力） |
+| `apps/ui` | UI（dc-ui）。ローカルとリモコンで共通 |
+| `apps/tray` | 常駐アプリ（dc-tray） |
+| `apps/vcam` | 仮想カメラ（MF ソースと DirectShow フィルター） |
+| `libs/protocol`・`libs/control` | 制御プロトコル（MessagePack、パラメーターツリー、スキーマ）と TCP サーバー／クライアント |
+| `libs/shmaudio` | エンジン → キャプチャーの共有メモリ音声 |
+| `libs/lanmedia` | LAN メディア伝送（音声・映像の UDP ストリーム） |
+| `libs/clocksync` | デバイス間のクロックずれ補正とレート変換 |
+| `libs/mfvideo` | Media Foundation の H.264 エンコード・デコード（プレビュー表示用） |
+| `tools` | 試験・計測用の道具（モックサーバー、`dc-cli`、各種プローブ） |
+| `tests` | 単体テスト・結合テスト（Catch2） |
+| `scripts` | ビルド・テスト・パッケージ・実機試験のスクリプト |
+
+## ドキュメント
+
+| 文書 | 内容 |
+|---|---|
+| [docs/build-and-test.md](docs/build-and-test.md) | 準備、ビルド、テスト、モックサーバーでの動かし方 |
+| [docs/mixd.md](docs/mixd.md) | 音声エンジン（音の流れ、デバイス、エフェクト、録音、サンプラー、ホットキー・MIDI、プロファイル、LAN） |
+| [docs/capd.md](docs/capd.md) | キャプチャー（ビデオミキサー、録画、プレビュー送出） |
+| [docs/ui.md](docs/ui.md) | UI の各ページとタッチ操作 |
+| [docs/tray.md](docs/tray.md) | 常駐アプリ |
+| [docs/vcam.md](docs/vcam.md) | 仮想カメラ |
+| [docs/spec/](docs/spec/) | [制御プロトコル](docs/spec/protocol.md)、[パラメーター一覧](docs/spec/protocol-params.md)、[共有メモリ音声](docs/spec/shm-audio.md)、[LAN メディア伝送](docs/spec/lan-media.md) |
+| [docs/verification/](docs/verification/) | 技術検証（P1）と長時間試験（P5）の結果 |
+
+## まだできないこと・試していないこと
+
+- LAN 内の別 PC の映像をビデオミキサーのソースにすること（ソースの種類はあるが、今はエラーを報告します）
+- VST3 プラグインの遅延補正（遅延の値を知らせるだけです）
+- 実機で未確認：USB カメラ、外付けドライブの取り外し、本物の GPU リセット（TDR）、2 台目のモニターへの全画面表示の抜き差し、Teams・Zoom での仮想カメラ（Discord は確認済み）、排他・ASIO での入出力遅延、有線 2 台での LAN 音声の遅延。詳しくは [docs/verification/p5-long-run.md](docs/verification/p5-long-run.md)
+
 ## ライセンス
 
-個人用（配布予定なし）。
+個人用で、配布の予定はありません。FFmpeg（GPL 構成、x264 を含む）と JUCE を使っています。
