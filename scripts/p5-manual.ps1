@@ -218,7 +218,7 @@ try {
     if ($Cases -contains 'vcam') {
         Write-Host "`n=== vcam: Discord ===" -ForegroundColor Cyan
         Start-Engine 'vcam'
-        $pp = Popup ("仮想カメラに青地の文字「Desktop Capture P5」を出しています。`n`n1. Discord：ユーザー設定 → 音声・ビデオ → カメラで「Desktop Capture Camera」を選び、テストビデオに文字が映るか見てください。`n" +
+        $pp = Popup ("仮想カメラに青地の文字「Desktop Capture P5」を出しています。`n`nDiscord：ユーザー設定 → 音声・ビデオ → カメラで「Desktop Capture Camera」を選び、テストビデオに文字が映るか見てください。`n" +
                      "`n終わったら OK を押してください（20 分待ちます）。結果はスレッドで教えてください。") 1200
         $log = @(); $last = ''
         $start = Get-Date
