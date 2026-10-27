@@ -183,3 +183,20 @@ TEST_CASE("profile names are file names", "[schema]") {
     for (int k = 0; k < 64; ++k) jp += "あ";
     CHECK(isValidProfileName(jp)); // characters, not bytes
 }
+
+TEST_CASE("string values must be UTF-8", "[schema]") {
+    CHECK(isValidUtf8(""));
+    CHECK(isValidUtf8("C:\\Sounds\\kick.wav"));
+    CHECK(isValidUtf8("\xe5\x8a\xb9\xe6\x9e\x9c\xe9\x9f\xb3.wav")); // 効果音
+    CHECK(isValidUtf8("\xf0\x9f\x8e\xb5"));                           // U+1F3B5
+    CHECK_FALSE(isValidUtf8("\x8c\xf8\x89\xca\x89\xb9.wav"));          // 効果音 in CP932
+    CHECK_FALSE(isValidUtf8("\xe5\x8a"));                                // cut off
+    CHECK_FALSE(isValidUtf8("\xc0\xaf"));                                // overlong "/"
+    CHECK_FALSE(isValidUtf8("\xed\xa0\x80"));                            // surrogate
+    CHECK_FALSE(isValidUtf8("\xf4\x90\x80\x80"));                        // above U+10FFFF
+    const auto& s = schemaV1();
+    const auto* spec = s.find("/sampler/bank/1/pad/1/file");
+    REQUIRE(spec);
+    CHECK(s.validate(*spec, Value{std::string("\x8c\xf8.wav")}, true).code == ErrorCode::TypeMismatch);
+    CHECK_FALSE(s.validate(*spec, Value{std::string("\xe5\x8a\xb9.wav")}, true));
+}

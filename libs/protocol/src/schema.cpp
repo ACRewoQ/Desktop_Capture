@@ -19,6 +19,37 @@ std::string withLastSegmentWildcard(std::string_view pattern) {
 
 } // namespace
 
+bool isValidUtf8(std::string_view s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        const auto c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) {
+            ++i;
+            continue;
+        }
+        std::size_t n = 0;
+        std::uint32_t cp = 0, min = 0;
+        if ((c & 0xE0) == 0xC0) {
+            n = 1, cp = c & 0x1Fu, min = 0x80;
+        } else if ((c & 0xF0) == 0xE0) {
+            n = 2, cp = c & 0x0Fu, min = 0x800;
+        } else if ((c & 0xF8) == 0xF0) {
+            n = 3, cp = c & 0x07u, min = 0x10000;
+        } else {
+            return false;
+        }
+        for (std::size_t k = 1; k <= n; ++k) {
+            if (i + k >= s.size()) return false;
+            const auto t = static_cast<unsigned char>(s[i + k]);
+            if ((t & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (t & 0x3Fu);
+        }
+        if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+        i += n + 1;
+    }
+    return true;
+}
+
 bool isValidPath(std::string_view path) {
     if (path.size() < 2 || path.front() != '/' || path.back() == '/') return false;
     std::size_t start = 1;
@@ -96,6 +127,8 @@ ValidationError Schema::validate(const ParamSpec& spec, const Value& v, bool fro
                 return {ErrorCode::OutOfRange, toDisplayString(v) + " is not an allowed value"};
         }
     }
+    if (const auto* str = std::get_if<std::string>(&v); str && !isValidUtf8(*str))
+        return {ErrorCode::TypeMismatch, "string is not valid UTF-8"};
     if (!spec.choices.empty()) {
         const auto& s = std::get<std::string>(v);
         if (std::find(spec.choices.begin(), spec.choices.end(), s) == spec.choices.end())

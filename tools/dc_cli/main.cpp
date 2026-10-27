@@ -15,6 +15,10 @@
 
 #include <asio.hpp>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <array>
 #include <charconv>
 #include <cstdio>
@@ -156,6 +160,9 @@ int printSchema(bool markdown) {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8); // the manifest makes argv UTF-8; print the tree's UTF-8 as it is
+#endif
     dc::control::ControlClient::Options opt;
     opt.clientName = "dc-cli";
     std::vector<std::string> args;

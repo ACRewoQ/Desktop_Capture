@@ -685,10 +685,16 @@ TEST_CASE("mixd behind the control server: the sampler library is set only on th
     auto sub = remote.call("/sampler/library/list", {{"dir", std::string("Jingles")}}).get();
     REQUIRE(ok(sub));
     const auto hitPath = pathToUtf8(root / "Jingles" / "hit.wav");
-    CHECK(std::get<std::string>(sub.value).find(hitPath) != std::string::npos);
+    std::string hitJson; // as the JSON writes it (Windows backslashes are escaped)
+    for (char ch : hitPath) hitJson += ch == '\\' ? std::string("\\\\") : std::string(1, ch);
+    CHECK(std::get<std::string>(sub.value).find("\"path\":\"" + hitJson + "\"") != std::string::npos);
     CHECK(remote.call("/sampler/library/list", {{"dir", std::string("..")}}).get().code == proto::ErrorCode::BadRequest);
     CHECK(remote.call("/sampler/library/list", {{"count", std::int64_t{0}}}).get().code == proto::ErrorCode::OutOfRange);
     CHECK(remote.call("/sampler/library/list", {{"offset", std::int64_t{-1}}}).get().code == proto::ErrorCode::OutOfRange);
+
+    // a path in the console's code page (CP932 "効果音" from a non-UTF-8 dc-cli) is refused, not loaded
+    CHECK(local.set({{"/sampler/bank/1/pad/4/file", rootText + "/\x8c\xf8\x89\xca\x89\xb9.wav"}}).get().code ==
+          proto::ErrorCode::TypeMismatch);
 
     // ...and assigns a file from it to a pad
     REQUIRE(ok(remote.set({{"/sampler/bank/1/pad/3/file", hitPath}}).get()));

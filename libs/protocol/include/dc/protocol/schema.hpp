@@ -103,4 +103,8 @@ const Schema& schemaV1();
 // a leading zero), no empty segments, no trailing "/".
 bool isValidPath(std::string_view path);
 
+// Well-formed UTF-8 (no overlong forms, surrogates or values above U+10FFFF). String parameters
+// must be UTF-8: a file path in another code page (CP932 from a console) cannot be opened.
+bool isValidUtf8(std::string_view s);
+
 } // namespace dc::proto
