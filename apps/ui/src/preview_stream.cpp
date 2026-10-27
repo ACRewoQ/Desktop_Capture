@@ -10,6 +10,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <utility>
 
 namespace dc::ui {
 
@@ -37,7 +38,11 @@ qint64 num(const Connection& c, const char* path) {
 
 } // namespace
 
-PreviewStream::PreviewStream(Connection& connection, QObject* parent) : QObject(parent), connection_(connection) {
+PreviewStream::PreviewStream(Connection& connection, QObject* parent)
+    : PreviewStream(connection, "video/preview", lan::kDefaultVideoPort, parent) {}
+
+PreviewStream::PreviewStream(Connection& connection, std::string stream, std::uint16_t knockPort, QObject* parent)
+    : QObject(parent), connection_(connection), stream_(std::move(stream)), knockPort_(knockPort) {
     retry_.setSingleShot(true);
     connect(&retry_, &QTimer::timeout, this, &PreviewStream::follow);
     connect(&tick_, &QTimer::timeout, this, &PreviewStream::tick);
@@ -126,10 +131,10 @@ void PreviewStream::follow() {
             emit changed();
             return;
         }
-        // capd sends from the engine's host, normally from UDP 47811: knock there so that a firewall
-        // that only lets replies in (a remote on a "public" network) lets the stream in.
+        // capd sends from the engine's host, normally from UDP 47811 (47813 for video/next): knock there
+        // so that a firewall that only lets replies in (a remote on a "public" network) lets the stream in.
         try {
-            input_->setExpectedSource(lan::UdpTransport::resolve(connection_.host().toStdString(), lan::kDefaultVideoPort));
+            input_->setExpectedSource(lan::UdpTransport::resolve(connection_.host().toStdString(), knockPort_));
         } catch (const std::exception&) {
         }
         lastTick_ = QDateTime::currentMSecsSinceEpoch();
@@ -143,7 +148,7 @@ void PreviewStream::follow() {
 void PreviewStream::subscribe() {
     requesting_ = true;
     const std::uint64_t gen = generation_;
-    connection_.call("/lan/subscribe", {{"stream", std::string("video/preview")}, {"port", std::int64_t{input_->localPort()}}},
+    connection_.call("/lan/subscribe", {{"stream", stream_}, {"port", std::int64_t{input_->localPort()}}},
                      [this, gen](const Result& r) {
                          const auto* id = std::get_if<std::int64_t>(&r.value);
                          if (gen != generation_) {  // closed meanwhile

@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace dc::lan {
@@ -43,7 +44,10 @@ public:
     using Frame = lan::VideoReceiver::Frame;
     using Sink = std::function<void(const Frame&)>;
 
+    // stream: "video/preview" (the mix as it goes out) or "video/next" (its next scene alone, for the
+    // scene page); knockPort: the UDP port capd sends that stream from.
     explicit PreviewStream(Connection& connection, QObject* parent = nullptr);
+    PreviewStream(Connection& connection, std::string stream, std::uint16_t knockPort, QObject* parent = nullptr);
     ~PreviewStream() override;
 
     // A viewer came on screen: subscribes while at least one is attached. The first frame a new viewer
@@ -79,6 +83,8 @@ private:
     void syncClock();
 
     Connection& connection_;
+    std::string stream_;
+    std::uint16_t knockPort_;
     std::unique_ptr<lan::VideoInput> input_;
     int subscription_ = 0;
     bool requesting_ = false;

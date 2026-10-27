@@ -238,8 +238,13 @@ TEST_CASE("two engines: a bus sent as a LAN stream plays on the other engine's t
         CHECK(peer.call("/mixer/track/add").get().code == proto::ErrorCode::Unauthorized);
         CHECK(peer.call("/lan/subscribe", {{"stream", std::string("audio/9")}, {"port", std::int64_t{5000}}}).get().code ==
               proto::ErrorCode::OutOfRange);
+        CHECK(peer.call("/lan/subscribe", {{"stream", std::string("video/scene")}, {"port", std::int64_t{5000}}}).get().code ==
+              proto::ErrorCode::OutOfRange);
         auto r = peer.call("/lan/subscribe", {{"stream", std::string("audio/2")}, {"port", std::int64_t{5000}}}).get();
         REQUIRE(r.code == proto::ErrorCode::Ok);
+        auto next = peer.call("/lan/subscribe", {{"stream", std::string("video/next")}, {"port", std::int64_t{5001}}}).get();
+        REQUIRE(next.code == proto::ErrorCode::Ok);
+        CHECK(waitFor(*ca, [](const proto::ParamTree& t) { return proto::lanSubscriptions(t, "video/next").size() == 1; }));
         CHECK(waitFor(*ca, [](const proto::ParamTree& t) { return t.getAs<std::int64_t>("/lan/stream/2/subscribers") == 1; }));
         CHECK(ca->tree().getAs<bool>("/lan/stream/2/active") == false); // nothing routed to lan/2
         CHECK(peer.call("/lan/unsubscribe", {{"id", std::int64_t{1}}}).get().code == proto::ErrorCode::Unauthorized);

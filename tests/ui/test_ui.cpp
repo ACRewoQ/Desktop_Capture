@@ -196,6 +196,36 @@ private slots:
         QCOMPARE(int(frames), before);
     }
 
+    void nextSceneStreamSubscribesToVideoNext() {
+        // The scene page's picture: the same viewer class on capd's video/next stream.
+        std::mutex m;
+        std::vector<std::string> streams;
+        Harness h(0, 77, [&](control::ControlServer& s) {
+            s.registerMethod("/lan/subscribe", [&](control::CallContext& ctx) {
+                std::lock_guard lock(m);
+                streams.push_back(std::get<std::string>(ctx.call.args.at("stream")));
+                proto::Result r;
+                r.value = std::int64_t{static_cast<std::int64_t>(streams.size())};
+                return r;
+            });
+            s.registerMethod("/lan/unsubscribe", [&](control::CallContext&) { return proto::Result{}; });
+        });
+        ui::Connection c(options(h.port()));
+        ui::PreviewStream next(c, "video/next", lan::kDefaultNextVideoPort);
+        c.start();
+        QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+        ui::waitUntil([] { return false; }, 100);
+        QVERIFY(!next.subscribed());
+        const int sink = next.attach([](const ui::PreviewStream::Frame&) {});
+        QVERIFY(ui::waitUntil([&] { return next.subscribed(); }, 2000));
+        {
+            std::lock_guard lock(m);
+            QCOMPARE(streams, std::vector<std::string>{"video/next"});
+        }
+        next.detach(sink);
+        QVERIFY(!next.subscribed());
+    }
+
     void monitorAudioPlaysTheChosenStream() {
         // mixd's side: subscription number 9 (and 10 for the second stream), stream and port recorded.
         std::mutex m;

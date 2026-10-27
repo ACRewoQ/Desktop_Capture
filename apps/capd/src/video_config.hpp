@@ -89,6 +89,14 @@ struct VideoConfig {
 
 VideoConfig videoConfigFromTree(const proto::ParamTree& tree);
 
+// The "next" view of a mix (stream video/next): its preview scene alone, as if it were on air, on the same canvas.
+// No transition: a new preview scene shows at once. capd runs it as a mix of its own (kNextViewKey + mix), so it
+// ticks and keeps its sources like a real one while somebody watches.
+inline constexpr int kNextViewKey = 100;
+MixConfig nextSceneView(const MixConfig& mix);
+// The settings of runtime mix `key` (1..4 or kNextViewKey + 1..4); false when that mix does not exist.
+bool mixForKey(const VideoConfig& cfg, int key, MixConfig& out);
+
 // Where a layer lands: destination rectangle in canvas pixels and the part of the source texture it shows
 // (0..1 texture coordinates, after cropping and, for "fill", cutting what falls outside the box).
 struct LayerGeometry {

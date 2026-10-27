@@ -1,9 +1,11 @@
 import QtQuick
 import DcUi.Params
+import DcUi.Preview
 
-// The layout of one scene on the mix's canvas: every layer as a box (no video here; capd composites).
-// A tap selects the front-most layer under the finger, a double tap opens its settings. The selected
-// layer moves with a drag and resizes from its corner; edges snap to the canvas edges and centre.
+// The layout of one scene on the mix's canvas: every layer as a box, over the scene's live picture when
+// `stream` is set (capd composites; the boxes then only outline the layers). A tap selects the
+// front-most layer under the finger, a double tap opens its settings. The selected layer moves with a
+// drag and resizes from its corner; edges snap to the canvas edges and centre.
 Item {
     id: root
     property int scene: 0
@@ -11,6 +13,11 @@ Item {
     property var model: null       // ParamList of /video/scene/<scene>/layer, front first
     property int selected: 0
     property bool dragging: false
+    // The picture under the boxes: previewStream / nextStream, or null for none. It is received only
+    // while set and on screen.
+    property var stream: null
+    property string note: ""   // why there is no picture, shown in the corner
+    readonly property bool videoShowing: video.showing
     // A finger is on the canvas: the page around it must not scroll (narrow layout) while a layer
     // is selected, or it would take the drag from the layer.
     readonly property bool touching: finger.active
@@ -62,6 +69,20 @@ Item {
         border.color: Theme.border
         clip: true
 
+        // capd fits the canvas into the stream's frame (black bars when their shapes differ), and this
+        // item fits the frame into itself: sized to the frame's shape and centred, the canvas part of
+        // the picture covers the stage exactly and the bars fall outside (clipped).
+        PreviewVideo {
+            id: video
+            objectName: "sceneVideo"
+            readonly property real frameAspect: frameSize.width > 0 && frameSize.height > 0
+                                                ? frameSize.width / frameSize.height : root.aspect
+            anchors.centerIn: parent
+            width: frameAspect > root.aspect ? stage.height * frameAspect : stage.width
+            height: frameAspect > root.aspect ? stage.height : stage.width / frameAspect
+            stream: root.stream
+        }
+
         // Thirds and centre lines, faint, to help placing things.
         Repeater {
             model: [1 / 2]
@@ -105,7 +126,8 @@ Item {
                 height: Math.max(2, stage.height * lh.value)
                 z: root.model ? root.model.count - index : 0
                 opacity: lVisible.value ? 1 : 0.3
-                color: sKind.value === "color" ? Video.argb(sColor.value) : Qt.rgba(0.31, 0.76, 0.97, 0.12 + 0.18 * lOpacity.value)
+                color: root.videoShowing ? (isSelected ? Qt.rgba(0.31, 0.76, 0.97, 0.12) : "transparent")
+                       : sKind.value === "color" ? Video.argb(sColor.value) : Qt.rgba(0.31, 0.76, 0.97, 0.12 + 0.18 * lOpacity.value)
                 border.width: isSelected ? 2 : 1
                 border.color: isSelected ? Theme.accent : "#80ffffff"
 
@@ -114,11 +136,13 @@ Item {
                     color: "white"
                     style: Text.Outline
                     styleColor: "black"
-                    font.pixelSize: Math.max(10, Math.min(16, box.height / 5))
+                    // Over the picture only the name, small, in the corner.
+                    font.pixelSize: root.videoShowing ? 11 : Math.max(10, Math.min(16, box.height / 5))
                     elide: Text.ElideRight
-                    wrapMode: Text.Wrap
+                    wrapMode: root.videoShowing ? Text.NoWrap : Text.Wrap
+                    maximumLineCount: root.videoShowing ? 1 : 100
                     text: (lSource.value, sKind.value, lName.value || Video.sourceName(lSource.value))
-                          + (sKind.value === "text" && sText.value ? "\n" + sText.value : "")
+                          + (!root.videoShowing && sKind.value === "text" && sText.value ? "\n" + sText.value : "")
                 }
 
                 DragHandler {
@@ -173,6 +197,28 @@ Item {
                     }
                 }
             }
+        }
+    }
+
+    // Why there is no picture (or not yet), small in the bottom-left corner.
+    Rectangle {
+        readonly property string text: root.note
+                                       || (root.stream && !video.showing ? (video.error || root.stream.statusText || "映像を待っています") : "")
+        objectName: "sceneVideoNote"
+        visible: text.length > 0
+        anchors { left: stage.left; bottom: stage.bottom; margins: 6 }
+        width: Math.min(noteText.implicitWidth + 12, stage.width - 12)
+        height: noteText.implicitHeight + 6
+        radius: 4
+        color: "#a0000000"
+        Text {
+            id: noteText
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, stage.width - 24)
+            elide: Text.ElideRight
+            color: Theme.subText
+            font.pixelSize: 12
+            text: parent.text
         }
     }
 

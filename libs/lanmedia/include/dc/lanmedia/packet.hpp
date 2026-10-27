@@ -25,6 +25,7 @@ inline constexpr std::size_t kMaxMediaPayloadBytes = kMaxDatagramBytes - kMediaH
 inline constexpr std::size_t kMaxVideoFragmentBytes = kMaxMediaPayloadBytes - kVideoHeaderBytes;
 inline constexpr std::uint16_t kDefaultMediaPort = 47810; // mixd (audio streams)
 inline constexpr std::uint16_t kDefaultVideoPort = 47811; // capd (video streams)
+inline constexpr std::uint16_t kDefaultNextVideoPort = 47813; // capd (video/next, the scene page's picture)
 
 enum class PacketType : std::uint8_t { Media = 1, Report = 2 };
 enum class MediaKind : std::uint8_t { Audio = 1, Video = 2 };

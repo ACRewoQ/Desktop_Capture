@@ -95,8 +95,9 @@ public:
     // The engine's tree (any thread; cheap when nothing video-related changed).
     void update(const proto::ParamTree& tree);
 
-    // Lease on mix n (1..4). Null when the mix does not exist in the last tree.
-    std::shared_ptr<VideoMix> acquire(int mix);
+    // Lease on mix n (1..4). Null when the mix does not exist in the last tree. With next, the lease is on the
+    // mix's "next" view instead (its preview scene alone, nextSceneView()), which runs as a mix of its own.
+    std::shared_ptr<VideoMix> acquire(int mix, bool next = false);
 
     void setReporter(Reporter r);
     // Send the monitor and camera lists again, and the window list when withWindows (event video.devices.refresh).

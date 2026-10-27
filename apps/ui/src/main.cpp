@@ -20,6 +20,7 @@
 #include "strip_model.hpp"
 #include "touch_check.hpp"
 
+#include "dc/lanmedia/packet.hpp"
 #include "dc/protocol/constants.hpp"
 #include "dc/version.hpp"
 
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
     dc::ui::ParamHub params(connection);
     dc::ui::RouteChoices routes(connection);
     dc::ui::PreviewStream preview(connection);
+    dc::ui::PreviewStream next(connection, "video/next", dc::lan::kDefaultNextVideoPort);
     dc::ui::MonitorAudio monitor(connection);
     if (cli.isSet("monitor")) monitor.setStream(cli.value("monitor").toInt());
     qmlRegisterType<dc::ui::ParamValue>("DcUi.Params", 1, 0, "Param");
@@ -157,6 +159,7 @@ int main(int argc, char** argv) {
     engine.rootContext()->setContextProperty(QStringLiteral("params"), &params);
     engine.rootContext()->setContextProperty(QStringLiteral("routes"), &routes);
     engine.rootContext()->setContextProperty(QStringLiteral("previewStream"), &preview);
+    engine.rootContext()->setContextProperty(QStringLiteral("nextStream"), &next);
     engine.rootContext()->setContextProperty(QStringLiteral("monitorAudio"), &monitor);
     engine.rootContext()->setContextProperty(QStringLiteral("startFullScreen"), cli.isSet("fullscreen"));
     engine.rootContext()->setContextProperty(QStringLiteral("startPage"), cli.value("page"));

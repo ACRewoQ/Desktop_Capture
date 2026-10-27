@@ -165,10 +165,10 @@ void VideoMix::Shared::applyConfig() {
     dirty = false;
     cfg = latest;
     for (auto& [id, m] : mixes) {
-        auto it = cfg.mixes.find(id);
-        m->exists = it != cfg.mixes.end();
+        MixConfig c;
+        m->exists = mixForKey(cfg, id, c);
         if (m->exists) {
-            m->cfg = it->second;
+            m->cfg = c;
             m->settings = mixSettingsOf(m->cfg);
         }
     }
@@ -737,23 +737,31 @@ void VideoEngine::update(const proto::ParamTree& tree) {
             rt->settings = mixSettingsOf(m);
         }
     }
+    for (auto& [key, rt] : s.mixes) {  // "next" views that were acquired before
+        MixConfig c;
+        if (key > kNextViewKey && !rt->running && mixForKey(s.latest, key, c)) {
+            rt->cfg = c;
+            rt->settings = mixSettingsOf(c);
+        }
+    }
 }
 
-std::shared_ptr<VideoMix> VideoEngine::acquire(int mix) {
+std::shared_ptr<VideoMix> VideoEngine::acquire(int mix, bool next) {
     auto& s = *impl_->shared;
     std::lock_guard lock(s.mutex);
-    auto cfg = s.latest.mixes.find(mix);
-    if (cfg == s.latest.mixes.end()) return nullptr;
-    auto& rt = s.mixes[mix];
+    const int key = next ? kNextViewKey + mix : mix;
+    MixConfig cfg;
+    if (mix < 1 || mix >= kNextViewKey || !mixForKey(s.latest, key, cfg)) return nullptr;
+    auto& rt = s.mixes[key];
     if (!rt) rt = std::make_shared<VideoMix::Shared::Mix>();
     rt->exists = true;
     if (!rt->running) {
-        rt->cfg = cfg->second;
-        rt->settings = mixSettingsOf(cfg->second);
+        rt->cfg = cfg;
+        rt->settings = mixSettingsOf(cfg);
     }
     ++rt->leases;
     s.dirty = true;  // let the video thread pick up the lease with the current config
-    return std::shared_ptr<VideoMix>(new VideoMix(impl_->shared, mix));
+    return std::shared_ptr<VideoMix>(new VideoMix(impl_->shared, key));
 }
 
 void VideoEngine::setReporter(Reporter r) {

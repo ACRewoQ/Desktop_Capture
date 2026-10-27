@@ -295,7 +295,7 @@ Item {
                     label: subClient.value || subAddress.value
                     note: subAddress.value
                     value: String(subStream.value).startsWith("audio/") ? "LAN " + String(subStream.value).substring(6)
-                         : subStream.value === "video/preview" ? "映像プレビュー" : subStream.value === "video/lan" ? "映像の LAN 送信" : subStream.value
+                         : subStream.value === "video/preview" ? "映像プレビュー" : subStream.value === "video/next" ? "シーン画面の映像" : subStream.value === "video/lan" ? "映像の LAN 送信" : subStream.value
                 }
             }
             Text {
