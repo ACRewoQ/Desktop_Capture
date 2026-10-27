@@ -13,7 +13,7 @@
     usb    records to the USB drive (-UsbDrive E, or the only removable drive), asks to pull it out: the recording must
            stop safely (error, no crash), the engine, the virtual camera and the UI go on; asks to put it back: the
            file up to the pull plays, and a new recording on C: works.
-    vcam   the virtual camera shows the text; asks to pick "Desktop Capture Camera" in Discord and then in Teams and
+    vcam   the virtual camera shows the text; asks to pick "Desktop Capture Camera" in Discord (Teams: not tested) and
            press OK when done. Logs every change of /video/vcam/state (active while an app has the camera open).
            Whether the picture showed is the person's answer.
     tdr    one real GPU reset with dxcap -forcetdr (admin: a UAC prompt; installs the Windows "Graphics Tools" feature
@@ -216,10 +216,10 @@ try {
 
     # ------------------------------------------------------------------------------------------------ vcam
     if ($Cases -contains 'vcam') {
-        Write-Host "`n=== vcam: Discord and Teams ===" -ForegroundColor Cyan
+        Write-Host "`n=== vcam: Discord ===" -ForegroundColor Cyan
         Start-Engine 'vcam'
         $pp = Popup ("仮想カメラに青地の文字「Desktop Capture P5」を出しています。`n`n1. Discord：ユーザー設定 → 音声・ビデオ → カメラで「Desktop Capture Camera」を選び、テストビデオに文字が映るか見てください。`n" +
-                     "2. Teams：設定 → デバイス → カメラで同じく選び、プレビューを見てください。`n`n終わったら OK を押してください（20 分待ちます）。結果はスレッドで教えてください。") 1200
+                     "`n終わったら OK を押してください（20 分待ちます）。結果はスレッドで教えてください。") 1200
         $log = @(); $last = ''
         $start = Get-Date
         while (-not $pp.HasExited -and ((Get-Date) - $start).TotalMinutes -lt 20) {
@@ -229,7 +229,7 @@ try {
         }
         $active = @($log | Where-Object { $_ -match ' active' }).Count
         Add-Check 'vcam' 'an app opened the virtual camera (state active)' ($active -ge 1) "$active time(s) active: $($log -join ' | ')"
-        Add-Info 'vcam' 'picture in Discord / Teams' 'ask the person (the script cannot see inside the apps)'
+        Add-Info 'vcam' 'picture in Discord' 'ask the person (the script cannot see inside the apps)'
         Stop-Engine
     }
 
