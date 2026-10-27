@@ -14,6 +14,32 @@ Item {
 
     signal closed()
 
+    // While shown, what lies under the sheet is disabled: the siblings stacked below it and the
+    // parent's own pointer handlers (Sheets.block). Taps on a sheet's button otherwise also reach
+    // the button under it (mouse), and drags reach the faders and handlers under it (both).
+    property var covered: null // while shown: what it disabled
+
+    function cover() {
+        const p = parent
+        if (covered || !p) return
+        const mine = p.children.indexOf(root)
+        const list = []
+        p.children.forEach((c, i) => { if (c !== root && (c.z < root.z || (c.z === root.z && i < mine))) list.push(c) })
+        p.data.forEach(d => { if (d && d.grabPermissions !== undefined) list.push(d) }) // the parent's handlers
+        list.forEach(t => Sheets.block(t))
+        covered = list
+        Sheets.openCount++
+    }
+    function uncover() {
+        if (!covered) return
+        covered.forEach(t => Sheets.unblock(t))
+        covered = null
+        Sheets.openCount--
+    }
+    onShownChanged: shown ? cover() : uncover()
+    Component.onCompleted: if (shown) cover()
+    Component.onDestruction: uncover() // a page unloaded with its sheet still open
+
     function close() {
         if (!shown) return
         shown = false
