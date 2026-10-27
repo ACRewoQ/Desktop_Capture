@@ -312,7 +312,9 @@ QString ParamValue::type() const {
 
 bool ParamValue::readOnly() const {
     const ParamSpec* s = specOf(key_);
-    return !s || s->access == Access::ReadOnly;
+    if (!s || s->access == Access::ReadOnly) return true;
+    // the engine refuses a remote controller's Set of these (protocol.md 5.4.3)
+    return s->access == Access::LocalOnly && hub_ && hub_->connection().remote();
 }
 
 QVariant ParamValue::min() const {

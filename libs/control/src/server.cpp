@@ -264,6 +264,20 @@ void ControlServer::onMessage(const std::shared_ptr<Session>& s, Message msg) {
                     s->send(r);
                     return;
                 }
+                if (s->info.role == ClientRole::Remote) {
+                    // settings that only the engine PC may change (Access::LocalOnly)
+                    for (const auto& c : m.changes) {
+                        const ParamSpec* spec = store_.schema().find(c.path);
+                        if (!spec || spec->access != Access::LocalOnly) continue;
+                        Result r;
+                        r.id = m.id;
+                        r.code = ErrorCode::Unauthorized;
+                        r.message = "only the engine PC can change this setting";
+                        r.path = c.path;
+                        s->send(r);
+                        return;
+                    }
+                }
                 auto outcome = store_.applySet(m, s->info.name);
                 if (outcome.delta) emitDelta(*outcome.delta);
                 s->send(outcome.result);

@@ -36,7 +36,9 @@ inline constexpr int kMaxProfiles = 64;    // /profile/list/#
 inline constexpr double kMinVolumeDb = -144.0; // treated as -inf (silence)
 inline constexpr double kMaxVolumeDb = 12.0;
 
-enum class Access : std::uint8_t { ReadWrite, ReadOnly };
+// LocalOnly: written by the engine PC's own clients only. A remote controller (role 1) reads it but its
+// Set is refused with unauthorized (the sampler library folder, protocol.md 5.4.3).
+enum class Access : std::uint8_t { ReadWrite, ReadOnly, LocalOnly };
 
 // Describes one parameter pattern. In a pattern, "#" matches an index segment (1, 2, ...)
 // and "*" matches any single name segment (used for plugin parameter names).
@@ -100,5 +102,9 @@ const Schema& schemaV1();
 // Valid path syntax: starts with "/", segments of [a-z0-9_.-] (index segments are digits without
 // a leading zero), no empty segments, no trailing "/".
 bool isValidPath(std::string_view path);
+
+// Well-formed UTF-8 (no overlong forms, surrogates or values above U+10FFFF). String parameters
+// must be UTF-8: a file path in another code page (CP932 from a console) cannot be opened.
+bool isValidUtf8(std::string_view s);
 
 } // namespace dc::proto

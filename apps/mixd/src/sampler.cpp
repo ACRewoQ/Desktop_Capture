@@ -180,12 +180,19 @@ void SampleLoader::run() {
         r.pad = req.pad;
         r.file = req.file;
         r.serial = req.serial;
-        DecodedAudio audio;
-        if (decodeAudioFile(pathFromUtf8(req.file), audio, &r.error)) {
-            auto data = std::make_shared<SampleData>();
-            data->samples = std::move(audio.samples);
-            data->frames = audio.frames;
-            r.sample = std::move(data);
+        try {
+            DecodedAudio audio;
+            if (decodeAudioFile(pathFromUtf8(req.file), audio, &r.error)) {
+                auto data = std::make_shared<SampleData>();
+                data->samples = std::move(audio.samples);
+                data->frames = audio.frames;
+                r.sample = std::move(data);
+            }
+        } catch (const std::exception& e) {
+            // a path the file system cannot convert (not UTF-8), out of memory, ...: the pad shows an
+            // error instead of the engine ending here
+            r.sample.reset();
+            r.error = std::string("cannot read the file: ") + e.what();
         }
         callback_(std::move(r));
     }

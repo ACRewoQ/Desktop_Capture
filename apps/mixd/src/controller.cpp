@@ -1,5 +1,6 @@
 #include "controller.hpp"
 #include "lan_service.hpp"
+#include "sample_library.hpp"
 
 #include "dc/protocol/constants.hpp"
 #include "dc/control/video_methods.hpp"
@@ -177,6 +178,7 @@ void Controller::registerMethods() {
         if (!engine_.mixer().sampler().post(c)) return error(ErrorCode::Internal, "sampler queue full");
         return Result{};
     });
+    server_.registerMethod("/sampler/library/list", [this](CallContext& ctx) { return libraryList(ctx); });
     server_.registerMethod("/devices/refresh", [this](CallContext&) {
         devices_.refresh();
         if (options_.onDevicesRefresh) options_.onDevicesRefresh();
@@ -833,6 +835,22 @@ Result Controller::samplerCommand(CallContext& ctx, Sampler::Command::Type type)
     c.index = static_cast<std::int16_t>(padIndex(static_cast<int>(bank), static_cast<int>(*pad)));
     if (!engine_.mixer().sampler().post(c)) return error(ErrorCode::Internal, "sampler queue full");
     return {};
+}
+
+Result Controller::libraryList(CallContext& ctx) const {
+    const auto& args = ctx.call.args;
+    const auto offset = intArg(args, "offset").value_or(0);
+    const auto count = intArg(args, "count").value_or(static_cast<std::int64_t>(kLibraryListDefaultCount));
+    if (offset < 0) return error(ErrorCode::OutOfRange, "offset must be 0 or more");
+    if (count < 1 || count > static_cast<std::int64_t>(kLibraryListMaxCount))
+        return error(ErrorCode::OutOfRange, "count must be 1 to 1000");
+    const auto root = server_.store().tree().getAs<std::string>("/sampler/library/folder").value_or("");
+    auto l = listSampleLibrary(root, strArg(args, "dir").value_or(""), static_cast<std::size_t>(offset),
+                               static_cast<std::size_t>(count));
+    if (l.code != ErrorCode::Ok) return error(l.code, l.message);
+    Result r;
+    r.value = libraryListingJson(l);
+    return r;
 }
 
 } // namespace dc::mixd

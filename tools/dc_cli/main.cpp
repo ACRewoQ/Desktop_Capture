@@ -15,6 +15,10 @@
 
 #include <asio.hpp>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <array>
 #include <charconv>
 #include <cstdio>
@@ -115,7 +119,7 @@ int printSchema(bool markdown) {
         std::cout << "| パス | 型 | 書込 | 保存 | 範囲・選択肢 | 既定値 | 説明 |\n|---|---|---|---|---|---|---|\n";
         for (const auto& s : schema.params()) {
             std::cout << "| `" << s.pattern << "` | " << typeName(s.type) << " | "
-                      << (s.access == Access::ReadOnly ? "ro" : "rw") << " | "
+                      << (s.access == Access::ReadOnly ? "ro" : s.access == Access::LocalOnly ? "local" : "rw") << " | "
                       << (inSnapshot(s) ? "P S" : inProfile(s) ? "P" : "") << " | " << rangeText(s) << " | `"
                       << toDisplayString(s.defaultValue) << "` | " << s.description << " |\n";
         }
@@ -146,7 +150,7 @@ int printSchema(bool markdown) {
         }
     } else {
         for (const auto& s : schema.params())
-            std::cout << s.pattern << "  " << typeName(s.type) << (s.access == Access::ReadOnly ? " ro" : " rw")
+            std::cout << s.pattern << "  " << typeName(s.type) << (s.access == Access::ReadOnly ? " ro" : s.access == Access::LocalOnly ? " local" : " rw")
                       << "  [" << rangeText(s) << "]  default " << toDisplayString(s.defaultValue) << "\n";
         for (const auto& m : schema.methods()) std::cout << "call " << m.pattern << " (" << m.args << ")\n";
     }
@@ -156,6 +160,9 @@ int printSchema(bool markdown) {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8); // the manifest makes argv UTF-8; print the tree's UTF-8 as it is
+#endif
     dc::control::ControlClient::Options opt;
     opt.clientName = "dc-cli";
     std::vector<std::string> args;

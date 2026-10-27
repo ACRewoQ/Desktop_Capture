@@ -6,6 +6,7 @@ Sheet {
     id: root
     property int bank: 0
     property int pad: 0
+    signal libraryWanted(int bank, int pad) // "ライブラリから選ぶ"; the page opens LibrarySheet
     readonly property string base: pad > 0 ? "/sampler/bank/" + bank + "/pad/" + pad : ""
 
     function open(b, p) {
@@ -38,6 +39,14 @@ Sheet {
         label: "ファイル"
         note: "エンジンの PC のパス。WAV・FLAC・MP3・Ogg、10 分まで"
         ParamText { objectName: "padFile"; path: root.base ? root.base + "/file" : ""; title: "音声ファイルのパス"; emptyText: "空" }
+    }
+    MenuButton {
+        objectName: "padFromLibrary"
+        width: root.contentWidth
+        height: Theme.touch
+        fontSize: 15
+        label: "ライブラリから選ぶ…"
+        onTapped: root.libraryWanted(root.bank, root.pad)
     }
     InfoRow {
         label: "状態"

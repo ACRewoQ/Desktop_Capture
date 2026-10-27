@@ -3,7 +3,7 @@
 
 # パラメーター一覧（プロトコル v1）
 
-`#` は 1 から始まる番号、`*` は任意の名前を表します。書込が ro のものはエンジンだけが変更します。保存の P はプロファイルに、S はミキサースナップショットにも入るもの（protocol.md 5.10）です。
+`#` は 1 から始まる番号、`*` は任意の名前を表します。書込が ro のものはエンジンだけが変更し、local のものはエンジンの PC のクライアントだけが変更できます（リモコンの Set は `unauthorized`）。保存の P はプロファイルに、S はミキサースナップショットにも入るもの（protocol.md 5.10）です。
 
 | パス | 型 | 書込 | 保存 | 範囲・選択肢 | 既定値 | 説明 |
 |---|---|---|---|---|---|---|
@@ -120,6 +120,7 @@
 | `/recorder/folder_name` | string | rw | P |  | `"%Y-%m-%d_%H-%M-%S"` | テイクのフォルダー名パターン（strftime 形式） |
 | `/recorder/with_capture` | bool | rw | P |  | `true` | 録画（/capture）の開始・停止に合わせて録音も開始・停止する |
 | `/sampler/active_bank` | int | rw | P | 1 〜 8 | `1` | 表示・ホットキー・MIDI の対象バンク |
+| `/sampler/library/folder` | string | local | P |  | `""` | ライブラリのフォルダー（エンジンの PC の絶対パス。"" = なし）。リモコンからは変えられない |
 | `/sampler/bank/#/name` | string | rw | P |  | `""` | バンク名 |
 | `/sampler/bank/#/pad/#/file` | string | rw | P |  | `""` | 音声ファイルのパス（WAV / FLAC / MP3 / Ogg Vorbis。"" = 空） |
 | `/sampler/bank/#/pad/#/name` | string | rw | P |  | `""` | パッドの表示名（"" = ファイル名） |
@@ -297,6 +298,7 @@
 | `/recorder/stop` | なし | nil | P3 | トラック別録音を停止 |
 | `/sampler/trigger` | pad:int, bank:int? | nil | P3 | パッドを押す（bank の既定は /sampler/active_bank）。動きは mode による |
 | `/sampler/release` | pad:int, bank:int? | nil | P3 | パッドを離す（hold のパッドが止まる） |
+| `/sampler/library/list` | dir:string?, offset:int?, count:int? | string（JSON） | P5 | ライブラリのフォルダー 1 段分（dir はライブラリからの相対パス、/ 区切り）。サブフォルダーと読める音声ファイル |
 | `/sampler/stop` | bank:int? | nil | P3 | 再生中のパッドを止める（bank なし = 全バンク） |
 | `/video/source/add` | kind:string, name:string? | int（新しいソース番号） | P3 | ソースを追加。番号は空いている最小の番号 |
 | `/video/source/remove` | source:int | nil | P3 | ソースを削除。そのソースを表示していたレイヤーも消える |

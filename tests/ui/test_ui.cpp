@@ -18,6 +18,9 @@
 #include "dc/lanmedia/video_link.hpp"
 
 #include <QJSEngine>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -586,6 +589,41 @@ private slots:
         // A recording audio stream takes a track.
         hub.set(QStringLiteral("/capture/audio/4/source"), QStringLiteral("track/2"));
         QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/capture/audio/4/source").value_or("") == "track/2"; }, 2000));
+    }
+
+    void samplerLibrary() {
+        // The pad sheet's library list (the mock has a pretend C:/Sounds); the folder setting is
+        // read-only for a remote controller, picking files is not.
+        Harness h;
+        for (const bool remote : {false, true}) {
+            auto o = options(h.port());
+            if (remote) o.role = proto::ClientRole::Remote;
+            ui::Connection c(o);
+            ui::ParamHub hub(c);
+            c.start();
+            QVERIFY(ui::waitUntil([&] { return c.ready(); }, 3000));
+            QCOMPARE(c.remote(), remote);
+            ui::ParamValue folder, padFile;
+            folder.setPath(QStringLiteral("/sampler/library/folder"));
+            padFile.setPath(QStringLiteral("/sampler/bank/1/pad/1/file"));
+            QCOMPARE(folder.readOnly(), remote);
+            QVERIFY(!padFile.readOnly());
+
+            std::optional<proto::Result> top, sub;
+            c.call("/sampler/library/list", {}, [&](const proto::Result& r) { top = r; });
+            c.call("/sampler/library/list", {{"dir", std::string("Jingles")}}, [&](const proto::Result& r) { sub = r; });
+            QVERIFY(ui::waitUntil([&] { return top && sub; }, 2000));
+            QCOMPARE(top->code, proto::ErrorCode::Ok);
+            const auto json = QJsonDocument::fromJson(QByteArray::fromStdString(std::get<std::string>(top->value))).object();
+            QCOMPARE(json.value("total").toInt(), 5);
+            QCOMPARE(json.value("entries").toArray().at(0).toObject().value("folder").toBool(), true);
+            QVERIFY(std::get<std::string>(sub->value).find("C:/Sounds/Jingles/Intro.mp3") != std::string::npos);
+
+            // a file picked from the list goes to the pad as its path
+            const QString pick = remote ? QStringLiteral("C:/Sounds/Jingles/Outro.ogg") : QStringLiteral("C:/Sounds/Laugh.flac");
+            hub.setMany({{QStringLiteral("/sampler/bank/1/pad/1/file"), pick}, {QStringLiteral("/sampler/bank/1/pad/1/name"), QString()}});
+            QVERIFY(ui::waitUntil([&] { return c.tree().getAs<std::string>("/sampler/bank/1/pad/1/file").value_or("") == pick.toStdString(); }, 2000));
+        }
     }
 
     void reconnectsAfterEngineRestart() {

@@ -191,6 +191,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - `session` はエンジンの起動ごとに変わります。クライアントは再接続時に値が変わっていたら、手元の状態をすべて捨ててスナップショットから作り直します。
 - ループバック（127.0.0.1 / ::1）以外からの接続は、role がリモコン（1）か相手のエンジン（3）で、`token` が有効か、受付中のペアリングコードが合っているときだけ受け付けます（8 章）。それ以外は `unauthorized` です。開発用の `mixd --allow-remote` はこの検査を省きます。リモコンの 5 台目は `limit_reached` で拒否します（相手のエンジンは数えません）。
 - `client_id` はクライアントのインストールごとに固定の id です（相手のエンジンは自分の `server_id`）。ペアリングの記録に使います。空でも接続できますが、ペアリングはできません。
+- role = 1（リモコン）は、書込が `local` のパラメーター（protocol-params.md、今は `/sampler/library/folder` だけ）を Set できません（`unauthorized`、`path` 付き。同じ Set のほかの変更も適用しません）。
 - role = 3（相手のエンジン）の接続は、ツリーを読むことと `/lan/subscribe`・`/lan/unsubscribe`・`/session/resync` だけができます。Set と他の Call は `unauthorized` です。
 
 ### 5.2 リビジョン（rev）とデルタ
@@ -227,6 +228,7 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 | `/sampler/trigger` | `pad`:int（1〜16）, `bank`:int?（既定 `/sampler/active_bank`） | nil | P3 | パッドを押す（5.4.3） |
 | `/sampler/release` | `pad`:int, `bank`:int? | nil | P3 | パッドを離す |
 | `/sampler/stop` | `bank`:int?（なし = 全バンク） | nil | P3 | 再生中のパッドを止める |
+| `/sampler/library/list` | `dir`:str?, `offset`:int?, `count`:int?（1〜1000、既定 200） | str（JSON） | P5 | ライブラリのフォルダー 1 段分（5.4.3） |
 | `/track/#/fx/add` ほか | 一覧参照 | | P3 | エフェクトの追加・削除・並べ替え・パラメーター情報（5.7） |
 | `/plugins/scan` | `rescan`:bool? | nil | P3 | VST3 プラグインのスキャン（5.8） |
 | `/devices/refresh` | なし | nil | P2 | デバイス一覧の更新 |
@@ -289,6 +291,11 @@ S: Snapshot{rev=120, params={...全パラメーター...}}
 - 同時に鳴らせるのは 32 音まで。足りないときは一番古い音を止めます。
 - 再生中は `playing` が true になります（約 30Hz で更新）。再生中にファイルを差し替えるとその音は止まります。
 - `pad`・`bank` が範囲外なら `out_of_range` です。
+- ライブラリ：`/sampler/library/folder` にエンジンの PC のフォルダーを絶対パスで入れると、`/sampler/library/list` でその中を 1 段ずつ見られます（UI がパッドの音を一覧から選ぶため）。このパラメーターはエンジンの PC のクライアントだけが変えられ、リモコン（role 1）の Set は `unauthorized` です（protocol-params.md の書込 `local`）。リモコンも一覧を見て、パッドの `file` に一覧の `path` を入れられます。
+  - `dir` はライブラリからの相対パス（`/` 区切り、`""` = 一番上）。`..`・`.`・`\`・`:`・空の区切りを含むと `bad_request` です。
+  - 戻り値：`{"dir":"Jingles","total":12,"offset":0,"truncated":false,"entries":[{"name":"Old","folder":true},{"name":"Intro.wav","path":"C:\\Sounds\\Jingles\\Intro.wav","size":123456}]}`。サブフォルダーと、拡張子が wav・flac・mp3・ogg のファイルだけを、フォルダー → ファイルの順、名前の自然順（「9」の次に「10」）で並べます。`.` で始まる名前は出しません。`total` は `offset`・`count` で切る前の数、1 フォルダー 20000 件を超えた分は出さず `truncated` = true。
+  - フォルダーが未設定なら `conflict`、絶対パスでなければ `bad_request`、ライブラリや `dir` のフォルダーがなければ `not_found` です。
+  - サブフォルダーの中まで一度に探すことはしません（大きなライブラリでも速く返すため）。一覧はその都度ディスクを読むので、ファイルを足したら開き直せば出ます。
 
 #### 5.4.4 映像出力の状態（仮想カメラ・全画面表示）
 

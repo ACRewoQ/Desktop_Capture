@@ -1,3 +1,6 @@
 add_executable(dc-cli main.cpp)
+if(WIN32)
+    target_sources(dc-cli PRIVATE utf8.manifest) # UTF-8 argv (Japanese file paths)
+endif()
 target_link_libraries(dc-cli PRIVATE dc::control dc_version)
 dc_apply_options(dc-cli)

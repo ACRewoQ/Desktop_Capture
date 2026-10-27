@@ -213,6 +213,7 @@ void MockEngine::seed() {
     put("/video/source/1/width", std::int64_t{2560});
     put("/video/source/1/height", std::int64_t{1440});
 
+    put("/sampler/library/folder", std::string("C:/Sounds"));
     // a few sampler pads that look loaded, so the pad screen has something to show
     const char* const pads[] = {"Applause", "Airhorn", "Drum roll"};
     for (int i = 0; i < 3; ++i) {
@@ -270,6 +271,38 @@ void MockEngine::registerMethods() {
         const auto path = padPath(ctx);
         if (path.empty()) return error(ErrorCode::OutOfRange, "pad or bank out of range");
         return Result{};
+    });
+    // a fixed pretend library (no disk access): C:/Sounds with one subfolder
+    server_.registerMethod("/sampler/library/list", [this](CallContext& ctx) {
+        const auto root = server_.store().tree().getAs<std::string>("/sampler/library/folder").value_or("");
+        if (root.empty()) return error(ErrorCode::Conflict, "no sampler library folder set");
+        std::string dir;
+        if (auto it = ctx.call.args.find("dir"); it != ctx.call.args.end())
+            if (auto* v = std::get_if<std::string>(&it->second)) dir = *v;
+        std::vector<std::string> folders, files;
+        if (dir.empty()) {
+            folders = {"Jingles"};
+            files = {"Airhorn.wav", "Applause.wav", "Drum roll.wav", "Laugh.flac"};
+        } else if (dir == "Jingles") {
+            files = {"Intro.mp3", "Outro.ogg"};
+        } else {
+            return error(ErrorCode::NotFound, "no such folder in the library: " + dir);
+        }
+        std::string json = "{\"dir\":\"" + dir + "\",\"total\":" + std::to_string(folders.size() + files.size()) +
+                           ",\"offset\":0,\"truncated\":false,\"entries\":[";
+        bool first = true;
+        for (const auto& f : folders) {
+            json += std::string(first ? "" : ",") + "{\"name\":\"" + f + "\",\"folder\":true}";
+            first = false;
+        }
+        for (const auto& f : files) {
+            json += std::string(first ? "" : ",") + "{\"name\":\"" + f + "\",\"path\":\"" + root + "/" +
+                    (dir.empty() ? "" : dir + "/") + f + "\",\"size\":48000}";
+            first = false;
+        }
+        Result r;
+        r.value = json + "]}";
+        return r;
     });
     server_.registerMethod("/sampler/stop", [this](CallContext& ctx) {
         std::vector<Change> c;

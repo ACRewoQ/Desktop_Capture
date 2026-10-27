@@ -32,6 +32,8 @@ class Connection : public QObject {
     // pair() is called with the 6 digits the engine's screen shows.
     Q_PROPERTY(bool needsPairing READ needsPairing NOTIFY stateChanged)
     Q_PROPERTY(QString pairingMessage READ pairingMessage NOTIFY stateChanged)
+    // Connected as a remote controller (role 1): settings marked local in the schema are read-only.
+    Q_PROPERTY(bool remote READ remote CONSTANT)
 
 public:
     enum class State { Idle, Connecting, Handshaking, Ready, Waiting };
@@ -64,6 +66,7 @@ public:
     QString statusText() const;
     QString address() const;
     QString host() const { return options_.host; }
+    bool remote() const { return options_.role == proto::ClientRole::Remote; }
     QString serverName() const { return QString::fromStdString(welcome_.serverName); }
     const std::string& clientName() const { return clientName_; }
     quint16 meterPort() const;

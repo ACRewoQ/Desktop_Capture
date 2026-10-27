@@ -123,6 +123,7 @@ docs/spec/protocol.md 5.4.3 のとおり。
 - `file` が変わると読み込みスレッドがファイル全体を読み、48kHz ステレオの float にする（モノは両チャンネルへ、3 チャンネル以上は先頭 2 つ、48kHz 以外は窓付き sinc で変換。ダウンサンプルではカットオフを下げる）。デコーダーは third_party/audio_decoders の dr_wav・dr_flac・dr_mp3・stb_vorbis。
 - 読み込んだ音は `SamplerTable`（128 パッドの音・モード・音量）としてミックス計画に載る。押す・離す・止めるはロックフリーのキューで音声スレッドへ届く。
 - ボイスは 32。停止・頭出し・音の差し替えは 5ms のフェード。足りなければ一番古いボイスを使う。再生中にファイルを差し替えると、その音は新しい計画の採用時に止まる（古い計画と音が解放される前）。
+- ライブラリ（sample_library）：`/sampler/library/list` が `/sampler/library/folder` の中を 1 段ずつ読んで JSON で返す（制御スレッドでその都度読む。キャッシュはしない）。パスがライブラリの外に出る `dir` は断る。
 - 各バンクがステレオのバスに鳴り、`input/kind = sampler` のトラックが全バンクの和か 1 バンクを入力に足す（トラックのフィルター・録音・キューの前）。
 - `playing` はメーターと同じ約 30Hz で、変わったパッドだけ配る。
 
@@ -185,7 +186,7 @@ docs/spec/protocol.md 5.4.1 のとおり。エンジンは状態（`/capture/sta
 - G2 結合（UI 操作中の音切れ・録画の音ズレ）：`scripts\g2-integration.ps1`。`mixd --test-pulse 2` はテストトーンを QPC 時刻の 2 秒ごとの 50ms のビープにする（共有メモリに書くブロックの時刻で揃えるので、`dc-av-flash` の画面フラッシュと録画の中で比べられる）。
 - `[lan]` のテスト：mixd 2 台を 1 プロセスで動かし、片方のマスターを `lan/1` に送り、もう片方のトラックで鳴らす（レベルが届く、購読の出入り、相手 PC の追加・ペアリング・削除、peer の制限）。ループバック以外のアドレスがあれば、リモコンと相手 PC のペアリング（コード違い、トークン、取り消し）も確かめる。
 - A2 の実機試験：`scripts\a2-io.ps1 -Cases list,process,rate,asio,vmic,unplug`（詳細はスクリプト冒頭）。
-- `[recorder]` `[sampler]` のテスト（tests/test_recorder_sampler.cpp）：WAV / FLAC の往復、リサンプラー、パッドのモード、テイクの長さ、制御サーバー越しの録音とサンプラー。
+- `[recorder]` `[sampler]` のテスト（tests/test_recorder_sampler.cpp）：WAV / FLAC の往復、リサンプラー、パッドのモード、テイクの長さ、制御サーバー越しの録音とサンプラー、ライブラリの一覧（並び順・ライブラリの外に出ない・リモコンはフォルダーを変えられない）。
 - A3 の実機確認：`scripts\a3-check.ps1`（`-Minutes`、`-Formats`、`-InputDevice`）。テストトーン入りのマスターと、サンプラー・入力のトラックをフェーダーを動かしながら録音し、全ファイルの長さ・欠落・xrun・トーンの途切れを調べる。続けて Windows の効果音 16 個をパッドに読み込み、各モードの動きを確かめる。
 - `[control]` のテスト（tests/test_control.cpp）：きっかけの読み書き、キー名、MIDI の解読、割り当ての検査、MIDI の値の当てはめ、偽のキーボード・MIDI での実行・conflict・学習・機器の開閉・保存と読み込み。
 - C7 の実機確認：`scripts\c7-control.ps1`（`-Midi` で MIDI 機器の学習も）。SendInput でキーを押して、ホットキー・自動の繰り返し・conflict・学習・無効・再起動後の復元を確かめる。
